@@ -24,7 +24,7 @@
     date.setDate(date.getDate() + offset);
     return date.toISOString().slice(0, 10);
   };
-  const defaultDraft = () => ({ origin: 'Dallas, TX', destination: 'Houston, TX', weight: 10000, equipment: 'Dry Van', pickup: isoDay(0), delivery: isoDay(1) });
+  const defaultDraft = () => ({ origin: 'Tashkent, UZ', destination: 'Almaty, KZ', weight: 10000, equipment: 'Dry Van', pickup: isoDay(0), delivery: isoDay(1) });
   const cityOf = (value) => String(value || '').split(',')[0].trim();
   const parseWeight = (value) => {
     const digits = Number(String(value || '').replace(/[^\d.]/g, ''));
@@ -134,8 +134,8 @@
       if (node) node.textContent = value;
     };
     const route = state.route;
-    set('mapOrigin', cityOf(route?.origin || 'Dallas, TX'));
-    set('mapDestination', cityOf(route?.destination || 'Houston, TX'));
+    set('mapOrigin', cityOf(route?.origin || 'Tashkent, UZ'));
+    set('mapDestination', cityOf(route?.destination || 'Almaty, KZ'));
     set('mapOriginTime', route?.pickup ? `Pickup ${formatDay(route.pickup)}` : 'Sample');
     set('mapDestinationTime', route?.delivery ? `Delivery ${formatDay(route.delivery)}` : 'Sample');
     set('mapStatus', state.latest?.status || 'Sample route');
