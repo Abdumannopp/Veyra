@@ -204,8 +204,10 @@
     } else if (view === 'settings') {
       if (search) search.value = '';
       renderSettings();
-    } else if (search) {
-      search.value = '';
+    } else {
+      if (search) search.value = '';
+      // Coming back to the dashboard shows fresh numbers, not the ones from when the page first opened.
+      if (view === 'dashboard' && currentUser()) fetchDashboardData();
     }
   }
 

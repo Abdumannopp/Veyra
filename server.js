@@ -253,6 +253,10 @@ if (isProduction && !process.env.JWT_SECRET) {
   console.error('JWT_SECRET is required in production. Set it in your environment or .env file.');
   process.exit(1);
 }
+// A short secret can be guessed, and with it anyone could sign in as anyone. Warn loudly; do not stop a running business.
+if (isProduction && String(process.env.JWT_SECRET).length < 32) {
+  console.warn('WARNING: JWT_SECRET is shorter than 32 characters. Generate a long one: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+}
 
 const parseMoney = (value) => parseMoneyUpTo(value, MAX_RATE);
 
