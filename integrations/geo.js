@@ -78,6 +78,38 @@ async function geocode(place) {
   return found ? { lat, lng } : null;
 }
 
+// A place from the cache only (never asks the network): { lat, lng } or null.
+async function cachedPlace(place) {
+  const name = key(place);
+  if (!name) return null;
+  const hit = await db.getGeoPlace(name);
+  return hit && hit.lat !== null ? hit : null;
+}
+
+// Looks up places that are not cached yet, one at a time in the background (the public service allows
+// about one request a second). Only when the map is switched on.
+const warming = new Set();
+function warmPlaces(places) {
+  if (!enabled()) return;
+  const todo = [...new Set(places.map(key))].filter((name) => name && !warming.has(name)).slice(0, 20);
+  if (!todo.length) return;
+  todo.forEach((name) => warming.add(name));
+  (async () => {
+    for (const name of todo) {
+      try {
+        if ((await db.getGeoPlace(name)) === undefined) {
+          await geocode(name);
+          await new Promise((resolve) => setTimeout(resolve, 1100));
+        }
+      } catch (error) {
+        console.error('[geo] lookup failed:', error.message);
+      } finally {
+        warming.delete(name);
+      }
+    }
+  })();
+}
+
 const routeKey = (origin, destination) => `${key(origin)}|${key(destination)}`;
 
 // Cached road route, or null (never asks the network).
@@ -127,4 +159,4 @@ async function annotateOffRoute(loads, { fetchMissing = false, now = Date.now() 
   return loads;
 }
 
-module.exports = { enabled, offRouteKm, setTransport, geocode, route, cachedRoute, annotateOffRoute, haversineKm, distanceToLineKm, thin };
+module.exports = { enabled, offRouteKm, setTransport, geocode, cachedPlace, warmPlaces, route, cachedRoute, annotateOffRoute, haversineKm, distanceToLineKm, thin };

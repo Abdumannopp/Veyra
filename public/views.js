@@ -7,7 +7,7 @@
    fetchDashboardData, loadAdminConsole.
    ========================================================= */
 (function () {
-  const VIEWS = ['dashboard', 'shipments', 'quotes', 'inbox', 'command', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
+  const VIEWS = ['dashboard', 'shipments', 'tracking', 'quotes', 'inbox', 'command', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
   const STATUS_ORDER = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
   const STATUS_COLORS = {
     New: '#2563ff',
@@ -153,7 +153,7 @@
     const { view, params } = parseHash();
     state.view = view;
     state.params = params;
-    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', quotes: 'Quotes', command: 'AI Command Center', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
+    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', tracking: 'Global Tracking', quotes: 'Quotes', command: 'AI Command Center', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
     document.title = `${TITLES[view]} | Veyra`;
 
     document.querySelectorAll('.view[data-view]').forEach((node) => node.classList.toggle('hidden', node.dataset.view !== view));
@@ -192,6 +192,9 @@
     } else if (view === 'command') {
       if (search) search.value = '';
       renderCommand();
+    } else if (view === 'tracking') {
+      if (search) search.value = '';
+      renderTracking();
     } else if (view === 'billing') {
       if (search) search.value = '';
       renderBilling();
@@ -1467,6 +1470,199 @@
   }
 
 
+
+  /* =========================================================
+     GLOBAL TRACKING
+     ========================================================= */
+  const trackState = { data: null, filter: 'all', selected: null, timer: null };
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  function svgEl(tag, attrs = {}, children = []) {
+    const node = document.createElementNS(SVG_NS, tag);
+    Object.entries(attrs).forEach(([key, value]) => {
+      if (value === undefined || value === null) return;
+      if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, String(value));
+    });
+    children.forEach((child) => child && node.append(child));
+    return node;
+  }
+  const shortPlace = (place) => String(place || '').split(',')[0].trim();
+
+  async function renderTracking() {
+    const container = document.getElementById('trackingView');
+    if (!container) return;
+    clearTimeout(trackState.timer);
+    if (!currentUser()) return gate(container, 'signin');
+    if (!container.children.length) loading(container);
+    try {
+      trackState.data = await api('/api/tracking/overview');
+    } catch (error) {
+      return errorState(container, error.message, renderTracking);
+    }
+    if (state.view !== 'tracking') return;
+    const { loads } = trackState.data;
+    if (!loads.some((load) => load.id === trackState.selected)) trackState.selected = (loads.find((l) => l.status !== 'Delivered') || loads[0])?.id || null;
+    buildTracking(container);
+    // Positions change while the page is open: refresh every two minutes.
+    trackState.timer = setTimeout(() => { if (state.view === 'tracking') renderTracking(); }, 120000);
+  }
+
+  function buildTracking(container) {
+    const { summary, loads, alerts, map } = trackState.data;
+    const kpis = el('div', { class: 'stats-grid kpi-grid' }, [
+      kpiCard('Active loads', String(summary.active), `${summary.withGps} with live GPS`, 'box', 'blue'),
+      kpiCard('On time', summary.onTimeShare === null ? '—' : `${summary.onTimeShare}%`, 'Expected before the promised day', 'check-circle', 'green'),
+      kpiCard('In transit', String(summary.inTransit), `${summary.booked} booked, not left yet`, 'truck', 'violet'),
+      kpiCard('Exceptions', String(summary.exceptions), alerts.length ? `${alerts.length} alert${alerts.length === 1 ? '' : 's'} open` : 'No alerts', 'alert', summary.exceptions ? 'red' : 'green')
+    ]);
+    const filters = { all: () => true, 'In Transit': (l) => l.status === 'In Transit', Dispatched: (l) => l.status === 'Dispatched', Exception: (l) => l.status === 'Exception', Delivered: (l) => l.status === 'Delivered' };
+    const shown = loads.filter(filters[trackState.filter] || filters.all);
+    const chips = el('div', { class: 'track-chips', role: 'group', 'aria-label': 'Show' }, [['all', 'All'], ['In Transit', 'In transit'], ['Dispatched', 'Booked'], ['Exception', 'Exception'], ['Delivered', 'Delivered']].map(([key, label]) => el('button', {
+      type: 'button', class: trackState.filter === key ? 'active' : '', 'aria-pressed': String(trackState.filter === key),
+      onclick: () => { trackState.filter = key; buildTracking(container); }
+    }, label)));
+    const mapCard = el('div', { class: 'card track-map-card' }, [
+      el('div', { class: 'track-map-head' }, [el('span', { class: 'cc-live-dot', text: 'Live' }), chips]),
+      drawTrackMap(shown, map, () => buildTracking(container))
+    ]);
+    const selected = loads.find((load) => load.id === trackState.selected) || null;
+    const top = el('div', { class: 'track-top' }, [mapCard, trackDetail(selected)]);
+
+    const list = el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: `Loads (${shown.length})` }), el('small', { text: 'Click a row to see it on the map' })])),
+      miniTable(['Load', 'Status', 'Route', 'Truck', 'Last seen', 'Delivery'], shown.map((load) => [
+        el('button', { class: 'link-button', type: 'button', onclick: () => { trackState.selected = load.id; buildTracking(container); window.scrollTo({ top: 0, behavior: 'smooth' }); } }, load.id),
+        el('span', { class: `tag ${String(load.status).toLowerCase().replace(/\s+/g, '-')}`, text: load.status }),
+        `${shortPlace(load.origin)} → ${shortPlace(load.destination)}`,
+        load.truckPlate || '—',
+        load.lastLocation ? el('span', {}, [load.lastLocation, el('small', { class: 'cell-sub', text: load.lastTrackedAt ? formatTimestamp(load.lastTrackedAt) : '' })]) : el('span', { class: 'muted', text: 'No update yet' }),
+        el('span', { class: load.onTime === false ? 'warn-line' : '' , text: load.delivery || '—' })
+      ]), 'No booked loads right now.')
+    ]);
+    const alertCard = el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, [el('span', {}, [el('strong', { text: `Active alerts (${alerts.length})` }), el('small', { text: 'SENTINEL, checked now' })]), el('button', { class: 'view-all', type: 'button', onclick: () => navigate('inbox') }, 'Inbox & tasks')]),
+      alerts.length
+        ? el('ul', { class: 'risk-list' }, alerts.slice(0, 8).map((risk) => el('li', { class: `risk-${risk.severity}` }, [
+          el('span', { class: 'risk-level', text: { high: 'Urgent', medium: 'Soon', low: 'Note' }[risk.severity] || risk.severity }),
+          el('div', {}, [el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(risk.shipmentId) }, risk.title), el('small', { class: 'muted', text: risk.advice })])
+        ])))
+        : el('p', { class: 'muted', text: 'All booked loads look fine.' })
+    ]);
+    container.replaceChildren(kpis, top, el('div', { class: 'track-bottom' }, [list, alertCard]));
+  }
+
+  // A schematic map: real coordinates on a latitude / longitude grid, fitted to the loads shown.
+  function drawTrackMap(loads, map, redraw) {
+    const points = [];
+    loads.forEach((load) => [load.from, load.to, load.gps].forEach((p) => p && points.push(p)));
+    if (!points.length) {
+      return el('div', { class: 'track-map-empty' }, [
+        el('strong', { text: loads.length ? 'No positions to draw yet' : 'No booked loads' }),
+        el('p', { text: loads.length
+          ? (map.enabled ? 'City positions are being looked up; they appear on the next refresh. Trucks appear when GPS sends positions.' : 'Trucks appear when a GPS provider sends positions. To also draw cities and routes, switch on the map on the server (GEO_PROVIDER=osm).')
+          : 'Booked and moving loads will appear here.' })
+      ]);
+    }
+    const W = 1000;
+    const H = 520;
+    const lats = points.map((p) => p.lat);
+    const lngs = points.map((p) => p.lng);
+    const midLat = (Math.min(...lats) + Math.max(...lats)) / 2;
+    const kx = Math.cos((midLat * Math.PI) / 180);
+    let minX = Math.min(...lngs) * kx; let maxX = Math.max(...lngs) * kx;
+    let minY = -Math.max(...lats); let maxY = -Math.min(...lats);
+    const span = Math.max(maxX - minX, (maxY - minY) * (W / H), 2);
+    const cx = (minX + maxX) / 2; const cy = (minY + maxY) / 2;
+    const scale = (W * 0.82) / span;
+    const project = (p) => [W / 2 + (p.lng * kx - cx) * scale, H / 2 + (-p.lat - cy) * scale];
+
+    const grid = [];
+    const lngSpan = span / kx;
+    const step = lngSpan > 60 ? 20 : lngSpan > 25 ? 10 : lngSpan > 10 ? 5 : 2;
+    const latRange = [midLat - (H / scale), midLat + (H / scale)];
+    const lngCenter = cx / kx;
+    for (let lng = Math.floor((lngCenter - lngSpan) / step) * step; lng <= lngCenter + lngSpan; lng += step) {
+      const [x] = project({ lat: midLat, lng });
+      grid.push(svgEl('line', { x1: x, y1: 0, x2: x, y2: H, class: 'track-grid' }));
+    }
+    for (let lat = Math.floor(latRange[0] / step) * step; lat <= latRange[1]; lat += step) {
+      const [, y] = project({ lat, lng: lngCenter });
+      grid.push(svgEl('line', { x1: 0, y1: y, x2: W, y2: y, class: 'track-grid' }));
+    }
+
+    const layers = [];
+    const cities = new Map();
+    loads.forEach((load) => {
+      const selected = load.id === trackState.selected;
+      const pick = () => { trackState.selected = load.id; redraw(); };
+      const tone = load.status === 'Exception' ? 'bad' : (load.onTime === false ? 'late' : 'ok');
+      if (load.from && load.to) {
+        const [x1, y1] = project(load.from);
+        const [x2, y2] = project(load.to);
+        const mx = (x1 + x2) / 2; const my = (y1 + y2) / 2;
+        const lift = Math.min(120, Math.hypot(x2 - x1, y2 - y1) * 0.22);
+        const d = `M${x1.toFixed(1)},${y1.toFixed(1)} Q${mx.toFixed(1)},${(my - lift).toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
+        layers.push(svgEl('path', { d, class: `track-route ${tone}${selected ? ' selected' : ''}`, onclick: pick }, [svgEl('title', {}, [document.createTextNode(`${load.id} · ${load.origin} → ${load.destination}`)])]));
+        [[load.from, load.origin, 'from'], [load.to, load.destination, 'to']].forEach(([p, name, kind]) => {
+          const k = `${p.lat.toFixed(3)},${p.lng.toFixed(3)}`;
+          if (!cities.has(k)) cities.set(k, { p, name, kind });
+        });
+      }
+      if (load.gps) {
+        const [x, y] = project(load.gps);
+        layers.push(svgEl('g', { class: `track-truck ${tone}${selected ? ' selected' : ''}`, transform: `translate(${x.toFixed(1)} ${y.toFixed(1)})`, onclick: pick, tabindex: '0', role: 'button', 'aria-label': `${load.id}, last GPS position` }, [
+          svgEl('circle', { r: selected ? 16 : 12, class: 'track-truck-halo' }),
+          svgEl('circle', { r: selected ? 7 : 5.5, class: 'track-truck-dot' }),
+          svgEl('title', {}, [document.createTextNode(`${load.id} · ${load.lastLocation || 'GPS position'}`)])
+        ]));
+      }
+    });
+    const cityLayer = [...cities.values()].map(({ p, name, kind }) => {
+      const [x, y] = project(p);
+      return svgEl('g', { class: `track-city ${kind}`, transform: `translate(${x.toFixed(1)} ${y.toFixed(1)})` }, [
+        svgEl('circle', { r: 5 }),
+        svgEl('text', { x: 9, y: -9 }, [document.createTextNode(shortPlace(name))])
+      ]);
+    });
+    return el('div', { class: 'track-map' }, svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'track-svg', role: 'img', 'aria-label': `Map of ${loads.length} loads` }, [
+      svgEl('g', {}, grid), svgEl('g', {}, layers.filter((n) => n.tagName === 'path')), svgEl('g', {}, cityLayer), svgEl('g', {}, layers.filter((n) => n.tagName === 'g'))
+    ]));
+  }
+
+  function trackDetail(load) {
+    if (!load) return el('div', { class: 'card track-detail' }, [el('p', { class: 'muted', text: 'Select a load on the map or in the list.' })]);
+    const steps = [
+      ['Booked', load.timeline.bookedAt],
+      ['On the way', load.timeline.departedAt],
+      ['Delivered', load.timeline.deliveredAt]
+    ];
+    const reached = load.status === 'Delivered' ? 3 : (['In Transit', 'Exception'].includes(load.status) ? 2 : 1);
+    const fact = (label, value) => el('div', {}, [el('small', { text: label }), el('strong', { text: value || '—' })]);
+    return el('div', { class: 'card track-detail' }, [
+      el('div', { class: 'track-detail-head' }, [
+        el('span', { class: 'stat-icon blue' }, icon('box', '')),
+        el('span', {}, [el('strong', { text: load.id }), el('small', { text: `${load.origin} → ${load.destination}` })]),
+        el('span', { class: `tag ${String(load.status).toLowerCase().replace(/\s+/g, '-')}`, text: load.status })
+      ]),
+      el('ol', { class: 'track-steps' }, steps.map(([label, time], index) => el('li', { class: index < reached ? 'done' : '' }, [
+        el('span', { class: 'track-step-dot' }), el('strong', { text: label }), el('small', { text: time ? formatTimestamp(time) : (index === 2 ? `Planned ${load.delivery || ''}` : '') })
+      ]))),
+      el('div', { class: 'track-facts' }, [
+        fact('Expected arrival', load.eta ? (typeof formatEta === 'function' ? formatEta(load.eta) : load.eta) : null),
+        fact('Promised delivery', load.delivery),
+        fact('Last place', load.lastLocation),
+        fact('Last update', load.lastTrackedAt ? formatTimestamp(load.lastTrackedAt) : null),
+        fact('Truck', [load.truckPlate, load.carrierName].filter(Boolean).join(' · ')),
+        fact('Driver', [load.driverName, load.driverPhone].filter(Boolean).join(' · '))
+      ]),
+      load.risks.length ? el('ul', { class: 'track-risks' }, load.risks.map((risk) => el('li', { class: `risk-${risk.severity}`, text: risk.title }))) : el('p', { class: 'track-ok', text: load.status === 'Delivered' ? 'Delivered.' : 'No warnings for this load.' }),
+      el('div', { class: 'track-detail-actions' }, [
+        el('button', { class: 'btn btn-primary small', type: 'button', onclick: () => openShipmentDetails(load.id) }, 'Open load'),
+        load.driverPhone ? el('a', { class: 'btn btn-ghost small', href: `tel:${String(load.driverPhone).replace(/[^+\d]/g, '')}` }, 'Call driver') : null
+      ])
+    ]);
+  }
+
   /* =========================================================
      AI COMMAND CENTER
      ========================================================= */
@@ -1765,6 +1961,7 @@
     if (state.view === 'agents') await renderAgents();
     if (state.view === 'quotes') await renderQuotes();
     if (state.view === 'command') await renderCommand();
+    if (state.view === 'tracking') await renderTracking();
     if (state.view === 'billing') await renderBilling();
     loadNotifications();
   }
