@@ -7,7 +7,7 @@
    fetchDashboardData, loadAdminConsole.
    ========================================================= */
 (function () {
-  const VIEWS = ['dashboard', 'shipments', 'quotes', 'inbox', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
+  const VIEWS = ['dashboard', 'shipments', 'quotes', 'inbox', 'command', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
   const STATUS_ORDER = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
   const STATUS_COLORS = {
     New: '#2563ff',
@@ -153,7 +153,7 @@
     const { view, params } = parseHash();
     state.view = view;
     state.params = params;
-    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', quotes: 'Quotes', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
+    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', quotes: 'Quotes', command: 'AI Command Center', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
     document.title = `${TITLES[view]} | Veyra`;
 
     document.querySelectorAll('.view[data-view]').forEach((node) => node.classList.toggle('hidden', node.dataset.view !== view));
@@ -189,6 +189,9 @@
     } else if (view === 'quotes') {
       if (search) search.value = '';
       renderQuotes();
+    } else if (view === 'command') {
+      if (search) search.value = '';
+      renderCommand();
     } else if (view === 'billing') {
       if (search) search.value = '';
       renderBilling();
@@ -1463,6 +1466,138 @@
     }
   }
 
+
+  /* =========================================================
+     AI COMMAND CENTER
+     ========================================================= */
+  const KIND_LABELS = { review_intake: 'Orders read', book_carrier: 'Carriers ranked', message: 'Messages drafted', check_document: 'Documents checked', attention: 'Warnings raised' };
+
+  async function renderCommand() {
+    const container = document.getElementById('commandView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!container.children.length) loading(container);
+    let data;
+    try {
+      data = await api('/api/ai/command-center');
+    } catch (error) {
+      return errorState(container, error.message, renderCommand);
+    }
+    if (state.view !== 'command') return;
+
+    const agentOn = { FLOW: data.agents.ai, VAULT: data.agents.ai, RELAY: true, NEXUS: data.nexus.enabled, SCOUT: true, ROUTE: true, PULSE: true, SENTINEL: true };
+    const agentsCard = el('div', { class: 'card cc-agents' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [
+        el('strong', { text: `AI agents · ${Object.values(agentOn).filter(Boolean).length} active` }),
+        el('small', { text: 'Each prepares one kind of work' })
+      ])),
+      el('ul', { class: 'cc-agent-list' }, AGENTS.map((agent) => el('li', {}, [
+        el('span', { class: `stat-icon ${agent.tone}` }, icon(agent.icon, '')),
+        el('span', { class: 'cc-agent-text' }, [el('strong', { text: agent.name }), el('small', { text: agent.role })]),
+        el('span', { class: `agent-state ${agentOn[agent.key] ? 'on' : 'off'}`, text: agentOn[agent.key] ? 'Active' : 'Off' })
+      ]))),
+      el('button', { class: 'btn btn-ghost small', type: 'button', onclick: () => navigate('agents') }, 'Agent details')
+    ]);
+
+    const actions = [
+      ['Plan', 'target', 'Dates and return trucks (ROUTE)', () => navigate('shipments', { status: 'Sourcing' })],
+      ['Price', 'chart', 'Quotes and lane prices (PULSE)', () => navigate('quotes')],
+      ['Read', 'doc', 'Turn an order message into a load (FLOW)', () => window.openShipmentModal?.({})],
+      ['Approve', 'check-square', 'Prepared work waiting for you', () => navigate('inbox')],
+      ['Watch', 'alert', 'Loads at risk (SENTINEL)', () => navigate('inbox')],
+      ['Analyze', 'bolt', 'Volume, lanes, margins', () => navigate('analytics')]
+    ];
+    const orbCard = el('div', { class: 'card cc-orb-card' }, [
+      el('div', { class: 'cc-orb-wrap' }, [
+        el('div', { class: 'cc-orb' }, [el('span', { class: 'cc-orb-mark' }), el('strong', { text: 'Veyra AI' }), el('small', { text: 'Your logistics team, with eight agents behind it' })]),
+        el('div', { class: 'cc-actions' }, actions.map(([label, iconName, hint, handler]) => el('button', { class: 'cc-action', type: 'button', title: hint, onclick: handler }, [
+          el('span', { class: 'cc-action-icon' }, icon(iconName, '')), el('strong', { text: label }), el('small', { text: hint })
+        ])))
+      ])
+    ]);
+    const mark = orbCard.querySelector('.cc-orb-mark');
+    if (mark) {
+      const ns = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('viewBox', '0 0 100 80');
+      const use = document.createElementNS(ns, 'use');
+      use.setAttribute('href', '#logo-v');
+      svg.append(use);
+      mark.append(svg);
+    }
+
+    const live = data.live;
+    const liveCard = el('div', { class: 'card cc-live' }, [
+      el('div', { class: 'mini-head' }, [el('span', {}, [el('strong', { text: 'Live operations' }), el('small', { text: 'Right now' })]), el('span', { class: 'cc-live-dot', text: 'Live' })]),
+      el('div', { class: 'cc-live-grid' }, [
+        ['On the road', live.onRoad, 'truck', () => navigate('shipments', { status: 'In Transit' })],
+        ['Waiting for a truck', live.waiting, 'box', () => navigate('shipments', { status: 'Sourcing' })],
+        ['Tasks to approve', live.openTasks, 'check-square', () => navigate('inbox')],
+        ['Loads at risk', live.risks, 'alert', () => navigate('inbox')]
+      ].map(([label, value, iconName, handler]) => el('button', { class: 'cc-live-item', type: 'button', onclick: handler }, [
+        el('span', { class: 'cc-live-icon' }, icon(iconName, '')), el('strong', { text: String(value) }), el('small', { text: label })
+      ]))),
+      live.urgentRisks ? el('p', { class: 'cc-live-warn', text: `${live.urgentRisks} urgent: open Inbox & tasks.` }) : el('p', { class: 'cc-live-ok', text: 'Nothing urgent.' })
+    ]);
+
+    // Switches: what the agents may do by themselves. They only ever prepare; sending and booking stay with people.
+    const autoCard = el('div', { class: 'card cc-auto' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Automations' }), el('small', { text: data.canChange ? 'What the agents do on their own. They only prepare; people send and book.' : 'Only an administrator can change these.' })])),
+      data.nexus.enabled ? null : el('p', { class: 'warn-line', text: 'NEXUS is switched off on the server (NEXUS_ENABLED=false), so none of these run.' }),
+      el('ul', { class: 'cc-switch-list' }, data.automations.map((item) => {
+        const input = el('input', { type: 'checkbox', role: 'switch', 'aria-label': item.label, disabled: !data.canChange });
+        input.checked = item.on;
+        input.addEventListener('change', async () => {
+          input.disabled = true;
+          try {
+            await api('/api/settings/automations', { method: 'PUT', body: JSON.stringify({ [item.key]: input.checked }) });
+            toast(`${item.label}: ${input.checked ? 'on' : 'off'}.`);
+          } catch (error) {
+            input.checked = !input.checked;
+            toast(error.message, 'error');
+          }
+          input.disabled = !data.canChange;
+        });
+        return el('li', {}, [el('span', { text: item.label }), el('label', { class: 'switch' }, [input, el('span', { class: 'switch-track', 'aria-hidden': 'true' })])]);
+      }))
+    ]);
+
+    const perf = data.performance;
+    const handledShare = perf.prepared ? Math.round((perf.handled / perf.prepared) * 100) : null;
+    const top = Math.max(1, ...perf.daily.map((d) => d.total));
+    const perfCard = el('div', { class: 'card cc-perf' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'AI performance' }), el('small', { text: `Last ${perf.days} days` })])),
+      el('div', { class: 'cc-perf-grid' }, [
+        ['Work prepared', String(perf.prepared)],
+        ['Handled by people', handledShare === null ? '—' : `${handledShare}%`],
+        ['Time to handle', perf.minutesToHandle === null ? '—' : (perf.minutesToHandle < 90 ? `${perf.minutesToHandle} min` : `${Math.round(perf.minutesToHandle / 60)} h`)],
+        [perf.aiCalls ? `AI calls answered (${perf.aiCalls})` : 'AI calls', perf.aiCalls ? `${perf.aiSuccessRate}%` : (data.agents.ai ? '0' : 'AI off')]
+      ].map(([label, value]) => el('div', {}, [el('strong', { text: value }), el('small', { text: label })]))),
+      perf.daily.length
+        ? el('div', { class: 'cc-bars', role: 'img', 'aria-label': 'Work prepared per day' }, perf.daily.map((d) => el('span', { title: `${d.day}: ${d.total}`, style: `height:${Math.max(6, Math.round((d.total / top) * 100))}%` })))
+        : el('p', { class: 'muted', text: 'No work prepared yet in this period.' }),
+      el('ul', { class: 'cc-kinds' }, Object.entries(perf.byKind).map(([kind, total]) => el('li', {}, [el('span', { text: KIND_LABELS[kind] || kind }), el('strong', { text: String(total) })])))
+    ]);
+
+    const activityCard = el('div', { class: 'card cc-activity' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Recent AI activity' }), el('small', { text: 'Newest first' })])),
+      data.activity.length
+        ? el('ul', { class: 'activity-list' }, data.activity.map((item) => el('li', {}, [
+          el('span', { class: `activity-dot ${item.status}` }),
+          el('span', {}, [
+            item.shipmentId ? el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(item.shipmentId) }, item.title) : el('strong', { text: item.title }),
+            el('small', { class: 'muted', text: `${{ open: 'Waiting', done: 'Done', dismissed: 'Closed' }[item.status] || item.status} · ${typeof formatTimestamp === 'function' ? formatTimestamp(item.createdAt) : item.createdAt}` })
+          ])
+        ])))
+        : el('p', { class: 'muted', text: 'Nothing yet. New orders, bookings and late trucks will appear here.' })
+    ]);
+
+    container.replaceChildren(
+      el('div', { class: 'cc-top' }, [agentsCard, orbCard, liveCard]),
+      el('div', { class: 'cc-bottom' }, [autoCard, perfCard, activityCard])
+    );
+  }
+
   /* =========================================================
      AI AGENTS: what each agent does, whether it is on, what it did
      ========================================================= */
@@ -1629,6 +1764,7 @@
     if (state.view === 'inbox') await renderInbox();
     if (state.view === 'agents') await renderAgents();
     if (state.view === 'quotes') await renderQuotes();
+    if (state.view === 'command') await renderCommand();
     if (state.view === 'billing') await renderBilling();
     loadNotifications();
   }

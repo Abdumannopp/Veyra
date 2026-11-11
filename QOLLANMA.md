@@ -257,6 +257,24 @@ Yon menyuda "Quotes". Yuk hali yo'q paytda mijozga narx berish uchun:
    yaratadi (narx mijoz narxi bo'lib o'tadi); rad etsa "Lost".
    Muddati o'tgan taklif o'zi "Expired" bo'lib ko'rinadi.
 
+## AI Command Center
+
+Yon menyuda "AI Command Center". Bir sahifada ko'rasiz:
+
+- **AI agentlar** — sakkizta agent va har biri yoqilganmi.
+- **Veyra AI** — tezkor tugmalar: Plan (marshrut), Price (narx taklifi), Read (buyurtmani o'qish),
+  Approve (tasdiqlash), Watch (xavfli yuklar), Analyze (tahlil).
+- **Live operations** — hozir yo'ldagi mashinalar, mashina kutayotgan yuklar, tasdiq kutayotgan
+  ishlar va xavfli yuklar.
+- **Automations** — agentlar o'zi qiladigan ishlarni yoqib-o'chirish (faqat administrator):
+  buyurtma xatlarini o'qish, band qilish xabarlari, "yetkazildi" xabari, hujjatlarni o'qish,
+  narx tekshiruvi, jim mashinalarga savol, xavf ogohlantirishlari. O'chirilsa, agent bu ishni
+  boshqa tayyorlamaydi. Har bir o'zgarish jurnalga yoziladi. Agentlar hech qachon o'zi xabar
+  yubormaydi va mashina band qilmaydi — bu har doim odamda.
+- **AI performance** — 30 kunda tayyorlangan ishlar, odamlar ko'rib chiqqan ulush, o'rtacha
+  ko'rib chiqish vaqti, AI chaqiruvlari.
+- **Recent AI activity** — so'nggi tayyorlangan ishlar.
+
 ## Hali yo'q narsalar
 
 - Chegara navbatini jonli ko'rish (bepul ochiq manba yo'q; hozircha qo'lda).

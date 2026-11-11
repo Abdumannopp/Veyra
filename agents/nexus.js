@@ -33,14 +33,40 @@ function configure(next) {
 }
 
 const enabled = () => process.env.NEXUS_ENABLED !== 'false';
+
+// The jobs a company can switch on or off in the AI Command Center. Missing = on.
+const AUTOMATIONS = {
+  readOrders: 'Read order emails with FLOW',
+  bookingMessages: 'Draft booking and pickup messages',
+  deliveredMessage: 'Draft the "delivered" message',
+  readDocuments: 'Read CMR and proof-of-delivery files',
+  priceCheck: 'Check prices when a truck is booked',
+  quietTrucks: 'Ask quiet trucks where they are',
+  riskWatch: 'Warn about loads at risk'
+};
+
+async function automationOn(tenantId, key) {
+  const tenant = await db.getTenant(tenantId);
+  return tenant?.automationSettings?.[key] !== false;
+}
 const pending = new Set();
 
-// Schedules the reaction to an event and returns at once.
+// Schedules the reaction to an event and returns at once. One company's events are handled one after
+// another, in the order they happened (a truck booked right after "Sourcing" must not leave a stale
+// "book a carrier" task behind); different companies do not wait for each other.
+const queues = new Map();
 function emit(event, context) {
   if (!enabled()) return;
-  const promise = handle(event, context)
+  const key = context?.tenantId ?? 'system';
+  const previous = queues.get(key) || Promise.resolve();
+  const promise = previous
+    .then(() => handle(event, context))
     .catch((error) => console.error(`[NEXUS] ${event} failed:`, error.message))
-    .finally(() => pending.delete(promise));
+    .finally(() => {
+      pending.delete(promise);
+      if (queues.get(key) === promise) queues.delete(key);
+    });
+  queues.set(key, promise);
   pending.add(promise);
 }
 
@@ -82,6 +108,8 @@ async function onInboxReceived({ tenantId, inboxId }) {
   const files = (item.attachments || []).map((file) => ({ id: file.id, filename: file.filename, size: file.size }));
   if (item.status === 'new' && !item.body.trim()) {
     note = 'This email has only files, no text. Attach them to a load, or create a new load.';
+  } else if (item.status === 'new' && !(await automationOn(tenantId, 'readOrders'))) {
+    note = 'Reading order emails is switched off in the AI Command Center.';
   } else if (item.status === 'new') {
     const ai = await aiAvailable(tenantId);
     if (!ai.ok) {
@@ -183,7 +211,7 @@ async function onShipmentStatus({ tenantId, shipmentId, status }) {
     });
   }
 
-  if (status === 'Delivered') {
+  if (status === 'Delivered' && (await automationOn(tenantId, 'deliveredMessage'))) {
     await draftMessageTask(tenantId, shipment, 'customer', 'delivered', `msg:${shipmentId}:customer:delivered`);
   }
 }
@@ -193,9 +221,12 @@ async function onShipmentDispatched({ tenantId, shipmentId }) {
   await db.resolveTasksByKey(tenantId, `book:${shipmentId}`);
   const shipment = await db.getShipment(tenantId, shipmentId);
   if (!shipment) return;
-  for (const [recipient, purpose] of [['carrier', 'booking_confirmation'], ['customer', 'booking_confirmation'], ['driver', 'pickup_details']]) {
-    await draftMessageTask(tenantId, shipment, recipient, purpose, `msg:${shipmentId}:${recipient}:booking`);
+  if (await automationOn(tenantId, 'bookingMessages')) {
+    for (const [recipient, purpose] of [['carrier', 'booking_confirmation'], ['customer', 'booking_confirmation'], ['driver', 'pickup_details']]) {
+      await draftMessageTask(tenantId, shipment, recipient, purpose, `msg:${shipmentId}:${recipient}:booking`);
+    }
   }
+  if (!(await automationOn(tenantId, 'priceCheck'))) return;
   // PULSE: a price far from what this lane usually costs, or a load that loses money, is worth a second look.
   const prices = pulseAgent.analyzePrices(await db.getPulseData(tenantId, shipmentId), { formatMoney: settings.formatMoney });
   const warnings = prices.flags.filter((flag) => flag.level === 'warn');
@@ -229,11 +260,16 @@ async function draftMessageTask(tenantId, shipment, recipient, purpose, dedupeKe
 }
 
 /* ---------- a document was uploaded ---------- */
-async function onDocumentUploaded({ tenantId, shipmentId, documentId }) {
+// manual: a person pressed "Read with AI", so the automatic-reading switch does not apply.
+async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = false }) {
   const document = await db.getDocument(tenantId, shipmentId, documentId);
   if (!document) return;
   if (!vaultAgent.READABLE_TYPES.includes(document.type)) {
     await db.updateDocumentExtraction(tenantId, documentId, { status: 'skipped', error: 'Only CMR and proof of delivery files are read automatically.' });
+    return;
+  }
+  if (!manual && !(await automationOn(tenantId, 'readDocuments'))) {
+    await db.updateDocumentExtraction(tenantId, documentId, { status: 'skipped', error: 'Reading documents automatically is switched off in the AI Command Center.' });
     return;
   }
   const ai = await aiAvailable(tenantId);
@@ -269,6 +305,7 @@ async function sweep() {
   const stale = await db.listStaleLoadsAllTenants(settings.staleHours);
   let created = 0;
   for (const row of stale) {
+    if (!(await automationOn(row.tenantId, 'quietTrucks'))) continue;
     const shipment = await db.getShipment(row.tenantId, row.id);
     if (!shipment) continue;
     const key = `stale:${row.id}:${row.lastTrackedAt || 'none'}`;
@@ -302,6 +339,7 @@ async function sentinelSweep(now = Date.now()) {
     if (!sentinelAgent.TASK_RISKS.includes(risk.type)) continue;
     const shipmentId = Number(risk.shipmentId.slice(4));
     const tenantId = tenantOf.get(shipmentId);
+    if (!(await automationOn(tenantId, 'riskWatch'))) continue;
     // A new ETA that is late again is a new warning; everything else is raised once per load.
     const key = `risk:${shipmentId}:${risk.type}${risk.detail ? `:${risk.detail}` : ''}`;
     active.add(`${tenantId}|${key}`);
@@ -337,4 +375,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { configure, emit, idle, sweep, sentinelSweep, startSweeper, stopSweeper };
+module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, startSweeper, stopSweeper };

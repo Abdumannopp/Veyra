@@ -48,6 +48,8 @@ const {
   setTenantMessagingSettings,
   setTenantImapSettings,
   setTenantImapState,
+  setTenantAutomationSettings,
+  getCommandCenterStats,
   listTenantIdsWithImap,
   createInboxItem,
   addInboxAttachment,
@@ -1235,6 +1237,69 @@ ${row('Truck', shipment.truck_plate)}
 });
 
 /* =========================================================
+   AI COMMAND CENTER: what the agents do for this company, and its switches
+   ========================================================= */
+app.get('/api/ai/command-center', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const [tenant, stats, loads] = await Promise.all([
+      getTenant(req.user.tenantId),
+      getCommandCenterStats(req.user.tenantId, 30),
+      listSentinelLoads(req.user.tenantId)
+    ]);
+    const risks = sentinelAgent.assess(await geo.annotateOffRoute(loads), { staleHours: STALE_TRACKING_HOURS, offRouteKm: geo.offRouteKm() });
+    const messagingOn = messaging.channelsOf(messaging.resolveConfig(tenant, DEFAULT_TENANT_ID).config).length > 0;
+    const nexusOn = process.env.NEXUS_ENABLED !== 'false';
+    const automations = Object.entries(nexus.AUTOMATIONS).map(([key, label]) => ({ key, label, on: tenant.automationSettings?.[key] !== false }));
+    return res.json({
+      success: true,
+      nexus: { enabled: nexusOn },
+      agents: {
+        ai: aiGateway.isEnabled(),
+        messaging: messagingOn,
+        map: geo.enabled()
+      },
+      automations,
+      canChange: hasPermission(req.user, 'settings:write'),
+      live: { ...stats.live, risks: risks.length, urgentRisks: risks.filter((risk) => risk.severity === 'high').length, openTasks: stats.open },
+      performance: {
+        days: stats.days,
+        prepared: stats.prepared,
+        handled: stats.done + stats.dismissed,
+        done: stats.done,
+        dismissed: stats.dismissed,
+        minutesToHandle: stats.minutesToHandle,
+        aiCalls: stats.aiCalls,
+        aiSuccessRate: stats.aiCalls ? Math.round((stats.aiSucceeded / stats.aiCalls) * 100) : null,
+        byKind: stats.byKind,
+        daily: stats.daily
+      },
+      activity: stats.activity
+    });
+  } catch (error) {
+    return sendError(res, error, 'AI Command Center unavailable.', 'command center');
+  }
+});
+
+// Switch automatic jobs on or off for this company (administrators). Only known keys and true/false are accepted.
+app.put('/api/settings/automations', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const keys = Object.keys(body);
+  if (!keys.length || keys.some((key) => !Object.prototype.hasOwnProperty.call(nexus.AUTOMATIONS, key) || typeof body[key] !== 'boolean')) {
+    return res.status(400).json({ success: false, message: `Send one or more of ${Object.keys(nexus.AUTOMATIONS).join(', ')} with true or false.` });
+  }
+  try {
+    const tenant = await getTenant(req.user.tenantId);
+    const next = { ...(tenant.automationSettings || {}) };
+    keys.forEach((key) => { next[key] = body[key]; });
+    await setTenantAutomationSettings(req.user.tenantId, next);
+    audit(req, 'automation.changed', keys.map((key) => `${nexus.AUTOMATIONS[key]}: ${body[key] ? 'on' : 'off'}`).join('; '));
+    return res.json({ success: true, automations: Object.entries(nexus.AUTOMATIONS).map(([key, label]) => ({ key, label, on: next[key] !== false })) });
+  } catch (error) {
+    return sendError(res, error, 'Settings could not be saved.', 'automations');
+  }
+});
+
+/* =========================================================
    QUOTES: price offers to customers, before a load exists
    ========================================================= */
 const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'declined'];
@@ -2242,7 +2307,7 @@ app.post('/api/shipments/:id/documents/:docId/extract', authMiddleware, requireP
     if (!document) return res.status(404).json({ success: false, message: 'Document not found.' });
     if (!aiGateway.isEnabled()) return res.status(503).json({ success: false, message: 'AI is not configured. Add OPENROUTER_API_KEY to the server settings.' });
     await updateDocumentExtraction(req.user.tenantId, docId, { status: 'pending' });
-    nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId: docId });
+    nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId: docId, manual: true });
     return res.status(202).json({ success: true, status: 'pending' });
   } catch (error) {
     return sendError(res, error, 'Document could not be read.', 'document extract');

@@ -158,7 +158,8 @@
             <a href="#/shipments?status=Pending%20Approval" data-nav="approvals"><svg class="ico"><use href="#i-check-square" /></svg>Approvals <span class="nav-badge hidden" id="navApprovalsBadge">0</span></a>
             <a href="#/inbox" data-nav="inbox"><svg class="ico"><use href="#i-bell" /></svg>Inbox &amp; tasks <span class="nav-badge hidden" id="navInboxBadge">0</span></a>
             <a href="#/carriers" data-nav="carriers"><svg class="ico"><use href="#i-carrier" /></svg>Carriers</a>
-            <a href="#/agents" data-nav="agents"><svg class="ico"><use href="#i-sparkle" /></svg>AI Agents</a>
+            <a href="#/command" data-nav="command"><svg class="ico"><use href="#i-sparkle" /></svg>AI Command Center</a>
+            <a href="#/agents" data-nav="agents"><svg class="ico"><use href="#i-bolt" /></svg>AI Agents</a>
             <a href="#/analytics" data-nav="analytics"><svg class="ico"><use href="#i-chart" /></svg>Analytics</a>
             <a href="#/billing" data-nav="billing" class="hidden" id="navBilling"><svg class="ico"><use href="#i-wallet" /></svg>Billing</a>
             <a href="#/settings" data-nav="settings" class="hidden" id="navSettings"><svg class="ico"><use href="#i-gear" /></svg>Team &amp; settings</a>
@@ -352,6 +353,17 @@
               </div>
             </div>
             <div class="view-body" id="quotesView"></div>
+          </div>
+
+          <!-- ===== AI Command Center ===== -->
+          <div class="view hidden" data-view="command">
+            <div class="board-head">
+              <div>
+                <h2 class="head-label">AI Command Center</h2>
+                <div class="head-sub">See what your agents are doing, and decide what they may do on their own.</div>
+              </div>
+            </div>
+            <div class="view-body" id="commandView"></div>
           </div>
 
           <!-- ===== AI agents ===== -->
