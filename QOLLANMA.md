@@ -281,3 +281,13 @@ Yon menyuda "AI Command Center". Bir sahifada ko'rasiz:
 - Bozor narxlarini internetdan avtomatik olish (qo'lda kiritiladi).
 - Gmail/Outlook, tirbandlik va xarita qismi haqiqiy xizmatlar bilan hali sinalmagan:
   faqat soxta javoblar bilan tekshirilgan. Birinchi ulashda natijani o'zingiz ko'rib chiqing.
+
+## Global Tracking (Kuzatuv)
+
+Chap menyuda **Tracking**. Bu sahifada yo'ldagi barcha yuklar ko'rinadi:
+- yuqorida: faol yuklar soni, vaqtida yetib borayotganlar ulushi, yo'ldagi yuklar va muammolilar;
+- xaritada: shaharlar, yo'nalishlar va yuk mashinalari (GPS ma'lumoti kelgan bo'lsa);
+- yukni bosing: bosqichlar, haydovchi, mashina raqami va ogohlantirishlar chiqadi; "Call driver" bilan haydovchiga qo'ng'iroq qilasiz;
+- pastda: barcha yuklar ro'yxati va faol ogohlantirishlar.
+
+Xarita shahar joylashuvini bilishi uchun `.env` faylida `GEO_PROVIDER=osm` bo'lishi kerak. Sahifa har 2 daqiqada o'zi yangilanadi.

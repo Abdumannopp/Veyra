@@ -76,6 +76,7 @@ const {
   getRouteData,
   getPulseData,
   listSentinelLoads,
+  listTrackingOverview,
   getInboxItem,
   listInboxItems,
   countInboxItemsToday,
@@ -1233,6 +1234,84 @@ ${row('Truck', shipment.truck_plate)}
 </main><script src="/print.js"></script></body></html>`);
   } catch (error) {
     return sendError(res, error, 'Invoice unavailable.', 'invoice');
+  }
+});
+
+/* =========================================================
+   GLOBAL TRACKING: every booked load on one map
+   ========================================================= */
+// Positions come from GPS (when a provider sends them) and city coordinates from the map cache
+// (when GEO_PROVIDER is on). Nothing is invented: a load without coordinates is listed, not drawn.
+app.get('/api/tracking/overview', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const [rows, openLoads] = await Promise.all([listTrackingOverview(req.user.tenantId), listSentinelLoads(req.user.tenantId)]);
+    const risks = sentinelAgent.assess(await geo.annotateOffRoute(openLoads), { staleHours: STALE_TRACKING_HOURS, offRouteKm: geo.offRouteKm() });
+    const riskBy = new Map();
+    risks.forEach((risk) => {
+      const list = riskBy.get(risk.shipmentId) || [];
+      list.push({ type: risk.type, severity: risk.severity, title: risk.title });
+      riskBy.set(risk.shipmentId, list);
+    });
+    const places = new Map();
+    const place = async (name) => {
+      const lookup = String(name || '').trim().toLowerCase();
+      if (!places.has(lookup)) places.set(lookup, await geo.cachedPlace(name));
+      return places.get(lookup);
+    };
+    const loads = [];
+    for (const row of rows) {
+      const id = `SHP-${row.id}`;
+      const from = await place(row.origin);
+      const to = await place(row.destination);
+      const loadRisks = riskBy.get(id) || [];
+      const deliveryDay = /^\d{4}-\d{2}-\d{2}$/.test(String(row.delivery)) ? row.delivery : null;
+      const etaDay = row.eta ? String(row.eta).slice(0, 10) : null;
+      const late = row.status !== 'Delivered' && (loadRisks.some((risk) => ['late_delivery', 'eta_after_delivery', 'late_pickup'].includes(risk.type)) || (etaDay && deliveryDay && etaDay > deliveryDay));
+      loads.push({
+        id,
+        customer: row.customer,
+        origin: row.origin,
+        destination: row.destination,
+        pickup: row.pickup,
+        delivery: row.delivery,
+        status: row.status,
+        weight: row.weight,
+        equipment: row.equipment,
+        eta: row.eta || null,
+        lastLocation: row.lastLocation || null,
+        lastTrackedAt: row.lastTrackedAt || null,
+        carrierName: row.carrierName || null,
+        carrierPhone: row.carrierPhone || null,
+        driverName: row.driverName || null,
+        driverPhone: row.driverPhone || null,
+        truckPlate: row.truckPlate || null,
+        gps: row.lat === null || row.lat === undefined ? null : { lat: Number(row.lat), lng: Number(row.lng), at: row.gpsAt },
+        from,
+        to,
+        timeline: { bookedAt: row.bookedAt || null, departedAt: row.departedAt || null, deliveredAt: row.deliveredAt || null },
+        onTime: row.status === 'Delivered' ? null : !late,
+        risks: loadRisks
+      });
+    }
+    // Places the map does not know yet are looked up in the background, for the next visit.
+    geo.warmPlaces(loads.filter((load) => !load.from || !load.to).flatMap((load) => [load.origin, load.destination]));
+    const active = loads.filter((load) => load.status !== 'Delivered');
+    return res.json({
+      success: true,
+      map: { enabled: geo.enabled() },
+      summary: {
+        active: active.length,
+        inTransit: active.filter((load) => load.status === 'In Transit').length,
+        booked: active.filter((load) => load.status === 'Dispatched').length,
+        exceptions: active.filter((load) => load.status === 'Exception').length,
+        onTimeShare: active.length ? Math.round((active.filter((load) => load.onTime).length / active.length) * 100) : null,
+        withGps: active.filter((load) => load.gps).length
+      },
+      loads,
+      alerts: risks.slice(0, 20)
+    });
+  } catch (error) {
+    return sendError(res, error, 'Tracking unavailable.', 'tracking overview');
   }
 });
 

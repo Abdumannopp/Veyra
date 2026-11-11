@@ -742,3 +742,63 @@ select option { background: var(--popover); color: var(--text); }
   .cc-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (prefers-reduced-motion: reduce) { .cc-orb { animation: none; } }
+
+/* ---------- Global tracking ---------- */
+.track-top { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); gap: 16px; margin-bottom: 16px; }
+.track-bottom { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 16px; }
+.track-map-card { padding: 14px; background: #060822; border-color: rgba(170, 178, 255, .16); color: #eef0ff; backdrop-filter: none; display: grid; gap: 10px; align-content: start; }
+.track-map-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 2px 4px; }
+.track-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 999px; background: rgba(255, 255, 255, .07); }
+.track-chips button { border: 0; background: none; color: #c2c7ef; padding: 6px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 500; }
+.track-chips button.active { background: rgba(255, 255, 255, .16); color: #fff; }
+.track-map { border-radius: 18px; overflow: hidden; background:
+  radial-gradient(120% 70% at 50% 120%, rgba(96, 120, 255, .45), transparent 60%),
+  radial-gradient(ellipse at 40% 35%, #111a58, #05071f 80%); }
+.track-svg { display: block; width: 100%; height: auto; }
+.track-grid { stroke: rgba(170, 178, 255, .1); stroke-width: 1; }
+.track-route { fill: none; stroke: url(#vGradB); stroke: #7d84ff; stroke-width: 2.2; stroke-dasharray: 6 6; opacity: .65; cursor: pointer; }
+.track-route.late { stroke: #fbbf24; }
+.track-route.bad { stroke: #fb7185; }
+.track-route.selected { stroke-width: 3.6; stroke-dasharray: none; opacity: 1; filter: drop-shadow(0 0 6px rgba(140, 130, 255, .9)); }
+.track-city circle { fill: #0b0e33; stroke: #b9b0ff; stroke-width: 2; }
+.track-city.from circle { stroke: #6ea2ff; }
+.track-city text { fill: #e6e8ff; font-size: 15px; font-weight: 600; paint-order: stroke; stroke: rgba(5, 7, 31, .85); stroke-width: 4px; }
+.track-truck { cursor: pointer; }
+.track-truck-halo { fill: rgba(140, 130, 255, .25); }
+.track-truck-dot { fill: #fff; stroke: #7c6cff; stroke-width: 3; }
+.track-truck.late .track-truck-dot { stroke: #fbbf24; }
+.track-truck.bad .track-truck-dot { stroke: #fb7185; }
+.track-truck.selected .track-truck-halo { fill: rgba(140, 130, 255, .4); animation: truckPulse 1.8s ease-out infinite; }
+@keyframes truckPulse { 0% { r: 12; opacity: 1; } 100% { r: 26; opacity: 0; } }
+.track-map-empty { display: grid; place-content: center; gap: 8px; min-height: 300px; padding: 30px; text-align: center; border-radius: 18px; background: radial-gradient(ellipse at 50% 40%, #111a58, #05071f 80%); }
+.track-map-empty strong { font-size: 17px; color: #fff; }
+.track-map-empty p { margin: 0; max-width: 440px; color: #b7bce6; line-height: 1.5; }
+
+.track-detail { padding: 20px; display: grid; gap: 16px; align-content: start; }
+.track-detail-head { display: flex; align-items: center; gap: 12px; }
+.track-detail-head > span:nth-child(2) { display: grid; flex: 1; min-width: 0; }
+.track-detail-head strong { font-size: 18px; color: var(--text-strong); }
+.track-detail-head small { color: var(--muted); overflow-wrap: anywhere; }
+.track-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; position: relative; }
+.track-steps li { display: grid; justify-items: center; text-align: center; gap: 4px; position: relative; }
+.track-steps li::before { content: ""; position: absolute; top: 9px; left: -50%; width: 100%; height: 3px; background: var(--fill-strong); z-index: 0; }
+.track-steps li:first-child::before { display: none; }
+.track-steps li.done::before { background: linear-gradient(90deg, #5f86ff, #a06bff); }
+.track-step-dot { position: relative; z-index: 1; width: 20px; height: 20px; border-radius: 50%; background: var(--card-solid); border: 3px solid var(--fill-strong); }
+.track-steps li.done .track-step-dot { border-color: #7c6cff; background: #7c6cff; box-shadow: 0 0 0 4px rgba(124, 108, 255, .18); }
+.track-steps strong { font-size: 13px; color: var(--text-strong); }
+.track-steps small { font-size: 11.5px; color: var(--muted); }
+.track-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.track-facts div { display: grid; gap: 2px; padding: 10px 12px; border-radius: 14px; background: var(--fill); min-width: 0; }
+.track-facts small { color: var(--muted); font-size: 11.5px; }
+.track-facts strong { font-size: 13.5px; color: var(--text-strong); font-weight: 600; overflow-wrap: anywhere; }
+.track-risks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.track-risks li { padding: 8px 12px; border-radius: 12px; font-size: 13px; background: var(--chip-amber-bg); color: var(--chip-amber-fg); }
+.track-risks li.risk-high { background: var(--chip-red-bg); color: var(--chip-red-fg); }
+.track-ok { margin: 0; color: var(--chip-green-fg); font-size: 13px; }
+.track-detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.track-detail-actions a { text-decoration: none; }
+@media (max-width: 1180px) {
+  .track-top, .track-bottom { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .track-truck.selected .track-truck-halo { animation: none; } }

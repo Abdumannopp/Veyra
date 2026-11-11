@@ -2264,6 +2264,28 @@ async function getPulseData(tenantId, shipmentId) {
   return { shipment, history, marketRate: marketRate ? { rate: Number(marketRate.rate), equipment: marketRate.equipment || null, updatedAt: marketRate.updatedAt } : null };
 }
 
+// Everything the Global Tracking page shows for this company's booked loads: carrier, driver, the latest
+// position and when the truck was booked, left and (for the last days) delivered.
+async function listTrackingOverview(tenantId) {
+  assertTenant(tenantId);
+  const at = (status, fn = 'MIN') => `(SELECT ${fn}(created_at) FROM shipment_events WHERE shipment_events.shipment_id = shipments.id AND shipment_events.to_status = '${status}')`;
+  const gps = (column) => `(SELECT ${column} FROM tracking_updates WHERE tracking_updates.shipment_id = shipments.id AND lat IS NOT NULL ORDER BY id DESC LIMIT 1)`;
+  return all(
+    `SELECT shipments.id, shipments.customer, shipments.origin, shipments.destination, shipments.pickup, shipments.delivery, shipments.status,
+       shipments.weight, shipments.equipment, shipments.eta, shipments.last_location AS lastLocation, shipments.last_tracked_at AS lastTrackedAt,
+       shipments.driver_name AS driverName, shipments.driver_phone AS driverPhone, shipments.truck_plate AS truckPlate,
+       carriers.name AS carrierName, carriers.phone AS carrierPhone,
+       ${gps('lat')} AS lat, ${gps('lng')} AS lng, ${gps('created_at')} AS gpsAt,
+       ${at('Dispatched')} AS bookedAt, ${at('In Transit')} AS departedAt, ${at('Delivered', 'MAX')} AS deliveredAt
+     FROM shipments LEFT JOIN carriers ON carriers.id = shipments.carrier_id
+     WHERE shipments.tenant_id = ? AND (shipments.status IN ('Dispatched', 'In Transit', 'Exception')
+       OR (shipments.status = 'Delivered' AND ${at('Delivered', 'MAX')} >= datetime('now', '-2 days')))
+     ORDER BY CASE shipments.status WHEN 'Exception' THEN 0 WHEN 'In Transit' THEN 1 WHEN 'Dispatched' THEN 2 ELSE 3 END, shipments.id DESC
+     LIMIT 500`,
+    [tenantId]
+  );
+}
+
 // Loads that are still open, with what SENTINEL checks. tenantId null = every company (system job only).
 async function listSentinelLoads(tenantId) {
   const scoped = tenantId !== null;
@@ -2450,6 +2472,7 @@ module.exports = {
   getRouteData,
   getPulseData,
   listSentinelLoads,
+  listTrackingOverview,
   getInboxItem,
   listInboxItems,
   countInboxItemsToday,
