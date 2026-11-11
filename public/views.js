@@ -7,7 +7,7 @@
    fetchDashboardData, loadAdminConsole.
    ========================================================= */
 (function () {
-  const VIEWS = ['dashboard', 'shipments', 'inbox', 'carriers', 'analytics'];
+  const VIEWS = ['dashboard', 'shipments', 'inbox', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
   const STATUS_ORDER = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
   const STATUS_COLORS = {
     New: '#2563ff',
@@ -153,8 +153,8 @@
     const { view, params } = parseHash();
     state.view = view;
     state.params = params;
-    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', inbox: 'Inbox & tasks', carriers: 'Carriers', analytics: 'Analytics' };
-    document.title = `${TITLES[view]} | VEYRA`;
+    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
+    document.title = `${TITLES[view]} | Veyra`;
 
     document.querySelectorAll('.view[data-view]').forEach((node) => node.classList.toggle('hidden', node.dataset.view !== view));
     document.querySelector('.dashboard-panel')?.classList.toggle('is-wide', view !== 'dashboard');
@@ -183,6 +183,15 @@
     } else if (view === 'analytics') {
       if (search) search.value = '';
       renderAnalytics();
+    } else if (view === 'agents') {
+      if (search) search.value = '';
+      renderAgents();
+    } else if (view === 'billing') {
+      if (search) search.value = '';
+      renderBilling();
+    } else if (view === 'settings') {
+      if (search) search.value = '';
+      renderSettings();
     } else if (search) {
       search.value = '';
     }
@@ -364,7 +373,7 @@
           el('button', { class: 'btn btn-ghost small', type: 'button', disabled: s.page <= 1, onclick: () => go(s.page - 1) }, '← Previous'),
           el('span', { class: 'muted', text: `Page ${s.page} of ${s.pages}` }),
           el('button', { class: 'btn btn-ghost small', type: 'button', disabled: s.page >= s.pages, onclick: () => go(s.page + 1) }, 'Next →')
-        ]) : null
+        ]) : ''
       );
     }
   }
@@ -1237,6 +1246,161 @@
     renderNotifications();
   }
 
+
+  /* =========================================================
+     AI AGENTS: what each agent does, whether it is on, what it did
+     ========================================================= */
+  const AGENTS = [
+    { key: 'FLOW', name: 'FLOW', role: 'Order reader', text: 'Reads an order from an email or a pasted message and fills in the load form.', needs: 'ai', icon: 'doc', tone: 'blue', action: ['Read an order', () => window.openShipmentModal?.({})] },
+    { key: 'SCOUT', name: 'SCOUT', role: 'Carrier finder', text: 'Ranks your carriers for a load by trailer, past loads on the lane and reliability.', needs: null, icon: 'truck', tone: 'violet', action: ['Loads to book', () => navigate('shipments', { status: 'Sourcing' })] },
+    { key: 'RELAY', name: 'RELAY', role: 'Messages', text: 'Drafts SMS / WhatsApp messages to drivers, carriers and customers in Uzbek, Russian or English.', needs: 'messaging', icon: 'chat', tone: 'sky', action: ['Messages to approve', () => navigate('inbox')] },
+    { key: 'VAULT', name: 'VAULT', role: 'Documents', text: 'Reads CMR and proof-of-delivery files and compares them with the load.', needs: 'ai', icon: 'doc', tone: 'green', action: null },
+    { key: 'NEXUS', name: 'NEXUS', role: 'Coordinator', text: 'Turns events into tasks for a person. It never sends, books or changes anything by itself.', needs: 'nexus', icon: 'bolt', tone: 'violet', action: ['Inbox & tasks', () => navigate('inbox')] },
+    { key: 'ROUTE', name: 'ROUTE', role: 'Schedule', text: 'Checks if the promised dates are realistic and finds trucks that unload near the pickup.', needs: null, icon: 'target', tone: 'blue', action: null },
+    { key: 'PULSE', name: 'PULSE', role: 'Prices', text: 'Compares a price with what the lane usually costs and with your market prices.', needs: null, icon: 'chart', tone: 'amber', action: null },
+    { key: 'SENTINEL', name: 'SENTINEL', role: 'Risk watch', text: 'Watches every open load: late pickup, late delivery, silent trucks, failed messages.', needs: null, icon: 'alert', tone: 'red', action: ['See risks', () => navigate('inbox')] }
+  ];
+
+  async function renderAgents() {
+    const container = document.getElementById('agentsView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!container.children.length) loading(container);
+    const [usage, tasks, risks, messaging] = await Promise.all([
+      can('analytics:read') ? api('/api/analytics?days=30').then((data) => data.agents || []).catch(() => []) : Promise.resolve([]),
+      api('/api/tasks').then((data) => data.tasks || []).catch(() => []),
+      api('/api/agents/sentinel').then((data) => data.risks || []).catch(() => []),
+      api('/api/messaging/status').catch(() => ({ channels: [] }))
+    ]);
+    if (state.view !== 'agents') return;
+    const config = window.VeyraConfig || {};
+    const isOn = (needs) => {
+      if (needs === 'ai') return { on: Boolean(config.ai?.enabled), off: 'Off · needs an AI key on the server' };
+      if (needs === 'messaging') return { on: (messaging.channels || []).length > 0, off: 'Drafts only · connect Twilio to send' };
+      if (needs === 'nexus') return { on: config.nexus?.enabled !== false, off: 'Switched off on the server' };
+      return { on: true, off: '' };
+    };
+    const calls = (key) => usage.filter((row) => String(row.agent).toUpperCase() === key).reduce((sum, row) => sum + row.calls, 0);
+    const active = AGENTS.filter((agent) => isOn(agent.needs).on).length;
+    const totalCalls = usage.reduce((sum, row) => sum + row.calls, 0);
+
+    const kpis = el('div', { class: 'stats-grid kpi-grid' }, [
+      kpiCard('Agents working', `${active} of ${AGENTS.length}`, 'Rule-based agents need no key', 'sparkle', 'violet'),
+      kpiCard('AI calls (30 days)', totalCalls.toLocaleString('en-US'), config.ai?.enabled ? 'Counted per company' : 'AI is off', 'bolt', 'blue'),
+      kpiCard('Tasks waiting', String(tasks.length), 'Prepared for a person to approve', 'check-square', 'green'),
+      kpiCard('Risks now', String(risks.length), risks.length ? 'Open loads that need a look' : 'Nothing at risk', 'alert', risks.length ? 'red' : 'green')
+    ]);
+
+    const cards = el('div', { class: 'agent-grid' }, AGENTS.map((agent) => {
+      const status = isOn(agent.needs);
+      const used = calls(agent.key);
+      return el('article', { class: `card agent-card${status.on ? '' : ' is-off'}` }, [
+        el('header', {}, [
+          el('span', { class: `stat-icon ${agent.tone}` }, icon(agent.icon, '')),
+          el('span', { class: 'agent-title' }, [el('strong', { text: agent.name }), el('small', { text: agent.role })]),
+          el('span', { class: `agent-state ${status.on ? 'on' : 'off'}`, text: status.on ? 'Active' : 'Off' })
+        ]),
+        el('p', { text: agent.text }),
+        status.on ? null : el('p', { class: 'warn-line', text: status.off }),
+        el('footer', {}, [
+          el('small', { class: 'muted', text: agent.needs === 'ai' ? `${used} AI call${used === 1 ? '' : 's'} in 30 days` : (agent.needs === null ? 'Built in · no key needed' : '') }),
+          agent.action ? el('button', { class: 'btn btn-ghost small', type: 'button', onclick: agent.action[1] }, agent.action[0]) : null
+        ])
+      ]);
+    }));
+
+    const riskCard = el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'SENTINEL · loads at risk' }), el('small', { text: 'Checked just now' })])),
+      risks.length
+        ? el('ul', { class: 'risk-list' }, risks.slice(0, 6).map((risk) => el('li', { class: `risk-${risk.severity}` }, [
+          el('span', { class: 'risk-level', text: { high: 'Urgent', medium: 'Soon', low: 'Note' }[risk.severity] || risk.severity }),
+          el('div', {}, [
+            el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(risk.shipmentId) }, risk.title),
+            el('small', { class: 'muted', text: risk.advice })
+          ])
+        ])))
+        : el('p', { class: 'muted', text: 'No open load is at risk right now.' })
+    ]);
+    const taskCard = el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'NEXUS · prepared for you' }), el('small', { text: 'Waiting for a person' })])),
+      tasks.length
+        ? el('ul', { class: 'activity-list' }, tasks.slice(0, 6).map((task) => el('li', {}, [
+          el('span', { class: 'activity-dot' }),
+          el('span', {}, [el('strong', { text: task.title }), el('small', { class: 'muted', text: typeof formatTimestamp === 'function' ? formatTimestamp(task.createdAt) : task.createdAt })])
+        ])))
+        : el('p', { class: 'muted', text: 'Nothing is waiting. New orders, bookings and late trucks will appear here.' }),
+      el('button', { class: 'btn btn-ghost small', type: 'button', onclick: () => navigate('inbox') }, 'Open Inbox & tasks')
+    ]);
+    container.replaceChildren(kpis, cards, el('div', { class: 'analytics-grid two' }, [riskCard, taskCard]));
+  }
+
+  /* =========================================================
+     BILLING: open money from delivered loads
+     ========================================================= */
+  async function renderBilling() {
+    const container = document.getElementById('billingView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!can('shipments:finance')) return gate(container, 'denied');
+    if (!container.children.length) loading(container);
+    let finance;
+    try {
+      finance = await api('/api/finance/summary');
+    } catch (error) {
+      return errorState(container, error.message, renderBilling);
+    }
+    if (state.view !== 'billing') return;
+    const kpis = el('div', { class: 'stats-grid kpi-grid' }, [
+      kpiCard('Customers owe', money(finance.receivable), `${finance.receivableLoads} delivered load${finance.receivableLoads === 1 ? '' : 's'}`, 'wallet', 'violet'),
+      kpiCard('Not invoiced yet', String(finance.notInvoiced), 'Delivered, invoice not sent', 'doc', finance.notInvoiced ? 'amber' : 'green'),
+      kpiCard('You owe carriers', money(finance.payable), `${finance.payableLoads} load${finance.payableLoads === 1 ? '' : 's'}`, 'truck', 'blue'),
+      kpiCard('Balance', money(finance.receivable - finance.payable), 'Coming in minus going out', 'chart', finance.receivable >= finance.payable ? 'green' : 'red')
+    ]);
+    const rows = finance.open.map((row) => {
+      const label = row.customerPaidAt ? 'Paid' : (row.invoicedAt ? 'Invoiced' : 'Not invoiced');
+      const tone = row.customerPaidAt ? 'delivered' : (row.invoicedAt ? 'in-transit' : (row.daysSinceDelivery > 14 ? 'exception' : 'pending-approval'));
+      return [
+        el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(row.id) }, row.id),
+        el('span', {}, [row.customer, el('small', { class: 'cell-sub', text: row.invoiceNumber ? `Invoice ${row.invoiceNumber}` : '' })]),
+        row.customerPaidAt || row.customerRate === null ? '—' : money(row.customerRate),
+        el('span', { class: `tag ${tone}`, text: label }),
+        row.carrierPaidAt || row.rate === null ? '—' : el('span', {}, [money(row.rate), el('small', { class: 'cell-sub', text: row.carrierName || '' })]),
+        row.daysSinceDelivery === null ? '—' : `${row.daysSinceDelivery} day${row.daysSinceDelivery === 1 ? '' : 's'} ago`
+      ];
+    });
+    const table = el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Open invoices and payments' }), el('small', { text: 'Oldest delivery first. Open a load to mark it invoiced or paid, or to print its invoice.' })])),
+      miniTable(['Load', 'Customer', 'Customer owes', 'Invoice', 'Carrier is owed', 'Delivered'], rows, 'Nothing is open: every delivered load is paid on both sides.')
+    ]);
+    container.replaceChildren(kpis, table);
+  }
+
+  /* =========================================================
+     TEAM & SETTINGS: the operations console has its own page
+     ========================================================= */
+  function renderSettings() {
+    const panel = document.getElementById('adminPanel');
+    const view = document.querySelector('.view[data-view="settings"]');
+    if (!view) return;
+    let note = view.querySelector('.settings-gate');
+    if (!note) {
+      note = el('div', { class: 'settings-gate' });
+      view.append(note);
+    }
+    if (!currentUser()) {
+      panel?.classList.add('hidden');
+      gate(note, 'signin');
+      return;
+    }
+    if (!can('users:read')) {
+      panel?.classList.add('hidden');
+      gate(note, 'denied');
+      return;
+    }
+    note.replaceChildren();
+    if (typeof loadAdminConsole === 'function') loadAdminConsole();
+  }
+
   /* =========================================================
      SHARED
      ========================================================= */
@@ -1247,6 +1411,8 @@
     if (state.view === 'carriers') await renderCarriers();
     if (state.view === 'analytics') await renderAnalytics();
     if (state.view === 'inbox') await renderInbox();
+    if (state.view === 'agents') await renderAgents();
+    if (state.view === 'billing') await renderBilling();
     loadNotifications();
   }
 
