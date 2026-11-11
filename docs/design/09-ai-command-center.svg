@@ -1,0 +1,211 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1672" height="941" viewBox="0 0 1672 941" role="img" aria-labelledby="title desc">
+<title id="title">AI Command Center — Veyra</title><desc id="desc">Central command center for agents, automation, live AI operations and performance.</desc>
+<defs>
+ <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#edf2ff"/><stop offset=".48" stop-color="#f8f9ff"/><stop offset="1" stop-color="#e8e5ff"/></linearGradient>
+ <linearGradient id="sidebar" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#101a39"/><stop offset="1" stop-color="#080f27"/></linearGradient>
+ <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#168bff"/><stop offset="1" stop-color="#3b52ef"/></linearGradient>
+ <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9562ff"/><stop offset="1" stop-color="#6128e9"/></linearGradient>
+ <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#208cff"/><stop offset=".55" stop-color="#5262f6"/><stop offset="1" stop-color="#9b45ef"/></linearGradient>
+ <linearGradient id="soft" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff" stop-opacity=".97"/><stop offset="1" stop-color="#f5f6ff" stop-opacity=".88"/></linearGradient>
+ <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff" stop-opacity=".94"/><stop offset="1" stop-color="#edf0ff" stop-opacity=".78"/></linearGradient>
+ <linearGradient id="orb" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#35c9ff"/><stop offset=".45" stop-color="#365cff"/><stop offset="1" stop-color="#a64aff"/></linearGradient>
+ <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#42d58d"/><stop offset="1" stop-color="#16a96a"/></linearGradient>
+ <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%"><feGaussianBlur in="SourceAlpha" stdDeviation="9"/><feOffset dy="5"/><feComponentTransfer><feFuncA type="linear" slope=".12"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ <filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="12" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.2" fill="#9ea9db" opacity=".26"/></pattern>
+</defs>
+<rect x="0" y="0" width="1672" height="941" rx="0" fill="url(#bg)" stroke="none" stroke-width="1" opacity="1" />
+<ellipse cx="1350" cy="40" rx="420" ry="250" fill="#a99bff" opacity="0.15" />
+<ellipse cx="720" cy="0" rx="360" ry="170" fill="#8ac4ff" opacity="0.12" />
+<rect x="0" y="0" width="244" height="941" rx="0" fill="url(#sidebar)" stroke="none" stroke-width="1" opacity="1" />
+<path d="M37 25 Q45 14 54 25 L68 47 Q73 55 66 63 Q60 70 53 63 L34 34 Q30 29 37 25 Z" fill="url(#blue)" stroke="none" stroke-width="1" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M79 24 Q87 14 97 22 Q102 27 98 34 L77 64 Q70 73 62 66 Q56 60 62 52 Z" fill="url(#violet)" stroke="none" stroke-width="1" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="114" y="55" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="29" font-weight="750" fill="#ffffff" text-anchor="start" >Veyra</text>
+<text x="48" y="120" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >⌂</text>
+<text x="91" y="120" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Dashboard</text>
+<text x="48" y="169" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >◇</text>
+<text x="91" y="169" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Shipments</text>
+<text x="48" y="218" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >▤</text>
+<text x="91" y="218" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Quotes</text>
+<text x="48" y="267" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >◎</text>
+<text x="91" y="267" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Carriers</text>
+<rect x="18" y="285" width="210" height="47" rx="15" fill="url(#accent)" stroke="#8ca2ff" stroke-width="1" opacity="0.98" filter="url(#shadow)"/>
+<text x="48" y="316" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >✧</text>
+<text x="91" y="316" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#ffffff" text-anchor="start" >AI Center</text>
+<text x="48" y="365" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >✉</text>
+<text x="91" y="365" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Inbox</text>
+<rect x="190" y="342" width="34" height="25" rx="12.5" fill="#794cff" stroke="none" stroke-width="1" opacity="1" />
+<text x="207.0" y="359.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#ffffff" text-anchor="middle" >12</text>
+<text x="48" y="414" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >▥</text>
+<text x="91" y="414" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Analytics</text>
+<text x="48" y="463" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >⌘</text>
+<text x="91" y="463" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Integrations</text>
+<text x="48" y="512" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >♧</text>
+<text x="91" y="512" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Team</text>
+<text x="48" y="561" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >⚙</text>
+<text x="91" y="561" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Settings</text>
+<rect x="18" y="626" width="210" height="284" rx="20" fill="#111e48" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<path d="M27 702 C82 654 116 722 167 673 S224 689 224 675" fill="none" stroke="#9e74ff" stroke-width="3" opacity="1" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+<path d="M26 704 C74 674 115 719 166 690 S220 691 225 689" fill="none" stroke="#35c6ff" stroke-width="2" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="122" y="755" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#ffffff" text-anchor="middle" >Veyra AI</text>
+<text x="122" y="783" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="450" fill="#cbd6f7" text-anchor="middle" >Your logistics co-pilot</text>
+<rect x="42" y="815" width="162" height="42" rx="13" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="1" />
+<text x="123.0" y="841.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="650" fill="#26345b" text-anchor="middle" >Ask Veyra AI</text>
+<rect x="244" y="0" width="1428" height="70" rx="0" fill="#ffffff" stroke="none" stroke-width="1" opacity="0.34" />
+<rect x="272" y="13" width="590" height="42" rx="22" fill="#ffffff" stroke="#d9def5" stroke-width="1.2" opacity="0.76" />
+<circle cx="294" cy="34" r="7" fill="none" stroke="#4b5b85" stroke-width="2" opacity="1" />
+<path d="M299,39 L305,45" stroke="#4b5b85" stroke-width="2" opacity="1" fill="none"/>
+<text x="318" y="40" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="450" fill="#667394" text-anchor="start" >Search shipments, quotes, carriers...</text>
+<rect x="794" y="19" width="51" height="29" rx="14.5" fill="#f0f2fc" stroke="none" stroke-width="1" opacity="1" />
+<text x="819.5" y="38.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#59678d" text-anchor="middle" >⌘K</text>
+<text x="1378" y="43" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="24" font-weight="600" fill="#35456f" text-anchor="start" >♧</text>
+<circle cx="1439" cy="34" r="20" fill="url(#accent)" stroke="none" stroke-width="1" opacity="1" />
+<text x="1439" y="40" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle" >A</text>
+<text x="1471" y="31" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="15" font-weight="700" fill="#16213f" text-anchor="start" >Abdumannop</text>
+<text x="1471" y="49" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="500" fill="#657395" text-anchor="start" >Veyra Admin</text>
+<text x="278" y="112" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="31" font-weight="750" fill="#101a35" text-anchor="start" >AI Command Center</text>
+<text x="280" y="142" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="15" font-weight="450" fill="#536287" text-anchor="start" >Control, automate and scale logistics with Veyra AI.</text>
+<rect x="278" y="155" width="105" height="42" rx="21" fill="url(#accent)" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="330.5" y="182" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#fff" text-anchor="middle" >Overview</text>
+<rect x="393" y="155" width="110" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="448.0" y="182" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >AI Agents</text>
+<rect x="513" y="155" width="120" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="573.0" y="182" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Automations</text>
+<rect x="643" y="155" width="140" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="713.0" y="182" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Live Operations</text>
+<rect x="793" y="155" width="100" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="843.0" y="182" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Insights</text>
+<rect x="903" y="155" width="100" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="953.0" y="182" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Settings</text>
+<rect x="278" y="215" width="425" height="360" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="300" y="253" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#17213f" text-anchor="start" >AI Agents · 5 active</text>
+<rect x="555" y="229" width="125" height="34" rx="13" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="1" />
+<text x="617.5" y="251.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="650" fill="#26345b" text-anchor="middle" >＋ Add Agent</text>
+<circle cx="317.5" cy="299.5" r="17.5" fill="#e5f0ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="304.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#267bfa" text-anchor="middle" >▣</text>
+<text x="346" y="305" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#17213f" text-anchor="start" >Shipment Agent</text>
+<text x="346" y="322" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#6a7898" text-anchor="start" >Track and manage shipments</text>
+<rect x="590" y="286" width="85" height="25" rx="12.5" fill="#e2f8ec" stroke="none" stroke-width="1" opacity="1" />
+<text x="632.5" y="303.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#15945d" text-anchor="middle" >Active</text>
+<circle cx="317.5" cy="348.5" r="17.5" fill="#eee7ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="353.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#8050ef" text-anchor="middle" >◇</text>
+<text x="346" y="354" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#17213f" text-anchor="start" >Quote Agent</text>
+<text x="346" y="371" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#6a7898" text-anchor="start" >Find best rates instantly</text>
+<rect x="590" y="335" width="85" height="25" rx="12.5" fill="#e2f8ec" stroke="none" stroke-width="1" opacity="1" />
+<text x="632.5" y="352.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#15945d" text-anchor="middle" >Active</text>
+<circle cx="317.5" cy="397.5" r="17.5" fill="#e1f8ed" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="402.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#17a96e" text-anchor="middle" >▥</text>
+<text x="346" y="403" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#17213f" text-anchor="start" >Analytics Agent</text>
+<text x="346" y="420" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#6a7898" text-anchor="start" >Analyze operations</text>
+<rect x="590" y="384" width="85" height="25" rx="12.5" fill="#e2f8ec" stroke="none" stroke-width="1" opacity="1" />
+<text x="632.5" y="401.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#15945d" text-anchor="middle" >Active</text>
+<circle cx="317.5" cy="446.5" r="17.5" fill="#e5f0ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="451.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#267bfa" text-anchor="middle" >⬡</text>
+<text x="346" y="452" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#17213f" text-anchor="start" >Compliance Agent</text>
+<text x="346" y="469" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#6a7898" text-anchor="start" >Verify documents</text>
+<rect x="590" y="433" width="85" height="25" rx="12.5" fill="#e2f8ec" stroke="none" stroke-width="1" opacity="1" />
+<text x="632.5" y="450.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#15945d" text-anchor="middle" >Active</text>
+<circle cx="317.5" cy="495.5" r="17.5" fill="#eee7ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="500.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#8050ef" text-anchor="middle" >◈</text>
+<text x="346" y="501" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#17213f" text-anchor="start" >Operations Agent</text>
+<text x="346" y="518" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#6a7898" text-anchor="start" >Coordinate workflows</text>
+<rect x="590" y="482" width="85" height="25" rx="12.5" fill="#e2f8ec" stroke="none" stroke-width="1" opacity="1" />
+<text x="632.5" y="499.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#15945d" text-anchor="middle" >Active</text>
+<rect x="720" y="215" width="400" height="360" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<circle cx="920" cy="393" r="100" fill="url(#orb)" stroke="#ffffff" stroke-width="3" opacity="1" filter="url(#glow)"/>
+<text x="920" y="405" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="88" font-weight="850" fill="#ffffff" text-anchor="middle" >V</text>
+<text x="920" y="524" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="23" font-weight="800" fill="#182140" text-anchor="middle" >Veyra AI</text>
+<text x="920" y="548" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="500" fill="#647394" text-anchor="middle" >Autonomous logistics intelligence</text>
+<circle cx="790" cy="285" r="26" fill="#f1ecff" stroke="#ffffff" stroke-width="2" opacity="1" />
+<text x="790" y="290" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="650" fill="#7143e8" text-anchor="middle" >Plan</text>
+<circle cx="1050" cy="285" r="26" fill="#f1ecff" stroke="#ffffff" stroke-width="2" opacity="1" />
+<text x="1050" y="290" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="650" fill="#7143e8" text-anchor="middle" >Automate</text>
+<circle cx="780" cy="475" r="26" fill="#f1ecff" stroke="#ffffff" stroke-width="2" opacity="1" />
+<text x="780" y="480" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="650" fill="#7143e8" text-anchor="middle" >Analyze</text>
+<circle cx="1060" cy="475" r="26" fill="#f1ecff" stroke="#ffffff" stroke-width="2" opacity="1" />
+<text x="1060" y="480" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="650" fill="#7143e8" text-anchor="middle" >Optimize</text>
+<rect x="1138" y="215" width="496" height="360" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="1162" y="253" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#17213f" text-anchor="start" >AI Operations · Live</text>
+<rect x="1156" y="278" width="460" height="270" rx="18" fill="#0d2057" stroke="#ffffff" stroke-width="1" opacity="0.98" />
+<path d="M1192.8,364.4 l36.800000000000004,-37.800000000000004 46.0,5.4 23.0,40.5 -18.400000000000002,32.4 -50.6,5.4 -32.2,45.900000000000006 -18.400000000000002,-27.0 Z" fill="#4e75db" stroke="none" stroke-width="1" opacity="0.74" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1280.2,421.1 l23.0,5.4 27.599999999999998,43.2 -9.200000000000001,59.4 -18.400000000000002,29.7 -18.400000000000002,-51.3 Z" fill="#4e75db" stroke="none" stroke-width="1" opacity="0.74" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1367.6,353.6 l46.0,-29.7 64.4,5.4 23.0,29.7 -13.799999999999999,37.800000000000004 -64.4,16.2 -32.2,29.7 -36.800000000000004,-21.6 Z" fill="#4e75db" stroke="none" stroke-width="1" opacity="0.74" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1436.6,434.6 l46.0,8.1 23.0,43.2 -27.599999999999998,32.4 -41.4,-10.8 Z" fill="#4e75db" stroke="none" stroke-width="1" opacity="0.74" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1501.0,383.3 l41.4,-18.900000000000002 46.0,24.3 -18.400000000000002,48.6 -50.6,10.8 -27.599999999999998,-32.4 Z" fill="#4e75db" stroke="none" stroke-width="1" opacity="0.74" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1248.0 286 Q1202.0 413.0 1248.0 540" fill="none" stroke="#6e91ec" stroke-width="1" opacity="0.22" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1340.0 286 Q1294.0 413.0 1340.0 540" fill="none" stroke="#6e91ec" stroke-width="1" opacity="0.22" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1432.0 286 Q1386.0 413.0 1432.0 540" fill="none" stroke="#6e91ec" stroke-width="1" opacity="0.22" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1524.0 286 Q1478.0 413.0 1524.0 540" fill="none" stroke="#6e91ec" stroke-width="1" opacity="0.22" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M1284.8 445.4 Q1386.0 305.0 1514.8 383.3" fill="none" stroke="#21a8ff" stroke-width="4" opacity="1" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+<circle cx="1284.8" cy="445.4" r="9" fill="#b84eff" stroke="#ffffff" stroke-width="2" opacity="1" />
+<circle cx="1514.8" cy="383.3" r="9" fill="#16b8ff" stroke="#ffffff" stroke-width="2" opacity="1" />
+<circle cx="1395.2" cy="361.7" r="6" fill="#ffffff" stroke="none" stroke-width="1" opacity="1" />
+<rect x="278" y="595" width="425" height="315" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="300" y="633" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#17213f" text-anchor="start" >Automation Studio</text>
+<circle cx="317.5" cy="678.5" r="17.5" fill="#e5f0ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="683.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#267bfa" text-anchor="middle" >▣</text>
+<text x="346" y="685" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#17213f" text-anchor="start" >Shipment Status Update</text>
+<text x="346" y="703" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7180a0" text-anchor="start" >Auto-notify on status changes</text>
+<rect x="630" y="665" width="48" height="23" rx="11.5" fill="#e4f8ee" stroke="none" stroke-width="1" opacity="1" />
+<text x="654.0" y="681.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#169a61" text-anchor="middle" >ON</text>
+<circle cx="317.5" cy="730.5" r="17.5" fill="#eee7ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="735.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#8050ef" text-anchor="middle" >♧</text>
+<text x="346" y="737" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#17213f" text-anchor="start" >Delay Risk Detection</text>
+<text x="346" y="755" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7180a0" text-anchor="start" >Identify potential delays</text>
+<rect x="630" y="717" width="48" height="23" rx="11.5" fill="#e4f8ee" stroke="none" stroke-width="1" opacity="1" />
+<text x="654.0" y="733.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#169a61" text-anchor="middle" >ON</text>
+<circle cx="317.5" cy="782.5" r="17.5" fill="#e1f8ed" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="787.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#17a96e" text-anchor="middle" >▤</text>
+<text x="346" y="789" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#17213f" text-anchor="start" >Document Processing</text>
+<text x="346" y="807" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7180a0" text-anchor="start" >Extract and verify docs</text>
+<rect x="630" y="769" width="48" height="23" rx="11.5" fill="#e4f8ee" stroke="none" stroke-width="1" opacity="1" />
+<text x="654.0" y="785.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#169a61" text-anchor="middle" >ON</text>
+<circle cx="317.5" cy="834.5" r="17.5" fill="#e5f0ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.5" y="839.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#267bfa" text-anchor="middle" >◎</text>
+<text x="346" y="841" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#17213f" text-anchor="start" >Route Optimization</text>
+<text x="346" y="859" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7180a0" text-anchor="start" >Find the best route</text>
+<rect x="630" y="821" width="48" height="23" rx="11.5" fill="#e4f8ee" stroke="none" stroke-width="1" opacity="1" />
+<text x="654.0" y="837.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#169a61" text-anchor="middle" >ON</text>
+<rect x="720" y="595" width="400" height="315" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="742" y="633" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#17213f" text-anchor="start" >AI Performance</text>
+<text x="1090" y="633" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="17" font-weight="800" fill="#159b63" text-anchor="end" >+15%</text>
+<rect x="742" y="655" width="82" height="75" rx="13" fill="#f3f5ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="783" y="687" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="18" font-weight="800" fill="#182344" text-anchor="middle" >287</text>
+<text x="783" y="711" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="9" font-weight="550" fill="#7180a0" text-anchor="middle" >Automations</text>
+<rect x="833" y="655" width="82" height="75" rx="13" fill="#f3f5ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="874" y="687" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="18" font-weight="800" fill="#182344" text-anchor="middle" >96%</text>
+<text x="874" y="711" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="9" font-weight="550" fill="#7180a0" text-anchor="middle" >Issues resolved</text>
+<rect x="924" y="655" width="82" height="75" rx="13" fill="#f3f5ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="965" y="687" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="18" font-weight="800" fill="#182344" text-anchor="middle" >−42%</text>
+<text x="965" y="711" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="9" font-weight="550" fill="#7180a0" text-anchor="middle" >Avg. delay</text>
+<rect x="1015" y="655" width="82" height="75" rx="13" fill="#f3f5ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="1056" y="687" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="18" font-weight="800" fill="#182344" text-anchor="middle" >+18%</text>
+<text x="1056" y="711" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="9" font-weight="550" fill="#7180a0" text-anchor="middle" >Cost efficiency</text>
+<path d="M744,787.5 L1089,787.5" stroke="#e1e6f6" stroke-width="1" opacity="0.9" fill="none"/>
+<path d="M744,817.0 L1089,817.0" stroke="#e1e6f6" stroke-width="1" opacity="0.9" fill="none"/>
+<path d="M744,846.5 L1089,846.5" stroke="#e1e6f6" stroke-width="1" opacity="0.9" fill="none"/>
+<path d="M744.0,848.86 L775.3636363636364,839.42 L806.7272727272727,842.96 L838.0909090909091,824.08 L869.4545454545455,829.98 L900.8181818181818,813.46 L932.1818181818182,819.36 L963.5454545454545,798.12 L994.9090909090909,804.02 L1026.2727272727273,791.04 L1057.6363636363635,795.76 L1089.0,772.16" fill="none" stroke="#6c55f2" stroke-width="3.2" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M744.0,848.86 L775.3636363636364,839.42 L806.7272727272727,842.96 L838.0909090909091,824.08 L869.4545454545455,829.98 L900.8181818181818,813.46 L932.1818181818182,819.36 L963.5454545454545,798.12 L994.9090909090909,804.02 L1026.2727272727273,791.04 L1057.6363636363635,795.76 L1089.0,772.16 L1089,876 L744,876 Z" fill="#6c55f2" stroke="none" stroke-width="1" opacity="0.09" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1138" y="595" width="496" height="315" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="1162" y="633" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#17213f" text-anchor="start" >Recent AI Activity</text>
+<text x="1160" y="680" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="700" fill="#7352eb" text-anchor="start" >✦</text>
+<text x="1185" y="680" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Optimized 12 active routes</text>
+<text x="1608" y="680" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7583a0" text-anchor="end" >2 min ago</text>
+<path d="M1160,694 L1610,694" stroke="#dce2f5" stroke-width="1" opacity="1" fill="none"/>
+<text x="1160" y="723" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="700" fill="#7352eb" text-anchor="start" >✦</text>
+<text x="1185" y="723" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Detected delay risk for VE-89214</text>
+<text x="1608" y="723" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7583a0" text-anchor="end" >8 min ago</text>
+<path d="M1160,737 L1610,737" stroke="#dce2f5" stroke-width="1" opacity="1" fill="none"/>
+<text x="1160" y="766" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="700" fill="#7352eb" text-anchor="start" >✦</text>
+<text x="1185" y="766" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Processed 24 shipping documents</text>
+<text x="1608" y="766" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7583a0" text-anchor="end" >14 min ago</text>
+<path d="M1160,780 L1610,780" stroke="#dce2f5" stroke-width="1" opacity="1" fill="none"/>
+<text x="1160" y="809" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="700" fill="#7352eb" text-anchor="start" >✦</text>
+<text x="1185" y="809" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Generated weekly report</text>
+<text x="1608" y="809" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7583a0" text-anchor="end" >20 min ago</text>
+<path d="M1160,823 L1610,823" stroke="#dce2f5" stroke-width="1" opacity="1" fill="none"/>
+<text x="1160" y="852" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="700" fill="#7352eb" text-anchor="start" >✦</text>
+<text x="1185" y="852" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Found a better rate for Istanbul</text>
+<text x="1608" y="852" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="450" fill="#7583a0" text-anchor="end" >26 min ago</text>
+<path d="M1160,866 L1610,866" stroke="#dce2f5" stroke-width="1" opacity="1" fill="none"/>
+</svg>

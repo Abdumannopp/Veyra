@@ -242,6 +242,21 @@ sizning o'z yuklaringiz tarixiga qaraydi. Shuning uchun yo'nalishda kamida
 - **Faoliyat jurnali.** Administrator "Activity log" da kim hisob, parol, sozlama,
   to'lov, mijoz havolasi va zaxira nusxani o'zgartirganini ko'radi.
 
+## Narx takliflari (Quotes & Pricing)
+
+Yon menyuda "Quotes". Yuk hali yo'q paytda mijozga narx berish uchun:
+
+1. Yo'nalish, mashina turi va vaznni yozib "Check price" ni bosasiz. PULSE shu
+   yo'nalishdagi o'z yuklaringiz va kiritgan bozor narxlaringizga qarab tavsiya
+   narx, odatdagi tashuvchi narxi va marjani ko'rsatadi (kamida 3 ta yuk kerak).
+2. Mijoz nomi, narx va amal qilish muddatini kiritib "Save quote" — taklif
+   qoralama sifatida saqlanadi (Q-1, Q-2 ...).
+3. "Print" mijoz uchun chop etiladigan taklifni ochadi (PDF qilib saqlash mumkin).
+   Unda tashuvchi narxi va marja ko'rinmaydi.
+4. "Mark sent" — yuborildi; mijoz rozi bo'lsa "Won → create load" taklifdan yuk
+   yaratadi (narx mijoz narxi bo'lib o'tadi); rad etsa "Lost".
+   Muddati o'tgan taklif o'zi "Expired" bo'lib ko'rinadi.
+
 ## Hali yo'q narsalar
 
 - Chegara navbatini jonli ko'rish (bepul ochiq manba yo'q; hozircha qo'lda).

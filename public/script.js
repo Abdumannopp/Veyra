@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindTeamManagement();
   bindIntegrationForms();
   bindOperationsUi();
+  bindUserMenu();
   await loadConfig();
   await restoreSession();
   fetchDashboardData();
@@ -176,6 +177,18 @@ function applyUserChrome(user) {
   set('topAvatar', initials);
   set('sidebarUserName', user?.name || 'Guest');
   set('sidebarUserRole', user ? [roleLabels[user.role] || user.role, user.tenantName].filter(Boolean).join(' · ') : 'Sign in to continue');
+  set('topUserName', user?.name || 'Guest');
+  set('topUserRole', user ? (user.tenantName || roleLabels[user.role] || user.role) : 'Sign in');
+  const hour = new Date().getHours();
+  const part = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  set('dashboardGreeting', user ? `${part}, ${String(user.name || '').split(' ')[0]}` : 'Dashboard');
+  set('dashboardDate', new Date().toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }));
+  document.body.classList.toggle('signed-in', Boolean(user));
+  const permissions = user?.permissions || [];
+  const allowed = (permission) => permissions.includes('*') || permissions.includes(permission);
+  document.getElementById('navBilling')?.classList.toggle('hidden', !allowed('shipments:finance'));
+  document.getElementById('navSettings')?.classList.toggle('hidden', !allowed('users:read'));
+  document.getElementById('userMenuSettings')?.classList.toggle('hidden', !allowed('users:read'));
   document.querySelectorAll('.prompt-meta').forEach((el) => { el.textContent = user ? initials : 'AC'; });
   document.getElementById('signedOutNote')?.classList.toggle('hidden', Boolean(user));
   if (!user) document.getElementById('navApprovalsBadge')?.classList.add('hidden');
@@ -1388,12 +1401,13 @@ function updateDashboard(data) {
   if (statsGrid) statsGrid.classList.toggle('hidden', !canReadAnalytics || !data?.stats);
   if (chartRow) chartRow.classList.toggle('hidden', !canReadAnalytics || !data?.statuses);
 
-  const statValueEls = document.querySelectorAll('.stat-card .stat-value');
+  const statValueEls = document.querySelectorAll('.view[data-view="dashboard"] .stat-card .stat-value');
+  const statuses = data?.statuses || {};
   const statValues = [
     data?.stats?.totalShipments ?? 0,
-    data?.stats?.activeShipments ?? 0,
-    data?.stats?.completed ?? 0,
-    data?.stats?.availableCarriers ?? 0
+    Number(statuses['In Transit'] || 0) + Number(statuses.Dispatched || 0),
+    data?.stats?.completed ?? Number(statuses.Delivered || 0),
+    Number(statuses.Exception || 0)
   ];
 
   statValueEls.forEach((el, index) => {
@@ -1464,6 +1478,13 @@ function updateDashboard(data) {
       labels.replaceChildren(...data.weeklyVolume
         .filter((entry, index) => index % every === 0 || index === data.weeklyVolume.length - 1)
         .map((entry) => createTextElement('span', '', entry.label)));
+    }
+    // Small trend line on the "Total Shipments" card: new loads per day in the chosen period.
+    const spark = document.getElementById('totalSpark');
+    if (spark) {
+      const values = data.weeklyVolume.map((entry) => Number(entry.total) || 0);
+      const top = Math.max(1, ...values);
+      spark.setAttribute('d', values.map((value, index) => `${index ? 'L' : 'M'}${values.length > 1 ? ((index / (values.length - 1)) * 120).toFixed(1) : 60},${(32 - (value / top) * 28).toFixed(1)}`).join(' '));
     }
     const rangeLabel = document.getElementById('trendRange');
     if (rangeLabel) rangeLabel.textContent = `Last ${data.rangeDays || data.weeklyVolume.length} days`;
@@ -2354,4 +2375,28 @@ async function loadBackupPanel() {
   } catch (error) {
     list.replaceChildren(createTextElement('p', 'muted', `Backups unavailable: ${error.message}`));
   }
+}
+
+/* ---------- the person menu in the top bar ---------- */
+function bindUserMenu() {
+  const button = document.getElementById('userMenuBtn');
+  const menu = document.getElementById('userMenu');
+  if (!button || !menu) return;
+  const setOpen = (open) => {
+    menu.classList.toggle('hidden', !open);
+    button.setAttribute('aria-expanded', String(open));
+  };
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (!document.body.classList.contains('signed-in')) {
+      document.getElementById('loginTrigger')?.click();
+      return;
+    }
+    setOpen(menu.classList.contains('hidden'));
+  });
+  document.addEventListener('click', (event) => { if (!menu.contains(event.target)) setOpen(false); });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setOpen(false); });
+  document.getElementById('userMenuPassword')?.addEventListener('click', () => { setOpen(false); openPasswordModal(); });
+  document.getElementById('userMenuSettings')?.addEventListener('click', () => setOpen(false));
+  document.getElementById('userMenuLogout')?.addEventListener('click', () => { setOpen(false); document.getElementById('logoutTrigger')?.click(); });
 }

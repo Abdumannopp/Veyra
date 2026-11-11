@@ -438,6 +438,32 @@ async function initialize() {
   `);
   await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_border_waits_pair ON border_waits (tenant_id, pair)');
 
+  // Price offers to customers, before a load exists. An accepted quote becomes a load.
+  await run(`
+    CREATE TABLE IF NOT EXISTS quotes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      customer TEXT NOT NULL,
+      customer_phone TEXT,
+      origin TEXT NOT NULL,
+      destination TEXT NOT NULL,
+      equipment TEXT NOT NULL,
+      weight REAL,
+      pickup TEXT,
+      delivery TEXT,
+      price REAL NOT NULL,
+      carrier_cost REAL,
+      valid_until TEXT NOT NULL,
+      notes TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      shipment_id INTEGER REFERENCES shipments(id),
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_quotes_tenant ON quotes (tenant_id, id)');
+
   // Map lookups are cached: a place name is looked up once, a road route once.
   await run(`
     CREATE TABLE IF NOT EXISTS geo_places (
@@ -1977,6 +2003,124 @@ async function getBorderWait(tenantId, countryA, countryB) {
   return row ? { pair: row.pair, hours: Number(row.hours) } : null;
 }
 
+/* ---------------- quotes ---------------- */
+
+const QUOTE_FIELDS = {
+  customer: 'customer', customerPhone: 'customer_phone', origin: 'origin', destination: 'destination', equipment: 'equipment',
+  weight: 'weight', pickup: 'pickup', delivery: 'delivery', price: 'price', carrierCost: 'carrier_cost', validUntil: 'valid_until', notes: 'notes'
+};
+
+// A sent quote whose date has passed shows as expired (nothing is stored for that).
+function mapQuote(row) {
+  const today = new Date().toISOString().slice(0, 10);
+  const expired = ['draft', 'sent'].includes(row.status) && row.valid_until < today;
+  return {
+    id: row.id,
+    number: `Q-${row.id}`,
+    customer: row.customer,
+    customerPhone: row.customer_phone || null,
+    origin: row.origin,
+    destination: row.destination,
+    equipment: row.equipment,
+    weight: row.weight === null ? null : Number(row.weight),
+    pickup: row.pickup || null,
+    delivery: row.delivery || null,
+    price: Number(row.price),
+    carrierCost: row.carrier_cost === null ? null : Number(row.carrier_cost),
+    margin: row.carrier_cost === null ? null : Math.round((row.price - row.carrier_cost) * 100) / 100,
+    validUntil: row.valid_until,
+    notes: row.notes || null,
+    status: expired ? 'expired' : row.status,
+    shipmentId: row.shipment_id ? `SHP-${row.shipment_id}` : null,
+    createdBy: row.createdBy || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+const QUOTE_SELECT = 'SELECT quotes.*, users.name AS createdBy FROM quotes LEFT JOIN users ON users.id = quotes.created_by';
+
+async function createQuote(tenantId, fields, actorId) {
+  assertTenant(tenantId);
+  const columns = Object.keys(QUOTE_FIELDS).filter((key) => fields[key] !== undefined);
+  const result = await run(
+    `INSERT INTO quotes (tenant_id, created_by, ${columns.map((key) => QUOTE_FIELDS[key]).join(', ')}) VALUES (?, ?, ${columns.map(() => '?').join(', ')})`,
+    [tenantId, actorId || null, ...columns.map((key) => fields[key])]
+  );
+  return getQuote(tenantId, result.id);
+}
+
+async function getQuote(tenantId, id) {
+  const row = await get(`${QUOTE_SELECT} WHERE quotes.id = ? AND quotes.tenant_id = ?`, [id, assertTenant(tenantId)]);
+  return row ? mapQuote(row) : null;
+}
+
+async function listQuotes(tenantId, { limit = 200 } = {}) {
+  const rows = await all(`${QUOTE_SELECT} WHERE quotes.tenant_id = ? ORDER BY quotes.id DESC LIMIT ?`, [assertTenant(tenantId), limit]);
+  return rows.map(mapQuote);
+}
+
+// Changes fields and/or status. An accepted quote that became a load, or a declined one, is not edited.
+async function updateQuote(tenantId, id, fields, status) {
+  assertTenant(tenantId);
+  const current = await getQuote(tenantId, id);
+  if (!current) throw httpError(404, 'Quote not found.');
+  const editable = Object.keys(fields).filter((key) => fields[key] !== undefined && QUOTE_FIELDS[key]);
+  if (editable.length && (current.shipmentId || current.status === 'declined')) throw httpError(409, 'This quote is closed and can no longer be edited.');
+  if (status && current.shipmentId) throw httpError(409, 'This quote already became a load.');
+  const sets = editable.map((key) => `${QUOTE_FIELDS[key]} = ?`);
+  const params = editable.map((key) => fields[key]);
+  if (status) {
+    sets.push('status = ?');
+    params.push(status);
+  }
+  if (!sets.length) return current;
+  await run(`UPDATE quotes SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?`, [...params, id, tenantId]);
+  return getQuote(tenantId, id);
+}
+
+// Accepted: the quote becomes a load (status New, customer price = quoted price), in one transaction.
+async function convertQuote(tenantId, id, { pickup, delivery, weight, actorId }) {
+  assertTenant(tenantId);
+  return withTransaction(async (transaction) => {
+    const row = await transaction.get('SELECT * FROM quotes WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+    if (!row) throw httpError(404, 'Quote not found.');
+    if (row.shipment_id) throw httpError(409, `This quote already became SHP-${row.shipment_id}.`);
+    if (row.status === 'declined') throw httpError(409, 'A declined quote cannot become a load.');
+    const result = await transaction.run(
+      `INSERT INTO shipments (customer, origin, destination, pickup, delivery, status, weight, equipment, reference, customer_rate, customer_phone, tenant_id)
+       VALUES (?, ?, ?, ?, ?, 'New', ?, ?, ?, ?, ?, ?)`,
+      [row.customer, row.origin, row.destination, pickup, delivery, weight, row.equipment, `Q-${row.id}`, row.price, row.customer_phone || null, tenantId]
+    );
+    await recordShipmentEvent(result.id, null, 'New', `Created from quote Q-${row.id}`, actorId, transaction.run);
+    await transaction.run("UPDATE quotes SET status = 'accepted', shipment_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [result.id, id]);
+    return result.id;
+  });
+}
+
+// Prices on a lane before any load exists (for a quote): past loads and market prices.
+async function getLanePriceData(tenantId, { origin, destination, equipment }) {
+  assertTenant(tenantId);
+  const history = await all(
+    `SELECT rate, customer_rate AS customerRate, equipment FROM shipments
+     WHERE tenant_id = ? AND status <> 'Cancelled' AND lower(origin) = lower(?) AND lower(destination) = lower(?)
+       AND (rate IS NOT NULL OR customer_rate IS NOT NULL)
+     ORDER BY id DESC LIMIT 200`,
+    [tenantId, origin, destination]
+  );
+  const market = await all(
+    `SELECT equipment, rate, updated_at AS updatedAt FROM market_rates
+     WHERE tenant_id = ? AND lower(origin) = lower(?) AND lower(destination) = lower(?) AND (equipment = ? OR equipment = '')`,
+    [tenantId, origin, destination, equipment || '']
+  );
+  const marketRate = market.find((row) => row.equipment) || market[0] || null;
+  return {
+    shipment: { equipment, rate: null, customer_rate: null },
+    history,
+    marketRate: marketRate ? { rate: Number(marketRate.rate), equipment: marketRate.equipment || null, updatedAt: marketRate.updatedAt } : null
+  };
+}
+
 /* ---------------- map cache ---------------- */
 
 async function getGeoPlace(key) {
@@ -2211,6 +2355,12 @@ module.exports = {
   deleteInboxAttachments,
   setDocumentType,
   listMarketRates,
+  createQuote,
+  getQuote,
+  listQuotes,
+  updateQuote,
+  convertQuote,
+  getLanePriceData,
   listBorderWaits,
   upsertBorderWait,
   deleteBorderWait,

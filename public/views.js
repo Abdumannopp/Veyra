@@ -7,7 +7,7 @@
    fetchDashboardData, loadAdminConsole.
    ========================================================= */
 (function () {
-  const VIEWS = ['dashboard', 'shipments', 'inbox', 'carriers', 'analytics'];
+  const VIEWS = ['dashboard', 'shipments', 'quotes', 'inbox', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
   const STATUS_ORDER = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
   const STATUS_COLORS = {
     New: '#2563ff',
@@ -153,8 +153,8 @@
     const { view, params } = parseHash();
     state.view = view;
     state.params = params;
-    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', inbox: 'Inbox & tasks', carriers: 'Carriers', analytics: 'Analytics' };
-    document.title = `${TITLES[view]} | VEYRA`;
+    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', quotes: 'Quotes', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
+    document.title = `${TITLES[view]} | Veyra`;
 
     document.querySelectorAll('.view[data-view]').forEach((node) => node.classList.toggle('hidden', node.dataset.view !== view));
     document.querySelector('.dashboard-panel')?.classList.toggle('is-wide', view !== 'dashboard');
@@ -183,6 +183,18 @@
     } else if (view === 'analytics') {
       if (search) search.value = '';
       renderAnalytics();
+    } else if (view === 'agents') {
+      if (search) search.value = '';
+      renderAgents();
+    } else if (view === 'quotes') {
+      if (search) search.value = '';
+      renderQuotes();
+    } else if (view === 'billing') {
+      if (search) search.value = '';
+      renderBilling();
+    } else if (view === 'settings') {
+      if (search) search.value = '';
+      renderSettings();
     } else if (search) {
       search.value = '';
     }
@@ -364,7 +376,7 @@
           el('button', { class: 'btn btn-ghost small', type: 'button', disabled: s.page <= 1, onclick: () => go(s.page - 1) }, '← Previous'),
           el('span', { class: 'muted', text: `Page ${s.page} of ${s.pages}` }),
           el('button', { class: 'btn btn-ghost small', type: 'button', disabled: s.page >= s.pages, onclick: () => go(s.page + 1) }, 'Next →')
-        ]) : null
+        ]) : ''
       );
     }
   }
@@ -1237,6 +1249,374 @@
     renderNotifications();
   }
 
+
+
+  /* =========================================================
+     QUOTES & PRICING
+     ========================================================= */
+  const QUOTE_LABELS = { draft: 'Draft', sent: 'Sent', accepted: 'Won', declined: 'Lost', expired: 'Expired' };
+  const QUOTE_TONES = { draft: 'cancelled', sent: 'in-transit', accepted: 'delivered', declined: 'exception', expired: 'pending-approval' };
+  const quoteState = { lane: null, estimate: null, filter: 'open' };
+
+  async function renderQuotes() {
+    const container = document.getElementById('quotesView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!container.children.length) loading(container);
+    let quotes;
+    try {
+      quotes = (await api('/api/quotes')).quotes;
+    } catch (error) {
+      return errorState(container, error.message, renderQuotes);
+    }
+    if (state.view !== 'quotes') return;
+    const canWrite = can('shipments:create');
+    const soon = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+    const open = quotes.filter((q) => ['draft', 'sent'].includes(q.status));
+    const decided = quotes.filter((q) => ['accepted', 'declined', 'expired'].includes(q.status));
+    const won = quotes.filter((q) => q.status === 'accepted');
+    const kpis = el('div', { class: 'stats-grid kpi-grid' }, [
+      kpiCard('Open quotes', String(open.length), `${open.filter((q) => q.status === 'draft').length} not sent yet`, 'doc', 'violet'),
+      kpiCard('Waiting for an answer', money(open.filter((q) => q.status === 'sent').reduce((sum, q) => sum + q.price, 0)), 'Total of sent quotes', 'wallet', 'blue'),
+      kpiCard('Win rate', decided.length ? `${Math.round((won.length / decided.length) * 100)}%` : '—', decided.length ? `${won.length} won of ${decided.length} decided` : 'No answers yet', 'check-circle', 'green'),
+      kpiCard('Expiring soon', String(open.filter((q) => q.validUntil <= soon).length), 'Valid for 2 days or less', 'alert', 'amber')
+    ]);
+    container.replaceChildren(kpis, canWrite ? quoteBuilder() : '', quoteList(quotes, canWrite));
+  }
+
+  function quoteBuilder() {
+    const field = (label, input) => el('label', { class: 'quote-field' }, [el('span', { text: label }), input]);
+    const origin = el('input', { name: 'origin', maxlength: '160', placeholder: 'e.g. Tashkent, UZ', required: true });
+    const destination = el('input', { name: 'destination', maxlength: '160', placeholder: 'e.g. Almaty, KZ', required: true });
+    const equipment = el('select', { name: 'equipment' }, equipmentList().map((item) => el('option', { value: item, text: item })));
+    const weight = el('input', { name: 'weight', type: 'number', min: '0.01', step: '0.01', placeholder: window.VeyraConfig?.weightUnit || 'kg' });
+    const lane = quoteState.lane;
+    if (lane) {
+      origin.value = lane.origin;
+      destination.value = lane.destination;
+      equipment.value = lane.equipment;
+      weight.value = lane.weight || '';
+    }
+    const result = el('div', { class: 'quote-result' });
+    const form = el('form', { class: 'card quote-lane', autocomplete: 'off' }, [
+      field('Origin', origin),
+      el('button', { class: 'icon-btn swap-btn', type: 'button', 'aria-label': 'Swap origin and destination', onclick: () => { [origin.value, destination.value] = [destination.value, origin.value]; } }, '⇄'),
+      field('Destination', destination),
+      field('Equipment', equipment),
+      field(`Weight (${window.VeyraConfig?.weightUnit || 'kg'})`, weight),
+      el('button', { class: 'btn btn-primary', type: 'submit' }, 'Check price')
+    ]);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!origin.value.trim() || !destination.value.trim()) return toast('Enter the origin and the destination.', 'error');
+      quoteState.lane = { origin: origin.value.trim(), destination: destination.value.trim(), equipment: equipment.value, weight: weight.value };
+      result.replaceChildren(el('p', { class: 'muted', text: 'PULSE is checking this lane…' }));
+      try {
+        const query = new URLSearchParams({ origin: quoteState.lane.origin, destination: quoteState.lane.destination, equipment: quoteState.lane.equipment });
+        quoteState.estimate = await api(`/api/quotes/estimate?${query}`);
+        result.replaceChildren(...quoteOffer());
+      } catch (error) {
+        result.replaceChildren(el('p', { class: 'warn-line', text: error.message }));
+      }
+    });
+    if (lane && quoteState.estimate) result.replaceChildren(...quoteOffer());
+    return el('section', { class: 'quote-builder' }, [form, result]);
+  }
+
+  // PULSE's view of the lane, and the form to save an offer at a chosen price.
+  function quoteOffer() {
+    const lane = quoteState.lane;
+    const est = quoteState.estimate;
+    const lines = [];
+    if (est.carrier) lines.push(['Carriers usually charge', `${money(est.carrier.typical)}`, `${money(est.carrier.lowest)} – ${money(est.carrier.highest)} · ${est.carrier.loads} loads`]);
+    if (est.customer) lines.push(['Customers usually pay', money(est.customer.typical), `${est.customer.loads} loads on this lane`]);
+    if (est.market) lines.push(['Your market price', money(est.market.rate), est.market.equipment || 'any trailer']);
+    if (est.typicalMarginShare !== null && est.typicalMarginShare !== undefined) lines.push(['Your usual margin', `${Math.round(est.typicalMarginShare * 100)}%`, 'on this lane']);
+    const suggested = est.suggestedCustomerPrice;
+    const overview = el('div', { class: 'card quote-overview' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Price overview' }), el('small', { text: `${lane.origin} → ${lane.destination} · ${lane.equipment}` })])),
+      suggested
+        ? el('div', { class: 'quote-suggested' }, [el('span', { text: 'Suggested price' }), el('strong', { text: money(suggested) }), el('small', { text: est.suggestionBasis })])
+        : el('p', { class: 'muted', text: 'Not enough history on this lane yet (3 loads needed), and no market price entered. Set the price yourself; it will count from the next loads on.' }),
+      lines.length ? el('dl', { class: 'quote-facts' }, lines.map(([label, value, sub]) => el('div', {}, [el('dt', { text: label }), el('dd', {}, [el('strong', { text: value }), el('small', { text: sub })])]))) : ''
+    ]);
+
+    const input = (name, attrs = {}) => el('input', { name, ...attrs });
+    const price = input('price', { type: 'number', min: '0.01', step: '0.01', required: true, value: suggested ? String(suggested) : '' });
+    const cost = input('carrierCost', { type: 'number', min: '0.01', step: '0.01', value: est.expectedCarrierCost ? String(est.expectedCarrierCost) : '' });
+    const marginLine = el('p', { class: 'dispatch-margin muted' });
+    const updateMargin = () => {
+      const p = Number(price.value);
+      const c = Number(cost.value);
+      marginLine.classList.remove('negative');
+      if (!p || !c) { marginLine.textContent = 'Enter a price and the expected carrier cost to see the margin.'; return; }
+      marginLine.textContent = `Margin: ${money(p - c, 2)} (${Math.round(((p - c) / p) * 100)}%)`;
+      marginLine.classList.toggle('negative', p < c);
+    };
+    const validUntil = input('validUntil', { type: 'date', value: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10) });
+    const field = (label, control, wide) => el('label', { class: wide ? 'span-2' : '' }, [label, control]);
+    const message = el('p', { class: 'shipment-form-message', role: 'status' });
+    const form = el('form', { class: 'card quote-form tracking-form', autocomplete: 'off' }, [
+      el('div', { class: 'mini-head span-2' }, el('span', {}, [el('strong', { text: 'New quote' }), el('small', { text: 'Saved as a draft. Print it or send it, then mark the answer.' })])),
+      field('Customer', input('customer', { maxlength: '120', required: true })),
+      field('Customer phone', input('customerPhone', { type: 'tel', maxlength: '40', placeholder: 'Optional' })),
+      field(`Price to the customer (${window.VeyraConfig?.currency || 'USD'})`, price),
+      field('Expected carrier cost', cost),
+      field('Pickup', input('pickup', { type: 'date' })),
+      field('Delivery', input('delivery', { type: 'date' })),
+      field('Valid until', validUntil),
+      field('Notes for the customer', input('notes', { maxlength: '1000', placeholder: 'Optional, e.g. loading time, customs' })),
+      el('div', { class: 'span-2' }, marginLine),
+      el('div', { class: 'tracking-form-footer span-2' }, [message, el('button', { class: 'btn btn-primary', type: 'submit' }, 'Save quote')])
+    ]);
+    form.addEventListener('input', updateMargin);
+    updateMargin();
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const f = form.elements;
+      const optional = (value) => (value.trim() ? value.trim() : undefined);
+      message.textContent = 'Saving…';
+      try {
+        const { quote } = await api('/api/quotes', {
+          method: 'POST',
+          body: JSON.stringify({
+            customer: f.customer.value.trim(), customerPhone: optional(f.customerPhone.value), origin: lane.origin, destination: lane.destination,
+            equipment: lane.equipment, weight: lane.weight ? Number(lane.weight) : undefined, price: Number(f.price.value),
+            carrierCost: f.carrierCost.value ? Number(f.carrierCost.value) : undefined, pickup: optional(f.pickup.value), delivery: optional(f.delivery.value),
+            validUntil: f.validUntil.value, notes: optional(f.notes.value)
+          })
+        });
+        toast(`${quote.number} saved.`);
+        quoteState.lane = null;
+        quoteState.estimate = null;
+        renderQuotes();
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    });
+    return [overview, form];
+  }
+
+  function quoteList(quotes, canWrite) {
+    const filters = { open: ['draft', 'sent'], won: ['accepted'], closed: ['declined', 'expired'], all: null };
+    const shown = quotes.filter((q) => !filters[quoteState.filter] || filters[quoteState.filter].includes(q.status));
+    const tabs = el('div', { class: 'segmented quote-tabs', role: 'group', 'aria-label': 'Show quotes' }, [['open', 'Open'], ['won', 'Won'], ['closed', 'Lost & expired'], ['all', 'All']].map(([key, label]) => el('button', {
+      type: 'button', class: quoteState.filter === key ? 'active' : '', 'aria-pressed': String(quoteState.filter === key),
+      onclick: () => { quoteState.filter = key; renderQuotes(); }
+    }, label)));
+    const action = (label, handler, primary) => el('button', { class: `btn ${primary ? 'btn-primary' : 'btn-ghost'} small`, type: 'button', onclick: handler }, label);
+    const rows = shown.map((q) => {
+      const actions = [el('a', { class: 'btn btn-ghost small', href: `/api/quotes/${q.id}/print`, target: '_blank', rel: 'noopener' }, 'Print')];
+      if (canWrite && !q.shipmentId) {
+        if (q.status === 'draft') actions.push(action('Mark sent', () => setQuoteStatus(q, 'sent')));
+        if (['draft', 'sent', 'expired'].includes(q.status)) {
+          actions.push(action('Won → create load', () => convertQuote(q), true));
+          actions.push(action('Lost', () => setQuoteStatus(q, 'declined')));
+        }
+      }
+      if (q.shipmentId) actions.push(action(`Open ${q.shipmentId}`, () => openShipmentDetails(q.shipmentId)));
+      return [
+        el('span', {}, [el('strong', { class: 'id-link', text: q.number }), el('small', { class: 'cell-sub', text: (q.createdAt || '').slice(0, 10) })]),
+        el('span', {}, [q.customer, el('small', { class: 'cell-sub', text: q.customerPhone || '' })]),
+        el('span', {}, [`${q.origin} → ${q.destination}`, el('small', { class: 'cell-sub', text: [q.equipment, q.weight ? `${q.weight} ${window.VeyraConfig?.weightUnit || 'kg'}` : ''].filter(Boolean).join(' · ') })]),
+        el('span', {}, [el('strong', { text: money(q.price) }), el('small', { class: 'cell-sub', text: q.margin === null ? '' : `margin ${money(q.margin)}` })]),
+        el('span', { class: `tag ${QUOTE_TONES[q.status] || ''}`, text: QUOTE_LABELS[q.status] || q.status }),
+        q.validUntil,
+        el('span', { class: 'quote-actions' }, actions)
+      ];
+    });
+    return el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, [el('span', {}, [el('strong', { text: `Quotes (${shown.length})` }), el('small', { text: 'Newest first' })]), tabs]),
+      miniTable(['Quote', 'Customer', 'Lane', 'Price', 'Status', 'Valid until', ''], rows, quoteState.filter === 'open' ? 'No open quotes. Check a lane above to make one.' : 'Nothing here yet.')
+    ]);
+  }
+
+  async function setQuoteStatus(quote, status) {
+    try {
+      await api(`/api/quotes/${quote.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+      toast(`${quote.number}: ${QUOTE_LABELS[status].toLowerCase()}.`);
+      renderQuotes();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  // The customer said yes. Missing dates or weight are asked for, then the load is created.
+  async function convertQuote(quote) {
+    const body = {};
+    const askDate = (label, fallback) => window.prompt(`${label} (YYYY-MM-DD)`, fallback || '');
+    if (!quote.pickup) body.pickup = askDate('Pickup date', new Date().toISOString().slice(0, 10));
+    if (!quote.pickup && !body.pickup) return;
+    if (!quote.delivery) body.delivery = askDate('Delivery date', body.pickup || quote.pickup);
+    if (!quote.delivery && !body.delivery) return;
+    if (!quote.weight) {
+      body.weight = window.prompt(`Weight (${window.VeyraConfig?.weightUnit || 'kg'})`, '');
+      if (!body.weight) return;
+    }
+    try {
+      const result = await api(`/api/quotes/${quote.id}/convert`, { method: 'POST', body: JSON.stringify(body) });
+      toast(`${quote.number} won: ${result.shipmentId} created.`);
+      await renderQuotes();
+      openShipmentDetails(result.shipmentId);
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  /* =========================================================
+     AI AGENTS: what each agent does, whether it is on, what it did
+     ========================================================= */
+  const AGENTS = [
+    { key: 'FLOW', name: 'FLOW', role: 'Order reader', text: 'Reads an order from an email or a pasted message and fills in the load form.', needs: 'ai', icon: 'doc', tone: 'blue', action: ['Read an order', () => window.openShipmentModal?.({})] },
+    { key: 'SCOUT', name: 'SCOUT', role: 'Carrier finder', text: 'Ranks your carriers for a load by trailer, past loads on the lane and reliability.', needs: null, icon: 'truck', tone: 'violet', action: ['Loads to book', () => navigate('shipments', { status: 'Sourcing' })] },
+    { key: 'RELAY', name: 'RELAY', role: 'Messages', text: 'Drafts SMS / WhatsApp messages to drivers, carriers and customers in Uzbek, Russian or English.', needs: 'messaging', icon: 'chat', tone: 'sky', action: ['Messages to approve', () => navigate('inbox')] },
+    { key: 'VAULT', name: 'VAULT', role: 'Documents', text: 'Reads CMR and proof-of-delivery files and compares them with the load.', needs: 'ai', icon: 'doc', tone: 'green', action: null },
+    { key: 'NEXUS', name: 'NEXUS', role: 'Coordinator', text: 'Turns events into tasks for a person. It never sends, books or changes anything by itself.', needs: 'nexus', icon: 'bolt', tone: 'violet', action: ['Inbox & tasks', () => navigate('inbox')] },
+    { key: 'ROUTE', name: 'ROUTE', role: 'Schedule', text: 'Checks if the promised dates are realistic and finds trucks that unload near the pickup.', needs: null, icon: 'target', tone: 'blue', action: null },
+    { key: 'PULSE', name: 'PULSE', role: 'Prices', text: 'Compares a price with what the lane usually costs and with your market prices.', needs: null, icon: 'chart', tone: 'amber', action: null },
+    { key: 'SENTINEL', name: 'SENTINEL', role: 'Risk watch', text: 'Watches every open load: late pickup, late delivery, silent trucks, failed messages.', needs: null, icon: 'alert', tone: 'red', action: ['See risks', () => navigate('inbox')] }
+  ];
+
+  async function renderAgents() {
+    const container = document.getElementById('agentsView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!container.children.length) loading(container);
+    const [usage, tasks, risks, messaging] = await Promise.all([
+      can('analytics:read') ? api('/api/analytics?days=30').then((data) => data.agents || []).catch(() => []) : Promise.resolve([]),
+      api('/api/tasks').then((data) => data.tasks || []).catch(() => []),
+      api('/api/agents/sentinel').then((data) => data.risks || []).catch(() => []),
+      api('/api/messaging/status').catch(() => ({ channels: [] }))
+    ]);
+    if (state.view !== 'agents') return;
+    const config = window.VeyraConfig || {};
+    const isOn = (needs) => {
+      if (needs === 'ai') return { on: Boolean(config.ai?.enabled), off: 'Off · needs an AI key on the server' };
+      if (needs === 'messaging') return { on: (messaging.channels || []).length > 0, off: 'Drafts only · connect Twilio to send' };
+      if (needs === 'nexus') return { on: config.nexus?.enabled !== false, off: 'Switched off on the server' };
+      return { on: true, off: '' };
+    };
+    const calls = (key) => usage.filter((row) => String(row.agent).toUpperCase() === key).reduce((sum, row) => sum + row.calls, 0);
+    const active = AGENTS.filter((agent) => isOn(agent.needs).on).length;
+    const totalCalls = usage.reduce((sum, row) => sum + row.calls, 0);
+
+    const kpis = el('div', { class: 'stats-grid kpi-grid' }, [
+      kpiCard('Agents working', `${active} of ${AGENTS.length}`, 'Rule-based agents need no key', 'sparkle', 'violet'),
+      kpiCard('AI calls (30 days)', totalCalls.toLocaleString('en-US'), config.ai?.enabled ? 'Counted per company' : 'AI is off', 'bolt', 'blue'),
+      kpiCard('Tasks waiting', String(tasks.length), 'Prepared for a person to approve', 'check-square', 'green'),
+      kpiCard('Risks now', String(risks.length), risks.length ? 'Open loads that need a look' : 'Nothing at risk', 'alert', risks.length ? 'red' : 'green')
+    ]);
+
+    const cards = el('div', { class: 'agent-grid' }, AGENTS.map((agent) => {
+      const status = isOn(agent.needs);
+      const used = calls(agent.key);
+      return el('article', { class: `card agent-card${status.on ? '' : ' is-off'}` }, [
+        el('header', {}, [
+          el('span', { class: `stat-icon ${agent.tone}` }, icon(agent.icon, '')),
+          el('span', { class: 'agent-title' }, [el('strong', { text: agent.name }), el('small', { text: agent.role })]),
+          el('span', { class: `agent-state ${status.on ? 'on' : 'off'}`, text: status.on ? 'Active' : 'Off' })
+        ]),
+        el('p', { text: agent.text }),
+        status.on ? null : el('p', { class: 'warn-line', text: status.off }),
+        el('footer', {}, [
+          el('small', { class: 'muted', text: agent.needs === 'ai' ? `${used} AI call${used === 1 ? '' : 's'} in 30 days` : (agent.needs === null ? 'Built in · no key needed' : '') }),
+          agent.action ? el('button', { class: 'btn btn-ghost small', type: 'button', onclick: agent.action[1] }, agent.action[0]) : null
+        ])
+      ]);
+    }));
+
+    const riskCard = el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'SENTINEL · loads at risk' }), el('small', { text: 'Checked just now' })])),
+      risks.length
+        ? el('ul', { class: 'risk-list' }, risks.slice(0, 6).map((risk) => el('li', { class: `risk-${risk.severity}` }, [
+          el('span', { class: 'risk-level', text: { high: 'Urgent', medium: 'Soon', low: 'Note' }[risk.severity] || risk.severity }),
+          el('div', {}, [
+            el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(risk.shipmentId) }, risk.title),
+            el('small', { class: 'muted', text: risk.advice })
+          ])
+        ])))
+        : el('p', { class: 'muted', text: 'No open load is at risk right now.' })
+    ]);
+    const taskCard = el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'NEXUS · prepared for you' }), el('small', { text: 'Waiting for a person' })])),
+      tasks.length
+        ? el('ul', { class: 'activity-list' }, tasks.slice(0, 6).map((task) => el('li', {}, [
+          el('span', { class: 'activity-dot' }),
+          el('span', {}, [el('strong', { text: task.title }), el('small', { class: 'muted', text: typeof formatTimestamp === 'function' ? formatTimestamp(task.createdAt) : task.createdAt })])
+        ])))
+        : el('p', { class: 'muted', text: 'Nothing is waiting. New orders, bookings and late trucks will appear here.' }),
+      el('button', { class: 'btn btn-ghost small', type: 'button', onclick: () => navigate('inbox') }, 'Open Inbox & tasks')
+    ]);
+    container.replaceChildren(kpis, cards, el('div', { class: 'analytics-grid two' }, [riskCard, taskCard]));
+  }
+
+  /* =========================================================
+     BILLING: open money from delivered loads
+     ========================================================= */
+  async function renderBilling() {
+    const container = document.getElementById('billingView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!can('shipments:finance')) return gate(container, 'denied');
+    if (!container.children.length) loading(container);
+    let finance;
+    try {
+      finance = await api('/api/finance/summary');
+    } catch (error) {
+      return errorState(container, error.message, renderBilling);
+    }
+    if (state.view !== 'billing') return;
+    const kpis = el('div', { class: 'stats-grid kpi-grid' }, [
+      kpiCard('Customers owe', money(finance.receivable), `${finance.receivableLoads} delivered load${finance.receivableLoads === 1 ? '' : 's'}`, 'wallet', 'violet'),
+      kpiCard('Not invoiced yet', String(finance.notInvoiced), 'Delivered, invoice not sent', 'doc', finance.notInvoiced ? 'amber' : 'green'),
+      kpiCard('You owe carriers', money(finance.payable), `${finance.payableLoads} load${finance.payableLoads === 1 ? '' : 's'}`, 'truck', 'blue'),
+      kpiCard('Balance', money(finance.receivable - finance.payable), 'Coming in minus going out', 'chart', finance.receivable >= finance.payable ? 'green' : 'red')
+    ]);
+    const rows = finance.open.map((row) => {
+      const label = row.customerPaidAt ? 'Paid' : (row.invoicedAt ? 'Invoiced' : 'Not invoiced');
+      const tone = row.customerPaidAt ? 'delivered' : (row.invoicedAt ? 'in-transit' : (row.daysSinceDelivery > 14 ? 'exception' : 'pending-approval'));
+      return [
+        el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(row.id) }, row.id),
+        el('span', {}, [row.customer, el('small', { class: 'cell-sub', text: row.invoiceNumber ? `Invoice ${row.invoiceNumber}` : '' })]),
+        row.customerPaidAt || row.customerRate === null ? '—' : money(row.customerRate),
+        el('span', { class: `tag ${tone}`, text: label }),
+        row.carrierPaidAt || row.rate === null ? '—' : el('span', {}, [money(row.rate), el('small', { class: 'cell-sub', text: row.carrierName || '' })]),
+        row.daysSinceDelivery === null ? '—' : `${row.daysSinceDelivery} day${row.daysSinceDelivery === 1 ? '' : 's'} ago`
+      ];
+    });
+    const table = el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Open invoices and payments' }), el('small', { text: 'Oldest delivery first. Open a load to mark it invoiced or paid, or to print its invoice.' })])),
+      miniTable(['Load', 'Customer', 'Customer owes', 'Invoice', 'Carrier is owed', 'Delivered'], rows, 'Nothing is open: every delivered load is paid on both sides.')
+    ]);
+    container.replaceChildren(kpis, table);
+  }
+
+  /* =========================================================
+     TEAM & SETTINGS: the operations console has its own page
+     ========================================================= */
+  function renderSettings() {
+    const panel = document.getElementById('adminPanel');
+    const view = document.querySelector('.view[data-view="settings"]');
+    if (!view) return;
+    let note = view.querySelector('.settings-gate');
+    if (!note) {
+      note = el('div', { class: 'settings-gate' });
+      view.append(note);
+    }
+    if (!currentUser()) {
+      panel?.classList.add('hidden');
+      gate(note, 'signin');
+      return;
+    }
+    if (!can('users:read')) {
+      panel?.classList.add('hidden');
+      gate(note, 'denied');
+      return;
+    }
+    note.replaceChildren();
+    if (typeof loadAdminConsole === 'function') loadAdminConsole();
+  }
+
   /* =========================================================
      SHARED
      ========================================================= */
@@ -1247,6 +1627,9 @@
     if (state.view === 'carriers') await renderCarriers();
     if (state.view === 'analytics') await renderAnalytics();
     if (state.view === 'inbox') await renderInbox();
+    if (state.view === 'agents') await renderAgents();
+    if (state.view === 'quotes') await renderQuotes();
+    if (state.view === 'billing') await renderBilling();
     loadNotifications();
   }
 
