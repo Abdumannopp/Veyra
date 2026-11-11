@@ -331,7 +331,13 @@ async function initialize() {
     ['imap_config', 'TEXT'],
     ['imap_state', 'TEXT'],
     // Which automatic NEXUS jobs this company wants (JSON; anything missing counts as on).
-    ['automation_settings', 'TEXT']
+    ['automation_settings', 'TEXT'],
+    // Subscription (see lib/plans.js). Companies that existed before plans keep everything: Enterprise, active.
+    ['plan', "TEXT NOT NULL DEFAULT 'enterprise'"],
+    ['plan_status', "TEXT NOT NULL DEFAULT 'active'"],
+    ['trial_ends_at', 'TEXT'],
+    ['user_limit', 'INTEGER'],
+    ['shipment_limit', 'INTEGER']
   ]);
 
   // Emails (and other messages) that arrived for a company, waiting to become loads.
@@ -630,7 +636,8 @@ async function getTenant(tenantId) {
   const row = await get(
     `SELECT id, name, gps_token_hash AS gpsTokenHash, inbox_token_hash AS inboxTokenHash,
        inbox_allowed_senders AS inboxAllowedSenders, messaging_config AS messagingConfig,
-       imap_config AS imapConfig, imap_state AS imapState, automation_settings AS automationSettingsJson, created_at AS createdAt
+       imap_config AS imapConfig, imap_state AS imapState, automation_settings AS automationSettingsJson, created_at AS createdAt,
+       plan, plan_status AS planStatus, trial_ends_at AS trialEndsAt, user_limit AS userLimit, shipment_limit AS shipmentLimit
      FROM tenants WHERE id = ?`,
     [assertTenant(tenantId)]
   );
@@ -665,15 +672,18 @@ async function getTenant(tenantId) {
 async function listTenants() {
   const rows = await all(`
     SELECT tenants.id, tenants.name, tenants.created_at AS createdAt,
+      tenants.plan, tenants.plan_status AS planStatus, tenants.trial_ends_at AS trialEndsAt,
+      tenants.user_limit AS userLimit, tenants.shipment_limit AS shipmentLimit,
       (SELECT COUNT(*) FROM users WHERE users.tenant_id = tenants.id) AS users,
-      (SELECT COUNT(*) FROM shipments WHERE shipments.tenant_id = tenants.id) AS shipments
+      (SELECT COUNT(*) FROM shipments WHERE shipments.tenant_id = tenants.id) AS shipments,
+      (SELECT COUNT(*) FROM shipments WHERE shipments.tenant_id = tenants.id AND shipments.created_at >= strftime('%Y-%m-01 00:00:00', 'now')) AS shipmentsThisMonth
     FROM tenants ORDER BY tenants.id
   `);
-  return rows.map((row) => ({ ...row, users: Number(row.users) || 0, shipments: Number(row.shipments) || 0 }));
+  return rows.map((row) => ({ ...row, users: Number(row.users) || 0, shipments: Number(row.shipments) || 0, shipmentsThisMonth: Number(row.shipmentsThisMonth) || 0 }));
 }
 
 // A new customer company and its first administrator, created together or not at all.
-async function createTenantWithAdmin({ name, adminName, adminEmail, passwordHash }) {
+async function createTenantWithAdmin({ name, adminName, adminEmail, passwordHash, plan = 'growth', trialDays = 14 }) {
   return withTransaction(async (transaction) => {
     if (await transaction.get('SELECT id FROM users WHERE email = ?', [adminEmail])) {
       throw httpError(409, 'A user with this email already exists.');
@@ -681,12 +691,16 @@ async function createTenantWithAdmin({ name, adminName, adminEmail, passwordHash
     if (await transaction.get('SELECT id FROM tenants WHERE lower(name) = lower(?)', [name])) {
       throw httpError(409, 'A company with this name already exists.');
     }
-    const tenant = await transaction.run('INSERT INTO tenants (name) VALUES (?)', [name]);
+    // A new company starts on a free trial of the chosen plan.
+    const tenant = await transaction.run(
+      "INSERT INTO tenants (name, plan, plan_status, trial_ends_at) VALUES (?, ?, 'trial', datetime('now', ?))",
+      [name, plan, `+${Number(trialDays)} days`]
+    );
     const user = await transaction.run(
       "INSERT INTO users (name, email, password, role, tenant_id) VALUES (?, ?, ?, 'admin', ?)",
       [adminName, adminEmail, passwordHash, tenant.id]
     );
-    return { tenant: { id: tenant.id, name }, admin: { id: user.id, name: adminName, email: adminEmail, role: 'admin' } };
+    return { tenant: { id: tenant.id, name, plan, planStatus: 'trial' }, admin: { id: user.id, name: adminName, email: adminEmail, role: 'admin' } };
   });
 }
 
@@ -2563,6 +2577,36 @@ async function getWorkflowStats(tenantId) {
   return { runs30: Number(row.runs || 0), failed30: Number(row.failed || 0) };
 }
 
+/* ---------- subscription plan ---------- */
+// Loads created since the first day of this calendar month (UTC): what a plan's monthly limit counts.
+async function countShipmentsThisMonth(tenantId) {
+  const row = await get(
+    "SELECT COUNT(*) AS total FROM shipments WHERE tenant_id = ? AND created_at >= strftime('%Y-%m-01 00:00:00', 'now')",
+    [assertTenant(tenantId)]
+  );
+  return Number(row?.total) || 0;
+}
+
+// People who can sign in: disabled accounts do not take a seat.
+async function countActiveUsers(tenantId) {
+  const row = await get('SELECT COUNT(*) AS total FROM users WHERE tenant_id = ? AND disabled_at IS NULL', [assertTenant(tenantId)]);
+  return Number(row?.total) || 0;
+}
+
+async function updateTenantPlan(tenantId, change) {
+  assertTenant(tenantId);
+  const sets = [];
+  const params = [];
+  if (change.plan) { sets.push('plan = ?'); params.push(change.plan); }
+  if (change.status) { sets.push('plan_status = ?'); params.push(change.status); }
+  if (change.trialDays) { sets.push("trial_ends_at = datetime('now', ?)"); params.push(`+${change.trialDays} days`); }
+  if (change.userLimit !== undefined) { sets.push('user_limit = ?'); params.push(change.userLimit); }
+  if (change.shipmentLimit !== undefined) { sets.push('shipment_limit = ?'); params.push(change.shipmentLimit); }
+  const result = await run(`UPDATE tenants SET ${sets.join(', ')} WHERE id = ?`, [...params, tenantId]);
+  if (!result.changes) throw httpError(404, 'Company not found.');
+  return getTenant(tenantId);
+}
+
 module.exports = {
   db,
   DB_PATH,
@@ -2631,6 +2675,9 @@ module.exports = {
   listSentinelLoads,
   listTrackingOverview,
   countStatusReached,
+  countShipmentsThisMonth,
+  countActiveUsers,
+  updateTenantPlan,
   listWorkflows,
   getWorkflow,
   listActiveWorkflows,

@@ -860,3 +860,29 @@ select option { background: var(--popover); color: var(--text); }
 .studio-list, .studio-canvas, .studio-panel, .studio-template { padding: 18px; }
 .studio-panel select, .studio-panel input[type="text"] { padding: 9px 12px; border-radius: 12px; border: 1px solid var(--hairline); background: var(--fill); color: inherit; font: inherit; font-size: 13.5px; }
 .studio-panel select:focus, .studio-panel input[type="text"]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91, 91, 247, .2); }
+
+/* ---------- Subscription plan (Billing) ---------- */
+.plan-card { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(240px, 1.1fr) minmax(240px, 1.2fr); gap: 24px; padding: 22px 24px; margin-bottom: 18px; align-items: start; }
+.plan-card.locked { border-color: rgba(229, 72, 77, .45); }
+.plan-label { font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.plan-name { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.plan-name strong { font-size: 28px; letter-spacing: -.02em; }
+.plan-card-main p { margin: 6px 0 0; }
+.plan-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.plan-actions a { text-decoration: none; }
+.plan-usage { display: grid; gap: 16px; }
+.plan-meter-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; margin-bottom: 6px; }
+.plan-meter-bar { height: 8px; border-radius: 999px; background: var(--fill-strong); overflow: hidden; }
+.plan-meter-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #5b5bf7, #38bdf8); }
+.plan-meter.full .plan-meter-bar span { background: linear-gradient(90deg, #f59e0b, #e5484d); }
+.plan-caps { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 13.5px; }
+.plan-caps li { display: flex; gap: 10px; align-items: flex-start; }
+.plan-caps li.off { color: var(--muted); }
+.plan-cap-dot { flex: none; width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 12px; font-weight: 700; background: rgba(52, 199, 89, .16); color: #1f9d4c; }
+.plan-caps li.off .plan-cap-dot { background: var(--fill-strong); color: var(--muted); }
+.company-plan { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+.company-plan select { padding: 6px 10px; border-radius: 10px; border: 1px solid var(--hairline); background: var(--fill); color: inherit; font: inherit; font-size: 12.5px; }
+@media (max-width: 1180px) {
+  .plan-card { grid-template-columns: 1fr; }
+  .company-plan { justify-content: flex-start; }
+}

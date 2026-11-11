@@ -2187,9 +2187,9 @@
     if (!currentUser()) return gate(container, 'signin');
     if (!can('shipments:finance')) return gate(container, 'denied');
     if (!container.children.length) loading(container);
-    let finance;
+    let finance; let billing = null;
     try {
-      finance = await api('/api/finance/summary');
+      [finance, billing] = await Promise.all([api('/api/finance/summary'), api('/api/billing/plan').catch(() => null)]);
     } catch (error) {
       return errorState(container, error.message, renderBilling);
     }
@@ -2216,7 +2216,45 @@
       el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Open invoices and payments' }), el('small', { text: 'Oldest delivery first. Open a load to mark it invoiced or paid, or to print its invoice.' })])),
       miniTable(['Load', 'Customer', 'Customer owes', 'Invoice', 'Carrier is owed', 'Delivered'], rows, 'Nothing is open: every delivered load is paid on both sides.')
     ]);
-    container.replaceChildren(kpis, table);
+    container.replaceChildren(...[billing ? planCard(billing) : null, kpis, table].filter(Boolean));
+  }
+
+  // The company's Veyra subscription: plan, trial, usage against limits, and what the plan includes.
+  function planCard(billing) {
+    const plan = billing.plan;
+    const statusText = plan.locked
+      ? (plan.status === 'trial' ? 'Trial ended' : plan.status === 'past_due' ? 'Payment overdue' : 'Cancelled')
+      : plan.status === 'trial' ? `Free trial · ${plan.trialDaysLeft} day${plan.trialDaysLeft === 1 ? '' : 's'} left` : 'Active';
+    const tone = plan.locked ? 'exception' : plan.status === 'trial' ? (plan.trialDaysLeft <= 3 ? 'pending-approval' : 'in-transit') : 'delivered';
+    const meter = (label, used, limit) => {
+      const share = Math.min(100, Math.round((used / Math.max(1, limit)) * 100));
+      return el('div', { class: `plan-meter${share >= 90 ? ' full' : ''}` }, [
+        el('div', { class: 'plan-meter-head' }, [el('span', { text: label }), el('strong', { text: `${used.toLocaleString('en-US')} / ${limit.toLocaleString('en-US')}` })]),
+        el('div', { class: 'plan-meter-bar', role: 'progressbar', 'aria-label': label, 'aria-valuemin': '0', 'aria-valuemax': String(limit), 'aria-valuenow': String(used) }, el('span', { style: `width:${share}%` }))
+      ]);
+    };
+    const contact = billing.salesEmail ? `mailto:${billing.salesEmail}?subject=${encodeURIComponent(`Veyra plan change (${plan.name})`)}` : null;
+    return el('div', { class: `card plan-card${plan.locked ? ' locked' : ''}` }, [
+      el('div', { class: 'plan-card-main' }, [
+        el('span', { class: 'plan-label', text: 'Your plan' }),
+        el('div', { class: 'plan-name' }, [el('strong', { text: plan.name }), el('span', { class: `tag ${tone}`, text: statusText })]),
+        el('p', { class: 'muted', text: `$${plan.monthly.toLocaleString('en-US')}${plan.priceFrom ? '+' : ''} / month` }),
+        plan.locked ? el('p', { class: 'warn-line', text: 'Your records stay readable, but new loads and people cannot be added until the plan is active again.' }) : null,
+        el('div', { class: 'plan-actions' }, [
+          el('a', { class: 'btn btn-primary small', href: '/pricing', target: '_blank', rel: 'noopener' }, 'Compare plans'),
+          contact ? el('a', { class: 'btn btn-ghost small', href: contact }, 'Change plan') : null
+        ])
+      ]),
+      el('div', { class: 'plan-usage' }, [
+        meter('Users', billing.usage.users, plan.users),
+        meter('Shipments this month', billing.usage.shipmentsThisMonth, plan.shipments)
+      ]),
+      el('ul', { class: 'plan-caps' }, Object.entries(plan.capabilities).map(([, cap]) => el('li', { class: cap.on ? 'on' : 'off' }, [
+        el('span', { class: 'plan-cap-dot', 'aria-hidden': 'true', text: cap.on ? '✓' : '–' }),
+        el('span', { text: cap.label }),
+        el('span', { class: 'visually-hidden', text: cap.on ? ' (included)' : ' (not in this plan)' })
+      ])))
+    ]);
   }
 
   /* =========================================================

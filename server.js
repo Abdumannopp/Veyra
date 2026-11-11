@@ -77,6 +77,9 @@ const {
   getPulseData,
   listSentinelLoads,
   listTrackingOverview,
+  countShipmentsThisMonth,
+  countActiveUsers,
+  updateTenantPlan,
   listWorkflows,
   getWorkflow,
   createWorkflow,
@@ -142,6 +145,7 @@ const routeAgent = require('./agents/route');
 const pulseAgent = require('./agents/pulse');
 const sentinelAgent = require('./agents/sentinel');
 const studio = require('./agents/studio');
+const plans = require('./lib/plans');
 const nexus = require('./agents/nexus');
 const { parseInbound, senderAllowed, mentionedShipmentIds, guessDocumentType, stripHtml } = require('./lib/inbound-email');
 const messaging = require('./integrations/messaging');
@@ -175,6 +179,8 @@ const isProduction = process.env.NODE_ENV !== 'development';
 const PORT = process.env.PORT || 3000;
 // Development mode has demo accounts with published passwords, so by default it only listens on this machine.
 const HOST = process.env.HOST || (isProduction ? '0.0.0.0' : '127.0.0.1');
+// Where "Start free trial" and "Contact sales" on the pricing page send people.
+const SALES_EMAIL = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(String(process.env.SALES_EMAIL || '')) ? process.env.SALES_EMAIL : null;
 const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? null : 'veyra-dev-secret');
 
 // Region settings: one product, configured per deployment (kg or lb, local currency).
@@ -718,6 +724,24 @@ function sendError(res, error, fallbackMessage, logLabel) {
   return res.status(500).json({ success: false, message: fallbackMessage });
 }
 
+/* ---------- subscription plan checks (lib/plans.js) ---------- */
+const planOf = async (tenantId) => plans.resolvePlan(await getTenant(tenantId));
+async function requireCapability(tenantId, capability) {
+  plans.assertCapability(await planOf(tenantId), capability);
+}
+// Express middleware form, for routes where the whole action is a plan feature.
+const needsPlan = (capability) => async (req, res, next) => {
+  try {
+    await requireCapability(req.user.tenantId, capability);
+    return next();
+  } catch (error) {
+    return sendError(res, error, 'Plan check failed.', 'plan');
+  }
+};
+async function requireShipmentRoom(tenantId) {
+  plans.assertCanAddShipment(await planOf(tenantId), await countShipmentsThisMonth(tenantId));
+}
+
 /* =========================================================
    PUBLIC
    ========================================================= */
@@ -730,6 +754,11 @@ app.get('/api/health', (req, res) => {
 });
 
 // Public settings the UI needs before sign-in (units, currency, whether sign-up is possible, features on).
+// The plans on the public pricing page. Prices are in US dollars.
+app.get('/api/plans', (req, res) => {
+  res.json({ success: true, currency: 'USD', trialDays: plans.TRIAL_DAYS, salesEmail: SALES_EMAIL, plans: plans.publicPlans() });
+});
+
 app.get('/api/config', (req, res) => {
   res.json({
     weightUnit: WEIGHT_UNIT,
@@ -1016,6 +1045,7 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       return res.status(400).json({ success: false, message: 'Delivery date must be on or after pickup date.' });
     }
 
+    await requireShipmentRoom(req.user.tenantId);
     const shipment = await createShipment({
       customer: customer.trim(),
       origin: origin.trim(),
@@ -1053,11 +1083,7 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       documentsAttached
     });
   } catch (error) {
-    console.error('[create shipment] failed:', error.message);
-    return res.status(500).json({
-      success: false,
-      message: 'Shipment creation failed'
-    });
+    return sendError(res, error, 'Shipment creation failed', 'create shipment');
   }
 });
 
@@ -1370,7 +1396,7 @@ app.get('/api/automation/studio', authMiddleware, requirePermission('shipments:r
   }
 });
 
-app.post('/api/automation/workflows', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+app.post('/api/automation/workflows', authMiddleware, requirePermission('settings:write'), needsPlan('workflows'), async (req, res) => {
   try {
     const fields = studio.validateWorkflow(req.body);
     const workflow = await createWorkflow(req.user.tenantId, fields, req.user.id, studio.LIMITS.perCompany);
@@ -1381,7 +1407,7 @@ app.post('/api/automation/workflows', authMiddleware, requirePermission('setting
   }
 });
 
-app.put('/api/automation/workflows/:id', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+app.put('/api/automation/workflows/:id', authMiddleware, requirePermission('settings:write'), needsPlan('workflows'), async (req, res) => {
   try {
     const id = workflowId(req.params.id);
     if (!id) return res.status(404).json({ success: false, message: 'Workflow not found.' });
@@ -1398,6 +1424,7 @@ app.patch('/api/automation/workflows/:id', authMiddleware, requirePermission('se
   try {
     const id = workflowId(req.params.id);
     if (!id || typeof req.body?.enabled !== 'boolean') return res.status(400).json({ success: false, message: 'Send enabled: true or false.' });
+    if (req.body.enabled) await requireCapability(req.user.tenantId, 'workflows');
     const workflow = await setWorkflowEnabled(req.user.tenantId, id, req.body.enabled);
     audit(req, 'workflow.changed', `${workflow.name} (#${id}): ${workflow.enabled ? 'on' : 'off'}`);
     return res.json({ success: true, workflow });
@@ -1657,6 +1684,7 @@ app.post('/api/quotes/:id/convert', authMiddleware, requirePermission('shipments
       return res.status(400).json({ success: false, message: 'Pickup and delivery dates (YYYY-MM-DD, delivery not before pickup) are needed to create the load.' });
     }
     if (!weightValue) return res.status(400).json({ success: false, message: `The weight (${WEIGHT_UNIT}) is needed to create the load.` });
+    await requireShipmentRoom(req.user.tenantId);
     const shipmentId = await convertQuote(req.user.tenantId, id, { pickup, delivery, weight: `${weightValue} ${WEIGHT_UNIT}`, actorId: req.user.id });
     return res.status(201).json({ success: true, shipmentId: `SHP-${shipmentId}`, quote: await getQuote(req.user.tenantId, id) });
   } catch (error) {
@@ -1757,6 +1785,8 @@ app.get('/api/public/track/:token', publicTrackLimiter, async (req, res) => {
 });
 
 app.get('/track/:token', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'track.html')));
+// Public price list (no sign-in).
+app.get('/pricing', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'pricing.html')));
 
 /* =========================================================
    BACKUPS: a daily copy of the whole database (platform owner only)
@@ -1913,7 +1943,7 @@ app.post('/api/shipments/:id/messages/draft', authMiddleware, requirePermission(
   }
 });
 
-app.post('/api/shipments/:id/messages', authMiddleware, requirePermission('shipments:message'), messageLimiter, async (req, res) => {
+app.post('/api/shipments/:id/messages', authMiddleware, requirePermission('shipments:message'), messageLimiter, needsPlan('messaging'), async (req, res) => {
   const shipmentId = parseShipmentId(req.params.id);
   const { recipient, channel, body } = req.body || {};
   if (!shipmentId || !MESSAGE_RECIPIENTS.includes(recipient) || !MESSAGE_CHANNELS.includes(channel)
@@ -2039,7 +2069,7 @@ app.post('/api/inbox/:id/dismiss', authMiddleware, requirePermission('shipments:
 });
 
 // Read a stored email with FLOW on demand (when it was not read automatically).
-app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:create'), aiLimiter, async (req, res) => {
+app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:create'), aiLimiter, needsPlan('ai'), async (req, res) => {
   const itemId = Number(req.params.id);
   if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ success: false, message: 'Valid inbox ID is required.' });
   try {
@@ -2090,6 +2120,7 @@ app.post(`${INBOX_WEBHOOK_PREFIX}:token`, (req, res, next) => {
   try {
     req.inboxTenant = await findTenantByInboxTokenHash(req.inboxTokenHash);
     if (!req.inboxTenant) return res.status(404).json({ success: false, message: 'Unknown inbox address.' });
+    await requireCapability(req.inboxTenant.id, 'email');
     return next();
   } catch (error) {
     return sendError(res, error, 'Message could not be stored.', 'inbox webhook');
@@ -2210,6 +2241,9 @@ async function pollMailbox(tenantId) {
   try {
     const tenant = await getTenant(tenantId);
     if (!tenant?.imapSettings) return { configured: false };
+    // A plan without email automation keeps the settings but stops reading the mailbox.
+    const plan = plans.resolvePlan(tenant);
+    if (plan.locked || !plan.capabilities.includes('email')) return { configured: true, paused: true };
     const previous = tenant.imapState;
     const viaApi = Boolean(tenant.imapSettings.provider);
     const label = viaApi ? tenant.imapSettings.provider : 'imap';
@@ -2273,7 +2307,7 @@ function startMailboxPoller() {
 // callback below with a one-time code. The state value is signed, short-lived and tied to this person and company.
 const mailRedirectUri = () => `${PUBLIC_URL}/api/integrations/mail-oauth/callback`;
 
-app.get('/api/settings/mail-oauth/:provider/start', authMiddleware, requirePermission('settings:write'), (req, res) => {
+app.get('/api/settings/mail-oauth/:provider/start', authMiddleware, requirePermission('settings:write'), needsPlan('email'), (req, res) => {
   const { provider } = req.params;
   if (!mailapi.isProvider(provider) || !PUBLIC_URL || !mailapi.enabled(provider)) {
     return res.redirect('/?mailbox=error&reason=' + encodeURIComponent('This sign-in is not set up on the server yet.'));
@@ -2308,7 +2342,7 @@ app.get('/api/integrations/mail-oauth/callback', authMiddleware, requirePermissi
 
 // The company's mailbox. Checked by logging in before it is saved; the password is stored encrypted and never returned.
 // Leave the password empty to keep the saved one when only the other fields change.
-app.put('/api/settings/imap', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+app.put('/api/settings/imap', authMiddleware, requirePermission('settings:write'), needsPlan('email'), async (req, res) => {
   const { host, port, user, password, mailbox } = req.body || {};
   const hostName = typeof host === 'string' ? host.trim().toLowerCase() : '';
   const portNumber = port === undefined || port === '' || port === null ? 993 : Number(port);
@@ -2502,7 +2536,7 @@ app.get('/api/shipments/:id/documents/:docId/file', authMiddleware, requirePermi
 });
 
 // Read (or re-read) a document with VAULT. Runs in the background; the list shows the result.
-app.post('/api/shipments/:id/documents/:docId/extract', authMiddleware, requirePermission('shipments:document'), aiLimiter, async (req, res) => {
+app.post('/api/shipments/:id/documents/:docId/extract', authMiddleware, requirePermission('shipments:document'), aiLimiter, needsPlan('ai'), async (req, res) => {
   const shipmentId = parseShipmentId(req.params.id);
   const docId = Number(req.params.docId);
   if (!shipmentId || !Number.isInteger(docId) || docId <= 0) return res.status(400).json({ success: false, message: 'Valid IDs are required.' });
@@ -2663,7 +2697,7 @@ app.delete('/api/border-waits/:id', authMiddleware, requirePermission('carriers:
    AI AGENTS
    ========================================================= */
 // FLOW: order text -> shipment draft for a person to review. Nothing is saved here.
-app.post('/api/agents/flow/parse', authMiddleware, requirePermission('shipments:create'), aiLimiter, async (req, res) => {
+app.post('/api/agents/flow/parse', authMiddleware, requirePermission('shipments:create'), aiLimiter, needsPlan('ai'), async (req, res) => {
   const text = req.body?.text;
   if (typeof text !== 'string' || !text.trim() || text.length > flowAgent.MAX_INPUT_CHARS) {
     return res.status(400).json({ success: false, message: `Paste the order text (at most ${flowAgent.MAX_INPUT_CHARS} characters).` });
@@ -2838,7 +2872,14 @@ app.get('/api/admin/users', authMiddleware, requirePermission('users:read'), asy
 });
 
 // Admin adds a team member to their own company with a starting password.
-app.post('/api/admin/users', authMiddleware, requirePermission('users:write'), async (req, res) => {
+app.post('/api/admin/users', authMiddleware, requirePermission('users:write'), async (req, res, next) => {
+  try {
+    plans.assertCanAddUser(await planOf(req.user.tenantId), await countActiveUsers(req.user.tenantId));
+    return next();
+  } catch (error) {
+    return sendError(res, error, 'User could not be created.', 'create user');
+  }
+}, async (req, res) => {
   const { name, email, password, role } = req.body || {};
   const identityError = validateNameAndEmail(name, email);
   if (identityError) return res.status(400).json({ success: false, message: identityError });
@@ -2881,6 +2922,11 @@ app.patch('/api/admin/users/:id', authMiddleware, requirePermission('users:write
     return res.status(400).json({ success: false, message: `Send a role (${ALLOWED_ROLES.join(', ')}) and/or active (true or false).` });
   }
   try {
+    // Turning someone back on takes a seat again.
+    if (active === true) {
+      const current = (await listUsers(req.user.tenantId)).find((entry) => entry.id === userId);
+      if (current && current.active === false) plans.assertCanAddUser(await planOf(req.user.tenantId), await countActiveUsers(req.user.tenantId));
+    }
     const user = await updateUser(req.user.tenantId, userId, { role, active }, req.user.id);
     audit(req, 'user.changed', `${user.email}: role ${user.role}, ${user.active ? 'active' : 'disabled'}`);
     return res.json({ success: true, user });
@@ -2996,7 +3042,7 @@ app.get('/api/messaging/status', authMiddleware, async (req, res) => {
 
 // This company's own Twilio account. Checked with Twilio before saving, stored encrypted,
 // never returned. Leave the token empty to keep the saved one when only the numbers change.
-app.put('/api/settings/messaging', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+app.put('/api/settings/messaging', authMiddleware, requirePermission('settings:write'), needsPlan('messaging'), async (req, res) => {
   const { accountSid, authToken, smsFrom, whatsappFrom } = req.body || {};
   const sid = typeof accountSid === 'string' ? accountSid.trim() : '';
   if (!/^AC[0-9a-fA-F]{32}$/.test(sid)) {
@@ -3044,7 +3090,7 @@ app.delete('/api/settings/messaging', authMiddleware, requirePermission('setting
 });
 
 // The company's email inbox address. The token is shown once; only its hash is stored.
-app.post('/api/settings/inbox/token', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+app.post('/api/settings/inbox/token', authMiddleware, requirePermission('settings:write'), needsPlan('email'), async (req, res) => {
   try {
     const token = `inbox_${crypto.randomBytes(24).toString('hex')}`;
     await setTenantInboxTokenHash(req.user.tenantId, rateLimitKey(token));
@@ -3071,7 +3117,7 @@ app.put('/api/settings/inbox', authMiddleware, requirePermission('settings:write
 });
 
 // Creates (or replaces) this company's GPS token. Shown once; only its hash is stored.
-app.post('/api/integrations/gps/token', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+app.post('/api/integrations/gps/token', authMiddleware, requirePermission('settings:write'), needsPlan('gps'), async (req, res) => {
   try {
     const token = `gps_${crypto.randomBytes(24).toString('hex')}`;
     await setTenantGpsTokenHash(req.user.tenantId, rateLimitKey(token));
@@ -3120,6 +3166,7 @@ app.post(GPS_WEBHOOK_PATH, async (req, res, next) => {
   try {
     const tenant = await findTenantByGpsTokenHash(req.gpsTokenHash);
     if (!tenant) return res.status(401).json({ success: false, message: 'Invalid GPS token.' });
+    await requireCapability(tenant.id, 'gps');
     const body = req.body;
     const list = Array.isArray(body) ? body : (Array.isArray(body?.positions) ? body.positions : [body]);
     if (!list.length || list.length > 500) {
@@ -3147,9 +3194,43 @@ app.get('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (re
   }
 });
 
+// The company's own plan and how much of it is used (Billing page).
+app.get('/api/billing/plan', authMiddleware, async (req, res) => {
+  try {
+    const [plan, usersUsed, shipmentsUsed] = await Promise.all([
+      planOf(req.user.tenantId), countActiveUsers(req.user.tenantId), countShipmentsThisMonth(req.user.tenantId)
+    ]);
+    return res.json({
+      success: true,
+      plan: { ...plan, capabilities: Object.fromEntries(Object.entries(plans.CAPABILITIES).map(([key, label]) => [key, { label, on: plan.capabilities.includes(key) }])) },
+      usage: { users: usersUsed, shipmentsThisMonth: shipmentsUsed },
+      salesEmail: SALES_EMAIL
+    });
+  } catch (error) {
+    return sendError(res, error, 'Plan unavailable.', 'billing plan');
+  }
+});
+
+// The platform owner changes a company's plan, status, trial or limits (payments are handled outside Veyra for now).
+app.patch('/api/platform/tenants/:id/plan', authMiddleware, requirePlatformAdmin, async (req, res) => {
+  try {
+    const tenantId = /^\d{1,9}$/.test(String(req.params.id)) ? Number(req.params.id) : null;
+    if (!tenantId) return res.status(404).json({ success: false, message: 'Company not found.' });
+    const change = plans.validatePlanChange(req.body);
+    if (change.trialDays && !change.status) change.status = 'trial';
+    const tenant = await updateTenantPlan(tenantId, change);
+    const plan = plans.resolvePlan(tenant);
+    audit(req, 'company.plan', `${tenant.name}: ${plan.name}, ${plan.status}${plan.trialEndsAt ? ` until ${plan.trialEndsAt}` : ''}`);
+    return res.json({ success: true, plan });
+  } catch (error) {
+    return sendError(res, error, 'The plan could not be changed.', 'tenant plan');
+  }
+});
+
 // A new customer company with its first administrator. Each company sees only its own data.
 app.post('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (req, res) => {
-  const { companyName, adminName, adminEmail, adminPassword } = req.body || {};
+  const { companyName, adminName, adminEmail, adminPassword, plan = 'growth' } = req.body || {};
+  if (!plans.PLANS[plan]) return res.status(400).json({ success: false, message: `Plan must be one of: ${plans.PLAN_KEYS.join(', ')}.` });
   if (typeof companyName !== 'string' || !companyName.trim() || companyName.trim().length > MAX_LEN.companyName) {
     return res.status(400).json({ success: false, message: `Company name is required (at most ${MAX_LEN.companyName} characters).` });
   }
@@ -3162,7 +3243,9 @@ app.post('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (r
       name: companyName.trim(),
       adminName: adminName.trim(),
       adminEmail: adminEmail.trim().toLowerCase(),
-      passwordHash: await bcrypt.hash(adminPassword, BCRYPT_COST)
+      passwordHash: await bcrypt.hash(adminPassword, BCRYPT_COST),
+      plan,
+      trialDays: plans.TRIAL_DAYS
     });
     audit(req, 'company.created', companyName.trim());
     return res.status(201).json({ success: true, ...result });

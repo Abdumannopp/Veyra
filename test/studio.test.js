@@ -28,6 +28,9 @@ before(async () => {
   admin = await login('admin@veyra.ai', 'admin123');
   await call(admin, 'POST', '/api/platform/tenants', { companyName: 'Studio Other', adminName: 'Sam', adminEmail: 'sam@s.example', adminPassword: 'studio-other-pass-1' });
   other = await login('sam@s.example', 'studio-other-pass-1');
+  // The other company is on Scale, so its requests reach the company check, not the plan check.
+  const theirId = (await json(admin, 'GET', '/api/platform/tenants')).tenants.find((t) => t.name === 'Studio Other').id;
+  await call(admin, 'PATCH', `/api/platform/tenants/${theirId}/plan`, { plan: 'scale', status: 'active' });
   await call(admin, 'POST', '/api/admin/users', { name: 'Op', email: 'op@studio.example', password: 'studio-op-pass-12', role: 'operator' });
   operator = await login('op@studio.example', 'studio-op-pass-12');
 });
