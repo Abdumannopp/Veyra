@@ -329,7 +329,9 @@ async function initialize() {
     ['messaging_config', 'TEXT'],
     // Encrypted JSON: the mailbox VEYRA reads orders from (IMAP). The state (position, last check) is plain JSON.
     ['imap_config', 'TEXT'],
-    ['imap_state', 'TEXT']
+    ['imap_state', 'TEXT'],
+    // Which automatic NEXUS jobs this company wants (JSON; anything missing counts as on).
+    ['automation_settings', 'TEXT']
   ]);
 
   // Emails (and other messages) that arrived for a company, waiting to become loads.
@@ -597,7 +599,7 @@ async function getTenant(tenantId) {
   const row = await get(
     `SELECT id, name, gps_token_hash AS gpsTokenHash, inbox_token_hash AS inboxTokenHash,
        inbox_allowed_senders AS inboxAllowedSenders, messaging_config AS messagingConfig,
-       imap_config AS imapConfig, imap_state AS imapState, created_at AS createdAt
+       imap_config AS imapConfig, imap_state AS imapState, automation_settings AS automationSettingsJson, created_at AS createdAt
      FROM tenants WHERE id = ?`,
     [assertTenant(tenantId)]
   );
@@ -618,8 +620,15 @@ async function getTenant(tenantId) {
   } catch (_) {
     imapState = null;
   }
-  const { imapConfig, ...rest } = row;
-  return { ...rest, allowedSenders, messagingSettings, imapSettings, imapState };
+  let automationSettings = {};
+  try {
+    const parsed = JSON.parse(row.automationSettingsJson || '{}');
+    if (parsed && typeof parsed === 'object') automationSettings = parsed;
+  } catch (_) {
+    automationSettings = {};
+  }
+  const { imapConfig, automationSettingsJson, ...rest } = row;
+  return { ...rest, allowedSenders, messagingSettings, imapSettings, imapState, automationSettings };
 }
 
 async function listTenants() {
@@ -676,6 +685,66 @@ async function setTenantInboxAllowedSenders(tenantId, senders) {
 // Saving (or removing) the mailbox also forgets the reading position: a new mailbox starts from now.
 async function setTenantImapSettings(tenantId, settings) {
   await run('UPDATE tenants SET imap_config = ?, imap_state = NULL WHERE id = ?', [settings ? secrets.encrypt(settings) : null, assertTenant(tenantId)]);
+}
+
+async function setTenantAutomationSettings(tenantId, values) {
+  await run('UPDATE tenants SET automation_settings = ? WHERE id = ?', [JSON.stringify(values), assertTenant(tenantId)]);
+}
+
+// What NEXUS and the agents did for this company over the last days: the numbers behind the AI Command Center.
+async function getCommandCenterStats(tenantId, days = 30) {
+  assertTenant(tenantId);
+  const since = `-${Number(days)} days`;
+  const tasks = await get(
+    `SELECT COUNT(*) AS prepared,
+       SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
+       SUM(CASE WHEN status = 'dismissed' THEN 1 ELSE 0 END) AS dismissed,
+       SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open,
+       AVG(CASE WHEN resolved_at IS NOT NULL THEN (julianday(resolved_at) - julianday(created_at)) * 24 * 60 END) AS minutesToHandle
+     FROM nexus_tasks WHERE tenant_id = ? AND created_at >= datetime('now', ?)`,
+    [tenantId, since]
+  );
+  const calls = await get(
+    `SELECT COUNT(*) AS calls, SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded
+     FROM agent_tasks WHERE tenant_id = ? AND created_at >= datetime('now', ?)`,
+    [tenantId, since]
+  );
+  const byKind = await all(
+    `SELECT kind, COUNT(*) AS total FROM nexus_tasks WHERE tenant_id = ? AND created_at >= datetime('now', ?) GROUP BY kind`,
+    [tenantId, since]
+  );
+  const daily = await all(
+    `SELECT date(created_at) AS day, COUNT(*) AS total FROM nexus_tasks
+     WHERE tenant_id = ? AND created_at >= datetime('now', ?) GROUP BY date(created_at) ORDER BY day`,
+    [tenantId, since]
+  );
+  const live = await get(
+    `SELECT SUM(CASE WHEN status IN ('Dispatched', 'In Transit') THEN 1 ELSE 0 END) AS onRoad,
+       SUM(CASE WHEN status IN ('New', 'Sourcing', 'Pending Approval') THEN 1 ELSE 0 END) AS waiting,
+       SUM(CASE WHEN status = 'Exception' THEN 1 ELSE 0 END) AS exceptions
+     FROM shipments WHERE tenant_id = ?`,
+    [tenantId]
+  );
+  const activity = await all(
+    `SELECT id, kind, title, status, shipment_id AS shipmentId, created_at AS createdAt, resolved_at AS resolvedAt
+     FROM nexus_tasks WHERE tenant_id = ? ORDER BY id DESC LIMIT 12`,
+    [tenantId]
+  );
+  const n = (value) => Number(value) || 0;
+  return {
+    days,
+    prepared: n(tasks?.prepared),
+    done: n(tasks?.done),
+    dismissed: n(tasks?.dismissed),
+    open: n(tasks?.open),
+    minutesToHandle: tasks?.minutesToHandle === null || tasks?.minutesToHandle === undefined ? null : Math.round(tasks.minutesToHandle),
+    aiCalls: n(calls?.calls),
+    aiSucceeded: n(calls?.succeeded),
+    byKind: Object.fromEntries(byKind.map((row) => [row.kind, n(row.total)])),
+    daily: daily.map((row) => ({ day: row.day, total: n(row.total) })),
+    live: { onRoad: n(live?.onRoad), waiting: n(live?.waiting), exceptions: n(live?.exceptions) },
+    activity: activity.map((row) => ({ ...row, shipmentId: row.shipmentId ? `SHP-${row.shipmentId}` : null }))
+  };
 }
 
 async function setTenantImapState(tenantId, state) {
@@ -2347,6 +2416,8 @@ module.exports = {
   setTenantMessagingSettings,
   setTenantImapSettings,
   setTenantImapState,
+  setTenantAutomationSettings,
+  getCommandCenterStats,
   listTenantIdsWithImap,
   createInboxItem,
   addInboxAttachment,
