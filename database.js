@@ -466,6 +466,37 @@ async function initialize() {
   `);
   await run('CREATE INDEX IF NOT EXISTS idx_quotes_tenant ON quotes (tenant_id, id)');
 
+  // Automation Studio: rules a company writes ("when ... then ...") and a log of each time one ran.
+  await run(`
+    CREATE TABLE IF NOT EXISTS workflows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      name TEXT NOT NULL,
+      description TEXT,
+      trigger TEXT NOT NULL,
+      trigger_status TEXT,
+      conditions TEXT NOT NULL DEFAULT '[]',
+      actions TEXT NOT NULL DEFAULT '[]',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_workflows_tenant ON workflows (tenant_id, trigger)');
+  await run(`
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      workflow_id INTEGER NOT NULL,
+      shipment_id INTEGER,
+      status TEXT NOT NULL,
+      detail TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_workflow_runs_tenant ON workflow_runs (tenant_id, id)');
+
   // Map lookups are cached: a place name is looked up once, a road route once.
   await run(`
     CREATE TABLE IF NOT EXISTS geo_places (
@@ -2305,6 +2336,16 @@ async function listSentinelLoads(tenantId) {
   );
 }
 
+// How many times a load has reached a status: lets a rule run again when a load comes back to it.
+async function countStatusReached(tenantId, shipmentId, status) {
+  const row = await get(
+    `SELECT COUNT(*) AS total FROM shipment_events JOIN shipments ON shipments.id = shipment_events.shipment_id
+     WHERE shipment_events.shipment_id = ? AND shipments.tenant_id = ? AND shipment_events.to_status = ?`,
+    [shipmentId, assertTenant(tenantId), status]
+  );
+  return Number(row?.total) || 0;
+}
+
 async function countShipmentExceptions(tenantId, shipmentId) {
   const row = await get(
     `SELECT COUNT(*) AS total FROM shipment_events JOIN shipments ON shipments.id = shipment_events.shipment_id
@@ -2406,6 +2447,122 @@ async function deleteDocument(tenantId, shipmentId, id) {
   return result.changes === 1;
 }
 
+/* ---------- Automation Studio ---------- */
+function parseJsonList(text) {
+  try {
+    const value = JSON.parse(text || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function mapWorkflow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || null,
+    trigger: row.trigger,
+    triggerStatus: row.trigger_status || null,
+    conditions: parseJsonList(row.conditions),
+    actions: parseJsonList(row.actions),
+    enabled: Boolean(row.enabled),
+    createdBy: row.createdBy || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    runs30: Number(row.runs30 || 0),
+    failed30: Number(row.failed30 || 0),
+    lastRunAt: row.lastRunAt || null
+  };
+}
+
+const WORKFLOW_SELECT = `SELECT workflows.*, users.name AS createdBy,
+  (SELECT COUNT(*) FROM workflow_runs r WHERE r.workflow_id = workflows.id AND r.tenant_id = workflows.tenant_id AND r.created_at >= datetime('now', '-30 days')) AS runs30,
+  (SELECT COUNT(*) FROM workflow_runs r WHERE r.workflow_id = workflows.id AND r.tenant_id = workflows.tenant_id AND r.status = 'failed' AND r.created_at >= datetime('now', '-30 days')) AS failed30,
+  (SELECT MAX(created_at) FROM workflow_runs r WHERE r.workflow_id = workflows.id AND r.tenant_id = workflows.tenant_id) AS lastRunAt
+  FROM workflows LEFT JOIN users ON users.id = workflows.created_by`;
+
+async function listWorkflows(tenantId) {
+  const rows = await all(`${WORKFLOW_SELECT} WHERE workflows.tenant_id = ? ORDER BY workflows.id`, [assertTenant(tenantId)]);
+  return rows.map(mapWorkflow);
+}
+
+async function getWorkflow(tenantId, id) {
+  const row = await get(`${WORKFLOW_SELECT} WHERE workflows.id = ? AND workflows.tenant_id = ?`, [id, assertTenant(tenantId)]);
+  return row ? mapWorkflow(row) : null;
+}
+
+async function listActiveWorkflows(tenantId, trigger) {
+  const rows = await all('SELECT * FROM workflows WHERE tenant_id = ? AND trigger = ? AND enabled = 1 ORDER BY id', [assertTenant(tenantId), trigger]);
+  return rows.map(mapWorkflow);
+}
+
+async function createWorkflow(tenantId, fields, actorId, maxPerCompany = 50) {
+  assertTenant(tenantId);
+  const count = await get('SELECT COUNT(*) AS total FROM workflows WHERE tenant_id = ?', [tenantId]);
+  if (count.total >= maxPerCompany) throw httpError(409, `A company can have at most ${maxPerCompany} workflows.`);
+  const result = await run(
+    'INSERT INTO workflows (tenant_id, name, description, trigger, trigger_status, conditions, actions, enabled, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [tenantId, fields.name, fields.description, fields.trigger, fields.triggerStatus, JSON.stringify(fields.conditions), JSON.stringify(fields.actions), fields.enabled ? 1 : 0, actorId || null]
+  );
+  return getWorkflow(tenantId, result.id);
+}
+
+async function updateWorkflow(tenantId, id, fields) {
+  assertTenant(tenantId);
+  const result = await run(
+    `UPDATE workflows SET name = ?, description = ?, trigger = ?, trigger_status = ?, conditions = ?, actions = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND tenant_id = ?`,
+    [fields.name, fields.description, fields.trigger, fields.triggerStatus, JSON.stringify(fields.conditions), JSON.stringify(fields.actions), fields.enabled ? 1 : 0, id, tenantId]
+  );
+  if (!result.changes) throw httpError(404, 'Workflow not found.');
+  return getWorkflow(tenantId, id);
+}
+
+async function setWorkflowEnabled(tenantId, id, enabled) {
+  const result = await run('UPDATE workflows SET enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?', [enabled ? 1 : 0, id, assertTenant(tenantId)]);
+  if (!result.changes) throw httpError(404, 'Workflow not found.');
+  return getWorkflow(tenantId, id);
+}
+
+async function deleteWorkflow(tenantId, id) {
+  assertTenant(tenantId);
+  const result = await run('DELETE FROM workflows WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+  if (!result.changes) throw httpError(404, 'Workflow not found.');
+  await run('DELETE FROM workflow_runs WHERE workflow_id = ? AND tenant_id = ?', [id, tenantId]);
+}
+
+async function recordWorkflowRun(tenantId, { workflowId, shipmentId = null, status, detail = null }) {
+  await run('INSERT INTO workflow_runs (tenant_id, workflow_id, shipment_id, status, detail) VALUES (?, ?, ?, ?, ?)', [assertTenant(tenantId), workflowId, shipmentId, status, detail]);
+}
+
+async function listWorkflowRuns(tenantId, limit = 50) {
+  const rows = await all(
+    `SELECT workflow_runs.*, workflows.name AS workflowName FROM workflow_runs
+     LEFT JOIN workflows ON workflows.id = workflow_runs.workflow_id AND workflows.tenant_id = workflow_runs.tenant_id
+     WHERE workflow_runs.tenant_id = ? ORDER BY workflow_runs.id DESC LIMIT ?`,
+    [assertTenant(tenantId), limit]
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    workflowId: row.workflow_id,
+    workflowName: row.workflowName || 'Deleted workflow',
+    shipmentId: row.shipment_id ? `SHP-${row.shipment_id}` : null,
+    status: row.status,
+    detail: row.detail || null,
+    createdAt: row.created_at
+  }));
+}
+
+async function getWorkflowStats(tenantId) {
+  const row = await get(
+    `SELECT COUNT(*) AS runs, SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed
+     FROM workflow_runs WHERE tenant_id = ? AND created_at >= datetime('now', '-30 days')`,
+    [assertTenant(tenantId)]
+  );
+  return { runs30: Number(row.runs || 0), failed30: Number(row.failed || 0) };
+}
+
 module.exports = {
   db,
   DB_PATH,
@@ -2473,6 +2630,17 @@ module.exports = {
   getPulseData,
   listSentinelLoads,
   listTrackingOverview,
+  countStatusReached,
+  listWorkflows,
+  getWorkflow,
+  listActiveWorkflows,
+  createWorkflow,
+  updateWorkflow,
+  setWorkflowEnabled,
+  deleteWorkflow,
+  recordWorkflowRun,
+  listWorkflowRuns,
+  getWorkflowStats,
   getInboxItem,
   listInboxItems,
   countInboxItemsToday,
