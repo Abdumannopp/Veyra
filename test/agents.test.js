@@ -13,7 +13,6 @@ process.env.API_RATE_LIMIT_MAX = '5000';
 process.env.WEIGHT_UNIT = 'kg';
 process.env.CURRENCY = 'UZS';
 process.env.MAX_RATE = '100000000';
-process.env.MESSAGE_LANGUAGE = 'uz';
 process.env.OPENROUTER_API_KEY = 'sk-or-test';
 delete process.env.OPENROUTER_MODEL;
 process.env.MESSAGING_PROVIDER = 'twilio';
@@ -100,7 +99,7 @@ test('FLOW turns an order message into a validated draft and never saves it', as
     questions: ['Is the cargo palletised?'], confidence: 0.92
   }]);
   const before = (await (await call(admin, 'GET', '/api/shipments/search')).json()).allCount;
-  const res = await call(operator, 'POST', '/api/agents/flow/parse', { text: 'Salom! 20 tonna mato, Toshkentdan Almatiga, tent kerak, 10-noyabr yuklash. Narx 15 mln so\'m. PO-778' });
+  const res = await call(operator, 'POST', '/api/agents/flow/parse', { text: 'Hi! 20 tons of fabric from Tashkent to Almaty, curtainsider needed, pickup Nov 10. Rate 15 million. PO-778' });
   assert.equal(res.status, 200);
   const result = await res.json();
   assert.equal(result.draft.weight, 20000, '20 t converted to kg');
@@ -215,18 +214,18 @@ test('SCOUT ranks carriers by fit and lane history and suggests a rate', async (
 
 /* ---------------- RELAY + messaging ---------------- */
 
-test('RELAY drafts from the load record in the configured language', async () => {
+test('RELAY drafts English messages from the load record', async () => {
   const { id } = await bookedLoad();
   const res = await call(operator, 'POST', `/api/shipments/${id}/messages/draft`, { recipient: 'driver', purpose: 'location_request' });
   assert.equal(res.status, 200);
   const { draft } = await res.json();
-  assert.equal(draft.language, 'uz');
   assert.equal(draft.to, '+998 91 555 22 11');
-  assert.match(draft.body, new RegExp(`Assalomu alaykum, Bobur! .*${id}`));
+  assert.match(draft.body, new RegExp(`Hello Bobur, please reply with your current location.*${id}`));
   assert.deepEqual(draft.channels, ['sms', 'whatsapp']);
 
-  const ru = await (await call(operator, 'POST', `/api/shipments/${id}/messages/draft`, { recipient: 'carrier', language: 'ru' })).json();
-  assert.match(ru.draft.body, /забронирован/);
+  const carrier = await (await call(operator, 'POST', `/api/shipments/${id}/messages/draft`, { recipient: 'carrier' })).json();
+  assert.match(carrier.draft.body, /booked with/);
+  assert.equal(carrier.draft.language, undefined);
   const noPhone = await (await call(operator, 'POST', `/api/shipments/${id}/messages/draft`, { recipient: 'customer', purpose: 'status_update' })).json();
   assert.equal(noPhone.draft.to, null);
   assert.equal((await call(operator, 'POST', `/api/shipments/${id}/messages/draft`, { recipient: 'boss' })).status, 400);

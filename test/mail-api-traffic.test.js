@@ -9,7 +9,7 @@ const { after, before, test } = require('node:test');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-mailapi-'));
 Object.assign(process.env, {
   NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'a.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000',
-  CURRENCY: 'USD', MESSAGE_LANGUAGE: 'en', OPENROUTER_API_KEY: 'sk-or-test', PUBLIC_URL: 'https://veyra.test',
+  CURRENCY: 'USD', OPENROUTER_API_KEY: 'sk-or-test', PUBLIC_URL: 'https://veyra.test',
   GOOGLE_CLIENT_ID: 'g-client', GOOGLE_CLIENT_SECRET: 'g-secret-value', MICROSOFT_CLIENT_ID: 'm-client', MICROSOFT_CLIENT_SECRET: 'm-secret-value',
   GEO_PROVIDER: 'osm', TRAFFIC_PROVIDER: 'tomtom', TOMTOM_API_KEY: 'tt-secret-key-123'
 });

@@ -56,8 +56,6 @@ function applyConfig() {
   });
   // Closed sign-up: hide "Create one"; accounts come from an administrator.
   document.getElementById('authToggle')?.classList.toggle('hidden', config.registration === 'closed');
-  const messageForm = document.getElementById('messageForm');
-  if (messageForm && config.messaging?.language) messageForm.elements.language.value = config.messaging.language;
 }
 
 function formatMoney(value, digits = 2) {
@@ -1733,7 +1731,7 @@ async function loadMessageDraft() {
     const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipmentId)}/messages/draft`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ recipient: form.elements.recipient.value, purpose: form.elements.purpose.value, language: form.elements.language.value })
+      body: JSON.stringify({ recipient: form.elements.recipient.value, purpose: form.elements.purpose.value })
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.message || 'Draft failed');
@@ -1764,7 +1762,6 @@ function bindMessageForm() {
   fillPurposeOptions(form);
   form.elements.recipient.addEventListener('change', () => { fillPurposeOptions(form); loadMessageDraft(); });
   form.elements.purpose.addEventListener('change', loadMessageDraft);
-  form.elements.language.addEventListener('change', loadMessageDraft);
   form.elements.channel.addEventListener('change', updateMessageSendState);
   document.getElementById('messageCopy')?.addEventListener('click', async () => {
     try {

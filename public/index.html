@@ -784,7 +784,6 @@
         <form class="tracking-form message-form hidden" id="messageForm">
           <label>To<select name="recipient"><option value="driver">Driver</option><option value="carrier">Carrier</option><option value="customer">Customer</option></select></label>
           <label>About<select name="purpose"></select></label>
-          <label>Language<select name="language"><option value="uz">O'zbekcha</option><option value="ru">Русский</option><option value="en">English</option></select></label>
           <label>Send by<select name="channel"><option value="whatsapp">WhatsApp</option><option value="sms">SMS</option></select></label>
           <label class="span-2">Message (you can edit it)<textarea name="body" rows="3" maxlength="1000" required></textarea></label>
           <div class="tracking-form-footer span-2">
@@ -832,7 +831,7 @@
         </div>
         <div class="ai-intake hidden" id="aiIntake">
           <label for="aiOrderText"><strong>FLOW · paste the customer's message</strong><small>Email, WhatsApp or call notes. FLOW fills the form below; you check it and press Create.</small></label>
-          <textarea id="aiOrderText" maxlength="4000" rows="4" placeholder="e.g. Salom! 20 t mato, Toshkent → Almaty, tent kerak, 10-noyabr yuklash. Narx 15 mln so'm."></textarea>
+          <textarea id="aiOrderText" maxlength="4000" rows="4" placeholder="e.g. Hi! 20 t of fabric from Tashkent to Almaty, curtainsider needed, pickup Nov 10. Rate 1500 USD."></textarea>
           <div class="ai-intake-footer">
             <p class="shipment-form-message" id="aiIntakeMessage" role="status"></p>
             <button class="btn btn-ghost small" type="button" id="aiIntakeButton">Read with AI</button>

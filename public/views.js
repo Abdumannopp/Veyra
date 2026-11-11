@@ -2097,7 +2097,7 @@
   const AGENTS = [
     { key: 'FLOW', name: 'FLOW', role: 'Order reader', text: 'Reads an order from an email or a pasted message and fills in the load form.', needs: 'ai', icon: 'doc', tone: 'blue', action: ['Read an order', () => window.openShipmentModal?.({})] },
     { key: 'SCOUT', name: 'SCOUT', role: 'Carrier finder', text: 'Ranks your carriers for a load by trailer, past loads on the lane and reliability.', needs: null, icon: 'truck', tone: 'violet', action: ['Loads to book', () => navigate('shipments', { status: 'Sourcing' })] },
-    { key: 'RELAY', name: 'RELAY', role: 'Messages', text: 'Drafts SMS / WhatsApp messages to drivers, carriers and customers in Uzbek, Russian or English.', needs: 'messaging', icon: 'chat', tone: 'sky', action: ['Messages to approve', () => navigate('inbox')] },
+    { key: 'RELAY', name: 'RELAY', role: 'Messages', text: 'Drafts SMS / WhatsApp messages to drivers, carriers and customers from your real load data.', needs: 'messaging', icon: 'chat', tone: 'sky', action: ['Messages to approve', () => navigate('inbox')] },
     { key: 'VAULT', name: 'VAULT', role: 'Documents', text: 'Reads CMR and proof-of-delivery files and compares them with the load.', needs: 'ai', icon: 'doc', tone: 'green', action: null },
     { key: 'NEXUS', name: 'NEXUS', role: 'Coordinator', text: 'Turns events into tasks for a person. It never sends, books or changes anything by itself.', needs: 'nexus', icon: 'bolt', tone: 'violet', action: ['Inbox & tasks', () => navigate('inbox')] },
     { key: 'ROUTE', name: 'ROUTE', role: 'Schedule', text: 'Checks if the promised dates are realistic and finds trucks that unload near the pickup.', needs: null, icon: 'target', tone: 'blue', action: null },

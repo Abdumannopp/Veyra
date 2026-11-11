@@ -8,7 +8,7 @@ const { after, before, test } = require('node:test');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-map-'));
 Object.assign(process.env, {
   NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'm.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000',
-  CURRENCY: 'USD', MESSAGE_LANGUAGE: 'en', GEO_PROVIDER: 'osm', OFF_ROUTE_KM: '50', OPENROUTER_API_KEY: 'sk-or-test'
+  CURRENCY: 'USD', GEO_PROVIDER: 'osm', OFF_ROUTE_KM: '50', OPENROUTER_API_KEY: 'sk-or-test'
 });
 const { app, initialize } = require('../server');
 const { db } = require('../database');

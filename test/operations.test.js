@@ -8,7 +8,7 @@ const { after, before, test } = require('node:test');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-ops-'));
 Object.assign(process.env, {
   NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'o.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000',
-  CURRENCY: 'USD', MESSAGE_LANGUAGE: 'en', BACKUP_KEEP: '2', NEXUS_ENABLED: 'false'
+  CURRENCY: 'USD', BACKUP_KEEP: '2', NEXUS_ENABLED: 'false'
 });
 const { app, initialize } = require('../server');
 const { db } = require('../database');
