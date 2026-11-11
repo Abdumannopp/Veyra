@@ -154,6 +154,7 @@
           <nav>
             <a class="active" href="#/dashboard" data-nav="dashboard"><svg class="ico"><use href="#i-home" /></svg>Dashboard</a>
             <a href="#/shipments" data-nav="shipments"><svg class="ico"><use href="#i-truck" /></svg>Shipments</a>
+            <a href="#/quotes" data-nav="quotes"><svg class="ico"><use href="#i-doc" /></svg>Quotes</a>
             <a href="#/shipments?status=Pending%20Approval" data-nav="approvals"><svg class="ico"><use href="#i-check-square" /></svg>Approvals <span class="nav-badge hidden" id="navApprovalsBadge">0</span></a>
             <a href="#/inbox" data-nav="inbox"><svg class="ico"><use href="#i-bell" /></svg>Inbox &amp; tasks <span class="nav-badge hidden" id="navInboxBadge">0</span></a>
             <a href="#/carriers" data-nav="carriers"><svg class="ico"><use href="#i-carrier" /></svg>Carriers</a>
@@ -340,6 +341,17 @@
             </div>
           </div>
 
+          </div>
+
+          <!-- ===== Quotes ===== -->
+          <div class="view hidden" data-view="quotes">
+            <div class="board-head">
+              <div>
+                <h2 class="head-label">Quotes &amp; Pricing</h2>
+                <div class="head-sub">Price a lane on your own history, send the offer, and turn a yes into a load.</div>
+              </div>
+            </div>
+            <div class="view-body" id="quotesView"></div>
           </div>
 
           <!-- ===== AI agents ===== -->

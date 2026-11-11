@@ -7,7 +7,7 @@
    fetchDashboardData, loadAdminConsole.
    ========================================================= */
 (function () {
-  const VIEWS = ['dashboard', 'shipments', 'inbox', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
+  const VIEWS = ['dashboard', 'shipments', 'quotes', 'inbox', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
   const STATUS_ORDER = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
   const STATUS_COLORS = {
     New: '#2563ff',
@@ -153,7 +153,7 @@
     const { view, params } = parseHash();
     state.view = view;
     state.params = params;
-    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
+    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', quotes: 'Quotes', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
     document.title = `${TITLES[view]} | Veyra`;
 
     document.querySelectorAll('.view[data-view]').forEach((node) => node.classList.toggle('hidden', node.dataset.view !== view));
@@ -186,6 +186,9 @@
     } else if (view === 'agents') {
       if (search) search.value = '';
       renderAgents();
+    } else if (view === 'quotes') {
+      if (search) search.value = '';
+      renderQuotes();
     } else if (view === 'billing') {
       if (search) search.value = '';
       renderBilling();
@@ -1247,6 +1250,219 @@
   }
 
 
+
+  /* =========================================================
+     QUOTES & PRICING
+     ========================================================= */
+  const QUOTE_LABELS = { draft: 'Draft', sent: 'Sent', accepted: 'Won', declined: 'Lost', expired: 'Expired' };
+  const QUOTE_TONES = { draft: 'cancelled', sent: 'in-transit', accepted: 'delivered', declined: 'exception', expired: 'pending-approval' };
+  const quoteState = { lane: null, estimate: null, filter: 'open' };
+
+  async function renderQuotes() {
+    const container = document.getElementById('quotesView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!container.children.length) loading(container);
+    let quotes;
+    try {
+      quotes = (await api('/api/quotes')).quotes;
+    } catch (error) {
+      return errorState(container, error.message, renderQuotes);
+    }
+    if (state.view !== 'quotes') return;
+    const canWrite = can('shipments:create');
+    const soon = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+    const open = quotes.filter((q) => ['draft', 'sent'].includes(q.status));
+    const decided = quotes.filter((q) => ['accepted', 'declined', 'expired'].includes(q.status));
+    const won = quotes.filter((q) => q.status === 'accepted');
+    const kpis = el('div', { class: 'stats-grid kpi-grid' }, [
+      kpiCard('Open quotes', String(open.length), `${open.filter((q) => q.status === 'draft').length} not sent yet`, 'doc', 'violet'),
+      kpiCard('Waiting for an answer', money(open.filter((q) => q.status === 'sent').reduce((sum, q) => sum + q.price, 0)), 'Total of sent quotes', 'wallet', 'blue'),
+      kpiCard('Win rate', decided.length ? `${Math.round((won.length / decided.length) * 100)}%` : '—', decided.length ? `${won.length} won of ${decided.length} decided` : 'No answers yet', 'check-circle', 'green'),
+      kpiCard('Expiring soon', String(open.filter((q) => q.validUntil <= soon).length), 'Valid for 2 days or less', 'alert', 'amber')
+    ]);
+    container.replaceChildren(kpis, canWrite ? quoteBuilder() : '', quoteList(quotes, canWrite));
+  }
+
+  function quoteBuilder() {
+    const field = (label, input) => el('label', { class: 'quote-field' }, [el('span', { text: label }), input]);
+    const origin = el('input', { name: 'origin', maxlength: '160', placeholder: 'e.g. Tashkent, UZ', required: true });
+    const destination = el('input', { name: 'destination', maxlength: '160', placeholder: 'e.g. Almaty, KZ', required: true });
+    const equipment = el('select', { name: 'equipment' }, equipmentList().map((item) => el('option', { value: item, text: item })));
+    const weight = el('input', { name: 'weight', type: 'number', min: '0.01', step: '0.01', placeholder: window.VeyraConfig?.weightUnit || 'kg' });
+    const lane = quoteState.lane;
+    if (lane) {
+      origin.value = lane.origin;
+      destination.value = lane.destination;
+      equipment.value = lane.equipment;
+      weight.value = lane.weight || '';
+    }
+    const result = el('div', { class: 'quote-result' });
+    const form = el('form', { class: 'card quote-lane', autocomplete: 'off' }, [
+      field('Origin', origin),
+      el('button', { class: 'icon-btn swap-btn', type: 'button', 'aria-label': 'Swap origin and destination', onclick: () => { [origin.value, destination.value] = [destination.value, origin.value]; } }, '⇄'),
+      field('Destination', destination),
+      field('Equipment', equipment),
+      field(`Weight (${window.VeyraConfig?.weightUnit || 'kg'})`, weight),
+      el('button', { class: 'btn btn-primary', type: 'submit' }, 'Check price')
+    ]);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!origin.value.trim() || !destination.value.trim()) return toast('Enter the origin and the destination.', 'error');
+      quoteState.lane = { origin: origin.value.trim(), destination: destination.value.trim(), equipment: equipment.value, weight: weight.value };
+      result.replaceChildren(el('p', { class: 'muted', text: 'PULSE is checking this lane…' }));
+      try {
+        const query = new URLSearchParams({ origin: quoteState.lane.origin, destination: quoteState.lane.destination, equipment: quoteState.lane.equipment });
+        quoteState.estimate = await api(`/api/quotes/estimate?${query}`);
+        result.replaceChildren(...quoteOffer());
+      } catch (error) {
+        result.replaceChildren(el('p', { class: 'warn-line', text: error.message }));
+      }
+    });
+    if (lane && quoteState.estimate) result.replaceChildren(...quoteOffer());
+    return el('section', { class: 'quote-builder' }, [form, result]);
+  }
+
+  // PULSE's view of the lane, and the form to save an offer at a chosen price.
+  function quoteOffer() {
+    const lane = quoteState.lane;
+    const est = quoteState.estimate;
+    const lines = [];
+    if (est.carrier) lines.push(['Carriers usually charge', `${money(est.carrier.typical)}`, `${money(est.carrier.lowest)} – ${money(est.carrier.highest)} · ${est.carrier.loads} loads`]);
+    if (est.customer) lines.push(['Customers usually pay', money(est.customer.typical), `${est.customer.loads} loads on this lane`]);
+    if (est.market) lines.push(['Your market price', money(est.market.rate), est.market.equipment || 'any trailer']);
+    if (est.typicalMarginShare !== null && est.typicalMarginShare !== undefined) lines.push(['Your usual margin', `${Math.round(est.typicalMarginShare * 100)}%`, 'on this lane']);
+    const suggested = est.suggestedCustomerPrice;
+    const overview = el('div', { class: 'card quote-overview' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Price overview' }), el('small', { text: `${lane.origin} → ${lane.destination} · ${lane.equipment}` })])),
+      suggested
+        ? el('div', { class: 'quote-suggested' }, [el('span', { text: 'Suggested price' }), el('strong', { text: money(suggested) }), el('small', { text: est.suggestionBasis })])
+        : el('p', { class: 'muted', text: 'Not enough history on this lane yet (3 loads needed), and no market price entered. Set the price yourself; it will count from the next loads on.' }),
+      lines.length ? el('dl', { class: 'quote-facts' }, lines.map(([label, value, sub]) => el('div', {}, [el('dt', { text: label }), el('dd', {}, [el('strong', { text: value }), el('small', { text: sub })])]))) : ''
+    ]);
+
+    const input = (name, attrs = {}) => el('input', { name, ...attrs });
+    const price = input('price', { type: 'number', min: '0.01', step: '0.01', required: true, value: suggested ? String(suggested) : '' });
+    const cost = input('carrierCost', { type: 'number', min: '0.01', step: '0.01', value: est.expectedCarrierCost ? String(est.expectedCarrierCost) : '' });
+    const marginLine = el('p', { class: 'dispatch-margin muted' });
+    const updateMargin = () => {
+      const p = Number(price.value);
+      const c = Number(cost.value);
+      marginLine.classList.remove('negative');
+      if (!p || !c) { marginLine.textContent = 'Enter a price and the expected carrier cost to see the margin.'; return; }
+      marginLine.textContent = `Margin: ${money(p - c, 2)} (${Math.round(((p - c) / p) * 100)}%)`;
+      marginLine.classList.toggle('negative', p < c);
+    };
+    const validUntil = input('validUntil', { type: 'date', value: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10) });
+    const field = (label, control, wide) => el('label', { class: wide ? 'span-2' : '' }, [label, control]);
+    const message = el('p', { class: 'shipment-form-message', role: 'status' });
+    const form = el('form', { class: 'card quote-form tracking-form', autocomplete: 'off' }, [
+      el('div', { class: 'mini-head span-2' }, el('span', {}, [el('strong', { text: 'New quote' }), el('small', { text: 'Saved as a draft. Print it or send it, then mark the answer.' })])),
+      field('Customer', input('customer', { maxlength: '120', required: true })),
+      field('Customer phone', input('customerPhone', { type: 'tel', maxlength: '40', placeholder: 'Optional' })),
+      field(`Price to the customer (${window.VeyraConfig?.currency || 'USD'})`, price),
+      field('Expected carrier cost', cost),
+      field('Pickup', input('pickup', { type: 'date' })),
+      field('Delivery', input('delivery', { type: 'date' })),
+      field('Valid until', validUntil),
+      field('Notes for the customer', input('notes', { maxlength: '1000', placeholder: 'Optional, e.g. loading time, customs' })),
+      el('div', { class: 'span-2' }, marginLine),
+      el('div', { class: 'tracking-form-footer span-2' }, [message, el('button', { class: 'btn btn-primary', type: 'submit' }, 'Save quote')])
+    ]);
+    form.addEventListener('input', updateMargin);
+    updateMargin();
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const f = form.elements;
+      const optional = (value) => (value.trim() ? value.trim() : undefined);
+      message.textContent = 'Saving…';
+      try {
+        const { quote } = await api('/api/quotes', {
+          method: 'POST',
+          body: JSON.stringify({
+            customer: f.customer.value.trim(), customerPhone: optional(f.customerPhone.value), origin: lane.origin, destination: lane.destination,
+            equipment: lane.equipment, weight: lane.weight ? Number(lane.weight) : undefined, price: Number(f.price.value),
+            carrierCost: f.carrierCost.value ? Number(f.carrierCost.value) : undefined, pickup: optional(f.pickup.value), delivery: optional(f.delivery.value),
+            validUntil: f.validUntil.value, notes: optional(f.notes.value)
+          })
+        });
+        toast(`${quote.number} saved.`);
+        quoteState.lane = null;
+        quoteState.estimate = null;
+        renderQuotes();
+      } catch (error) {
+        message.textContent = error.message;
+      }
+    });
+    return [overview, form];
+  }
+
+  function quoteList(quotes, canWrite) {
+    const filters = { open: ['draft', 'sent'], won: ['accepted'], closed: ['declined', 'expired'], all: null };
+    const shown = quotes.filter((q) => !filters[quoteState.filter] || filters[quoteState.filter].includes(q.status));
+    const tabs = el('div', { class: 'segmented quote-tabs', role: 'group', 'aria-label': 'Show quotes' }, [['open', 'Open'], ['won', 'Won'], ['closed', 'Lost & expired'], ['all', 'All']].map(([key, label]) => el('button', {
+      type: 'button', class: quoteState.filter === key ? 'active' : '', 'aria-pressed': String(quoteState.filter === key),
+      onclick: () => { quoteState.filter = key; renderQuotes(); }
+    }, label)));
+    const action = (label, handler, primary) => el('button', { class: `btn ${primary ? 'btn-primary' : 'btn-ghost'} small`, type: 'button', onclick: handler }, label);
+    const rows = shown.map((q) => {
+      const actions = [el('a', { class: 'btn btn-ghost small', href: `/api/quotes/${q.id}/print`, target: '_blank', rel: 'noopener' }, 'Print')];
+      if (canWrite && !q.shipmentId) {
+        if (q.status === 'draft') actions.push(action('Mark sent', () => setQuoteStatus(q, 'sent')));
+        if (['draft', 'sent', 'expired'].includes(q.status)) {
+          actions.push(action('Won → create load', () => convertQuote(q), true));
+          actions.push(action('Lost', () => setQuoteStatus(q, 'declined')));
+        }
+      }
+      if (q.shipmentId) actions.push(action(`Open ${q.shipmentId}`, () => openShipmentDetails(q.shipmentId)));
+      return [
+        el('span', {}, [el('strong', { class: 'id-link', text: q.number }), el('small', { class: 'cell-sub', text: (q.createdAt || '').slice(0, 10) })]),
+        el('span', {}, [q.customer, el('small', { class: 'cell-sub', text: q.customerPhone || '' })]),
+        el('span', {}, [`${q.origin} → ${q.destination}`, el('small', { class: 'cell-sub', text: [q.equipment, q.weight ? `${q.weight} ${window.VeyraConfig?.weightUnit || 'kg'}` : ''].filter(Boolean).join(' · ') })]),
+        el('span', {}, [el('strong', { text: money(q.price) }), el('small', { class: 'cell-sub', text: q.margin === null ? '' : `margin ${money(q.margin)}` })]),
+        el('span', { class: `tag ${QUOTE_TONES[q.status] || ''}`, text: QUOTE_LABELS[q.status] || q.status }),
+        q.validUntil,
+        el('span', { class: 'quote-actions' }, actions)
+      ];
+    });
+    return el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, [el('span', {}, [el('strong', { text: `Quotes (${shown.length})` }), el('small', { text: 'Newest first' })]), tabs]),
+      miniTable(['Quote', 'Customer', 'Lane', 'Price', 'Status', 'Valid until', ''], rows, quoteState.filter === 'open' ? 'No open quotes. Check a lane above to make one.' : 'Nothing here yet.')
+    ]);
+  }
+
+  async function setQuoteStatus(quote, status) {
+    try {
+      await api(`/api/quotes/${quote.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+      toast(`${quote.number}: ${QUOTE_LABELS[status].toLowerCase()}.`);
+      renderQuotes();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  // The customer said yes. Missing dates or weight are asked for, then the load is created.
+  async function convertQuote(quote) {
+    const body = {};
+    const askDate = (label, fallback) => window.prompt(`${label} (YYYY-MM-DD)`, fallback || '');
+    if (!quote.pickup) body.pickup = askDate('Pickup date', new Date().toISOString().slice(0, 10));
+    if (!quote.pickup && !body.pickup) return;
+    if (!quote.delivery) body.delivery = askDate('Delivery date', body.pickup || quote.pickup);
+    if (!quote.delivery && !body.delivery) return;
+    if (!quote.weight) {
+      body.weight = window.prompt(`Weight (${window.VeyraConfig?.weightUnit || 'kg'})`, '');
+      if (!body.weight) return;
+    }
+    try {
+      const result = await api(`/api/quotes/${quote.id}/convert`, { method: 'POST', body: JSON.stringify(body) });
+      toast(`${quote.number} won: ${result.shipmentId} created.`);
+      await renderQuotes();
+      openShipmentDetails(result.shipmentId);
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
   /* =========================================================
      AI AGENTS: what each agent does, whether it is on, what it did
      ========================================================= */
@@ -1412,6 +1628,7 @@
     if (state.view === 'analytics') await renderAnalytics();
     if (state.view === 'inbox') await renderInbox();
     if (state.view === 'agents') await renderAgents();
+    if (state.view === 'quotes') await renderQuotes();
     if (state.view === 'billing') await renderBilling();
     loadNotifications();
   }

@@ -55,6 +55,12 @@ const {
   deleteInboxAttachments,
   setDocumentType,
   listMarketRates,
+  createQuote,
+  getQuote,
+  listQuotes,
+  updateQuote,
+  convertQuote,
+  getLanePriceData,
   listBorderWaits,
   upsertBorderWait,
   deleteBorderWait,
@@ -1225,6 +1231,199 @@ ${row('Truck', shipment.truck_plate)}
 </main><script src="/print.js"></script></body></html>`);
   } catch (error) {
     return sendError(res, error, 'Invoice unavailable.', 'invoice');
+  }
+});
+
+/* =========================================================
+   QUOTES: price offers to customers, before a load exists
+   ========================================================= */
+const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'declined'];
+const QUOTE_VALID_DAYS = 7;
+const isoDay = (offsetDays = 0) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10);
+
+// Reads quote fields from a request. partial = only what was sent (editing). Returns { fields } or { error }.
+function readQuoteFields(body, { partial = false } = {}) {
+  const b = body && typeof body === 'object' ? body : {};
+  const fields = {};
+  const has = (key) => b[key] !== undefined;
+  for (const [key, max] of [['customer', MAX_LEN.customer], ['origin', MAX_LEN.origin], ['destination', MAX_LEN.destination]]) {
+    if (!partial || has(key)) {
+      if (typeof b[key] !== 'string' || !b[key].trim() || b[key].trim().length > max) return { error: `${key} is required (at most ${max} characters).` };
+      fields[key] = b[key].trim();
+    }
+  }
+  if (!partial || has('equipment')) {
+    if (!EQUIPMENT.includes(b.equipment)) return { error: `Equipment must be one of: ${EQUIPMENT.join(', ')}.` };
+    fields.equipment = b.equipment;
+  }
+  if (!partial || has('price')) {
+    const price = parseMoney(b.price);
+    if (price === null) return { error: `The price must be between 0.01 and ${MAX_RATE.toLocaleString('en-US')}.` };
+    fields.price = price;
+  }
+  if (has('carrierCost')) {
+    const empty = b.carrierCost === null || b.carrierCost === '';
+    const cost = empty ? null : parseMoney(b.carrierCost);
+    if (!empty && cost === null) return { error: 'The carrier cost must be a positive number.' };
+    fields.carrierCost = cost;
+  }
+  if (has('weight')) {
+    const empty = b.weight === null || b.weight === '';
+    const weight = empty ? null : parsePositiveNumber(b.weight, MAX_WEIGHT);
+    if (!empty && weight === null) return { error: `Weight must be a number up to ${MAX_WEIGHT.toLocaleString('en-US')} ${WEIGHT_UNIT}.` };
+    fields.weight = weight;
+  }
+  for (const key of ['pickup', 'delivery']) {
+    if (!has(key)) continue;
+    if (b[key] === null || b[key] === '') { fields[key] = null; continue; }
+    if (!parseIsoDate(b[key])) return { error: 'Dates must be YYYY-MM-DD.' };
+    fields[key] = b[key];
+  }
+  if (fields.pickup && fields.delivery && fields.delivery < fields.pickup) return { error: 'Delivery date must be on or after pickup date.' };
+  if (has('validUntil')) {
+    if (!parseIsoDate(b.validUntil)) return { error: 'Valid until must be a date (YYYY-MM-DD).' };
+    fields.validUntil = b.validUntil;
+  } else if (!partial) {
+    fields.validUntil = isoDay(QUOTE_VALID_DAYS);
+  }
+  const phone = readOptionalPhone(b, 'customerPhone');
+  if (phone.error) return { error: phone.error };
+  if (has('customerPhone')) fields.customerPhone = phone.value;
+  const notes = readOptionalText(b, 'notes', 1000);
+  if (notes.error) return { error: notes.error };
+  if (has('notes')) fields.notes = notes.value;
+  return { fields };
+}
+
+// What a lane usually costs, so the quote is priced on facts (PULSE). Nothing is saved.
+async function laneEstimate(tenantId, { origin, destination, equipment }) {
+  const data = await getLanePriceData(tenantId, { origin, destination, equipment });
+  const first = pulseAgent.analyzePrices(data, { formatMoney });
+  const expectedCost = first.carrier?.typical ?? first.market?.rate ?? null;
+  const analysis = expectedCost ? pulseAgent.analyzePrices(data, { rate: expectedCost, formatMoney }) : first;
+  return { ...analysis, expectedCarrierCost: expectedCost };
+}
+
+app.get('/api/quotes/estimate', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const origin = String(req.query.origin || '').trim();
+  const destination = String(req.query.destination || '').trim();
+  const equipment = String(req.query.equipment || '');
+  if (!origin || !destination || origin.length > MAX_LEN.origin || destination.length > MAX_LEN.destination || (equipment && !EQUIPMENT.includes(equipment))) {
+    return res.status(400).json({ success: false, message: 'Enter the origin, destination and equipment.' });
+  }
+  try {
+    return res.json({ success: true, ...(await laneEstimate(req.user.tenantId, { origin, destination, equipment })) });
+  } catch (error) {
+    return sendError(res, error, 'Price check unavailable.', 'quote estimate');
+  }
+});
+
+app.get('/api/quotes', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    res.json({ success: true, quotes: await listQuotes(req.user.tenantId) });
+  } catch (error) {
+    return sendError(res, error, 'Quotes unavailable.', 'quotes');
+  }
+});
+
+app.post('/api/quotes', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
+  const parsed = readQuoteFields(req.body);
+  if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+  try {
+    const quote = await createQuote(req.user.tenantId, parsed.fields, req.user.id);
+    return res.status(201).json({ success: true, quote });
+  } catch (error) {
+    return sendError(res, error, 'Quote could not be saved.', 'quote create');
+  }
+});
+
+const readQuoteId = (raw) => {
+  const match = /^(?:Q-)?([1-9]\d{0,9})$/i.exec(String(raw));
+  return match ? Number(match[1]) : null;
+};
+
+app.get('/api/quotes/:id', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const id = readQuoteId(req.params.id);
+  if (!id) return res.status(400).json({ success: false, message: 'Valid quote number is required.' });
+  try {
+    const quote = await getQuote(req.user.tenantId, id);
+    if (!quote) return res.status(404).json({ success: false, message: 'Quote not found.' });
+    return res.json({ success: true, quote });
+  } catch (error) {
+    return sendError(res, error, 'Quote unavailable.', 'quote');
+  }
+});
+
+// Edit a quote and/or move it: draft -> sent -> accepted / declined.
+app.patch('/api/quotes/:id', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
+  const id = readQuoteId(req.params.id);
+  if (!id) return res.status(400).json({ success: false, message: 'Valid quote number is required.' });
+  const { status, ...rest } = req.body || {};
+  if (status !== undefined && !QUOTE_STATUSES.includes(status)) {
+    return res.status(400).json({ success: false, message: `Status must be one of: ${QUOTE_STATUSES.join(', ')}.` });
+  }
+  const parsed = readQuoteFields(rest, { partial: true });
+  if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+  if (!status && !Object.keys(parsed.fields).length) return res.status(400).json({ success: false, message: 'Send at least one change.' });
+  try {
+    const quote = await updateQuote(req.user.tenantId, id, parsed.fields, status);
+    return res.json({ success: true, quote });
+  } catch (error) {
+    return sendError(res, error, 'Quote could not be changed.', 'quote update');
+  }
+});
+
+// The customer said yes: the quote becomes a load. Dates and weight are required now if the quote had none.
+app.post('/api/quotes/:id/convert', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
+  const id = readQuoteId(req.params.id);
+  if (!id) return res.status(400).json({ success: false, message: 'Valid quote number is required.' });
+  try {
+    const quote = await getQuote(req.user.tenantId, id);
+    if (!quote) return res.status(404).json({ success: false, message: 'Quote not found.' });
+    const pickup = req.body?.pickup || quote.pickup;
+    const delivery = req.body?.delivery || quote.delivery;
+    const weightValue = req.body?.weight !== undefined && req.body?.weight !== '' ? parsePositiveNumber(req.body.weight, MAX_WEIGHT) : quote.weight;
+    if (!parseIsoDate(pickup) || !parseIsoDate(delivery) || delivery < pickup) {
+      return res.status(400).json({ success: false, message: 'Pickup and delivery dates (YYYY-MM-DD, delivery not before pickup) are needed to create the load.' });
+    }
+    if (!weightValue) return res.status(400).json({ success: false, message: `The weight (${WEIGHT_UNIT}) is needed to create the load.` });
+    const shipmentId = await convertQuote(req.user.tenantId, id, { pickup, delivery, weight: `${weightValue} ${WEIGHT_UNIT}`, actorId: req.user.id });
+    return res.status(201).json({ success: true, shipmentId: `SHP-${shipmentId}`, quote: await getQuote(req.user.tenantId, id) });
+  } catch (error) {
+    return sendError(res, error, 'The load could not be created.', 'quote convert');
+  }
+});
+
+// A printable offer for the customer (print, or "Save as PDF" in the browser).
+app.get('/api/quotes/:id/print', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const id = readQuoteId(req.params.id);
+  if (!id) return res.status(400).json({ success: false, message: 'Valid quote number is required.' });
+  try {
+    const quote = await getQuote(req.user.tenantId, id);
+    if (!quote) return res.status(404).json({ success: false, message: 'Quote not found.' });
+    const e = escapeHtml;
+    const row = (label, value) => `<tr><th>${e(label)}</th><td>${e(value || '—')}</td></tr>`;
+    res.type('html').send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quote ${e(quote.number)}</title><link rel="stylesheet" href="/invoice.css"></head>
+<body><main class="invoice">
+<header><div><h1>${e(req.user.tenantName || 'Quote')}</h1><p>Freight quote</p></div>
+<div class="meta"><p><strong>Quote</strong> ${e(quote.number)}</p><p><strong>Date</strong> ${e(String(quote.createdAt).slice(0, 10))}</p><p><strong>Valid until</strong> ${e(quote.validUntil)}</p></div></header>
+<section><h2>For</h2><p class="party">${e(quote.customer)}</p></section>
+<table>
+${row('Route', `${quote.origin} → ${quote.destination}`)}
+${row('Equipment', quote.equipment)}
+${row('Weight', quote.weight ? `${quote.weight} ${WEIGHT_UNIT}` : '')}
+${row('Pickup', quote.pickup)}
+${row('Delivery', quote.delivery)}
+${row('Notes', quote.notes)}
+</table>
+<p class="total"><span>Price</span><strong>${e(formatMoney(quote.price))}</strong></p>
+<p class="state">Price for one full truck on this route. Valid until ${e(quote.validUntil)}.</p>
+<p class="actions"><button type="button" id="printButton">Print or save as PDF</button></p>
+</main><script src="/print.js"></script></body></html>`);
+  } catch (error) {
+    return sendError(res, error, 'Quote unavailable.', 'quote print');
   }
 });
 
