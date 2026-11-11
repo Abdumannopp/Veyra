@@ -1,6 +1,7 @@
 {
   "name": "veyra-logistics-fullstack",
   "version": "1.0.0",
+  "private": true,
   "description": "VEYRA logistics full-stack project with backend API and dashboard UI",
   "main": "server.js",
   "scripts": {
@@ -17,7 +18,7 @@
     "api"
   ],
   "author": "Tojiboyev Abdumannop",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",

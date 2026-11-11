@@ -153,3 +153,7 @@ In production sign-up is closed: the administrator adds people under Team Access
 - **Accounts and records**: own password change and admin reset (all sessions revoked), load corrections written to the load history, payment tracking with a printable invoice, a hashed customer tracking link that exposes status only, daily database backups (platform owner only), and a per-company activity log.
 - **Tests**: `npm test` (133 tests; the list below is partial: auth, rate limits, transactions, validation, security headers, carriers, analytics, XSS, truck workflow, team management, production mode, company isolation, FLOW / SCOUT / RELAY with fake providers, GPS, paging, NEXUS tasks and approvals, email inbox, document upload and reading, per-company Twilio and secret encryption).
 - **Dependencies**: `npm audit` reports 0 vulnerabilities at the time of release.
+
+## License
+
+Proprietary. All rights reserved. See [LICENSE](LICENSE). Not for redistribution.

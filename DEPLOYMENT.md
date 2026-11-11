@@ -5,7 +5,7 @@ The application starts with `npm run prod`, reads the platform-provided `PORT`, 
 ## Render
 
 1. Push this project to a Git repository and create a Render Blueprint from it.
-2. Review `render.yaml`; change `INITIAL_ADMIN_EMAIL` to the admin email you will use.
+2. Review `render.yaml`; change `INITIAL_ADMIN_EMAIL` to the admin email you will use. When Render asks for `COMPANY_NAME`, enter your company's name (it appears in the app, on invoices and on the customer tracking page).
 3. Deploy the service. The Blueprint provisions a Starter web service and a persistent disk at `/var/data`.
 4. In the Render dashboard, retrieve the generated `INITIAL_ADMIN_PASSWORD` and store it in a password manager. Do not put it in the repo.
 5. Add a custom domain in Render. HTTPS is provisioned by Render.
@@ -22,6 +22,8 @@ The Render disk keeps SQLite data across deploys, but it is a single-instance se
 NODE_ENV=production
 DATABASE_PATH=/data/veyra.db
 JWT_SECRET=<generate a long random secret>
+SECRETS_KEY=<another long random secret; keep it, see below>
+COMPANY_NAME=<your company name>
 INITIAL_ADMIN_NAME=VEYRA Administrator
 INITIAL_ADMIN_EMAIL=admin@your-domain.com
 INITIAL_ADMIN_PASSWORD=<unique password of at least 12 characters>
@@ -51,7 +53,7 @@ cd /opt/veyra
 sudo -u veyra npm ci --omit=dev
 ```
 
-3. Create `/etc/veyra/veyra.env` with `JWT_SECRET`, `INITIAL_ADMIN_NAME`, `INITIAL_ADMIN_EMAIL`, and a unique `INITIAL_ADMIN_PASSWORD` of at least 12 characters. Protect it:
+3. Create `/etc/veyra/veyra.env` with `JWT_SECRET`, `SECRETS_KEY`, `COMPANY_NAME`, `INITIAL_ADMIN_NAME`, `INITIAL_ADMIN_EMAIL`, and a unique `INITIAL_ADMIN_PASSWORD` of at least 12 characters. Protect it:
 
 ```bash
 sudo chmod 600 /etc/veyra/veyra.env
@@ -83,6 +85,10 @@ npm run prod
 ```
 
 Verify `http://localhost:3000/api/health` returns `{"status":"ok"}`. Delete only the disposable test DB when the process is stopped.
+
+## Company name
+
+`COMPANY_NAME` names the first company. It is read on the first start only (when the database is created); changing the variable later does not rename an existing company.
 
 ## Region and team settings
 
