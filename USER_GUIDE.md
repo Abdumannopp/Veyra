@@ -176,3 +176,23 @@ Rules only prepare: sending a message and booking a truck still happen with a pe
 - Live border queues (no free open source; entered by hand for now).
 - Automatic market prices from the internet (entered by hand).
 - Gmail/Outlook, traffic and the map have not been tried with the real services yet: they were only checked with fake responses. At the first connection, check the result yourself.
+
+## Plans and pricing
+
+The public price list is at `/pricing` (no sign-in needed). There are four plans:
+
+| Plan | Price | Users | Shipments / month | Adds |
+|---|---|---|---|---|
+| Starter | $99 / month | 3 | 100 | Shipments, carriers, tracking, quotes, basic analytics |
+| Growth | $249 / month | 10 | 500 | AI agents (FLOW, VAULT), GPS, email automation, WhatsApp / SMS |
+| Scale | $599 / month | 25 | 2,000 | Automation Studio workflows |
+| Enterprise | from $1,499 / month | 50+ | 5,000+ | Custom limits set per company |
+
+Yearly billing costs 10 months (shown as "Save 17%").
+
+- **New companies** start a 14-day free trial of the plan chosen in **Companies → Add company**.
+- **The platform owner** changes a company's plan and status in **Team & settings → Companies**: Trial, Active (paid), Payment overdue or Cancelled, and can add 14 more trial days. Payments are collected outside Veyra for now (bank transfer or invoice); mark the company Active once it has paid.
+- **When a trial ends, a payment is overdue or a plan is cancelled**, everything stays readable, but no new loads or people can be added until the plan is active again.
+- **Limits:** a company cannot add more people than its plan allows (disabled people do not count) or more loads in a calendar month. Features outside the plan answer with a short message naming the plan that includes them.
+- **Billing page:** each company sees its plan, trial days left, how much of its limits it has used and what the plan includes.
+- Set `SALES_EMAIL` on the server so "Start free trial", "Contact sales" and "Change plan" open an email to you.

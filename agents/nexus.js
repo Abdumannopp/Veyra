@@ -11,6 +11,7 @@
 // finished, and failures are logged, never thrown at the person who triggered the event.
 const db = require('../database');
 const studio = require('./studio');
+const plans = require('../lib/plans');
 const aiGateway = require('../ai/gateway');
 const flowAgent = require('./flow');
 const scoutAgent = require('./scout');
@@ -81,6 +82,8 @@ const logger = (tenantId, shipmentId = null) => (task) => db.recordAgentTask(ten
 // Automatic AI work stops at a daily cap per company, so a flood of emails cannot run up a bill.
 async function aiAvailable(tenantId) {
   if (!aiGateway.isEnabled()) return { ok: false, reason: 'AI is off.' };
+  const plan = plans.resolvePlan(await db.getTenant(tenantId));
+  if (plan.locked || !plan.capabilities.includes('ai')) return { ok: false, reason: `AI agents are not part of the ${plan.name} plan${plan.locked ? ' right now' : ''}.` };
   if ((await db.countAgentTasksToday(tenantId)) >= settings.aiDailyLimit) {
     return { ok: false, reason: 'The daily AI limit for this company was reached.' };
   }
@@ -102,6 +105,9 @@ async function runWorkflows(event, context) {
   if (!tenantId || !shipmentId) return;
   const workflows = await db.listActiveWorkflows(tenantId, event);
   if (!workflows.length) return;
+  // Workflows only run on a plan that includes them (they stay saved if the plan changes).
+  const plan = plans.resolvePlan(await db.getTenant(tenantId));
+  if (plan.locked || !plan.capabilities.includes('workflows')) return;
   const shipment = await db.getShipment(tenantId, shipmentId);
   if (!shipment) return;
   const facts = { type: event, status: context.status || shipment.status };

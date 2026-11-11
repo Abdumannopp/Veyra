@@ -1263,14 +1263,58 @@ async function loadCompaniesPanel() {
       const meta = createTextElement('div', 'user-meta');
       meta.append(createTextElement('span', 'user-avatar', tenant.name.charAt(0).toUpperCase()));
       const text = document.createElement('div');
-      text.append(createTextElement('strong', '', tenant.name), createTextElement('small', '', `${tenant.users} users · ${tenant.shipments} loads`));
+      const planName = { starter: 'Starter', growth: 'Growth', scale: 'Scale', enterprise: 'Enterprise' }[tenant.plan] || tenant.plan;
+      const trialLeft = tenant.planStatus === 'trial' && tenant.trialEndsAt ? Math.ceil((Date.parse(`${tenant.trialEndsAt.replace(' ', 'T')}Z`) - Date.now()) / 86400000) : null;
+      const status = tenant.planStatus === 'trial' ? (trialLeft > 0 ? `trial, ${trialLeft} d left` : 'trial ended') : tenant.planStatus.replace('_', ' ');
+      text.append(
+        createTextElement('strong', '', tenant.name),
+        createTextElement('small', '', `${planName} · ${status} · ${tenant.users} user${tenant.users === 1 ? '' : 's'} · ${tenant.shipmentsThisMonth} load${tenant.shipmentsThisMonth === 1 ? '' : 's'} this month`)
+      );
       meta.append(text);
-      row.append(meta);
+      row.append(meta, companyPlanControls(tenant));
       return row;
     }));
   } catch (error) {
     list.replaceChildren(createTextElement('p', 'muted', error.message));
   }
+}
+
+// The platform owner sets each company's plan and status (payment happens outside Veyra for now).
+function companyPlanControls(tenant) {
+  const box = createTextElement('div', 'company-plan');
+  const makeSelect = (label, options, value) => {
+    const select = document.createElement('select');
+    select.setAttribute('aria-label', label);
+    options.forEach(([optionValue, optionLabel]) => {
+      const option = createTextElement('option', '', optionLabel);
+      option.value = optionValue;
+      select.append(option);
+    });
+    select.value = value;
+    return select;
+  };
+  const planSelect = makeSelect(`Plan for ${tenant.name}`, [['starter', 'Starter'], ['growth', 'Growth'], ['scale', 'Scale'], ['enterprise', 'Enterprise']], tenant.plan);
+  const statusSelect = makeSelect(`Status for ${tenant.name}`, [['trial', 'Trial'], ['active', 'Active (paid)'], ['past_due', 'Payment overdue'], ['cancelled', 'Cancelled']], tenant.planStatus);
+  const save = async (body, button) => {
+    if (button) button.disabled = true;
+    try {
+      const response = await fetch(`/api/platform/tenants/${Number(tenant.id)}/plan`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify(body) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not change the plan');
+      notify(`${tenant.name}: ${result.plan.name}, ${result.plan.status.replace('_', ' ')}.`, 'ok');
+      loadCompaniesPanel();
+    } catch (error) {
+      notify(error.message, 'error');
+      if (button) button.disabled = false;
+    }
+  };
+  planSelect.addEventListener('change', () => save({ plan: planSelect.value }));
+  statusSelect.addEventListener('change', () => save({ status: statusSelect.value }));
+  const extend = createTextElement('button', 'btn btn-ghost small', '+14 day trial');
+  extend.type = 'button';
+  extend.addEventListener('click', () => save({ trialDays: 14 }, extend));
+  box.append(planSelect, statusSelect, extend);
+  return box;
 }
 
 function bindCompanyManagement() {
@@ -1296,7 +1340,8 @@ function bindCompanyManagement() {
           companyName: form.elements.companyName.value.trim(),
           adminName: form.elements.adminName.value.trim(),
           adminEmail: form.elements.adminEmail.value.trim(),
-          adminPassword: form.elements.adminPassword.value
+          adminPassword: form.elements.adminPassword.value,
+          plan: form.elements.plan.value
         })
       });
       const result = await response.json();

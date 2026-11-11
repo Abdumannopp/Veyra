@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pricing | Veyra</title>
+  <meta name="description" content="Simple, transparent pricing for Veyra, the AI workforce for logistics." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  <link rel="stylesheet" href="/pricing.css" />
+</head>
+<body>
+  <header class="pr-nav">
+    <a class="pr-logo" href="/" aria-label="Veyra home"><img src="/brand/veyra-logo.svg" alt="Veyra" width="120" height="32" /></a>
+    <nav class="pr-actions">
+      <a class="pr-btn pr-btn-light" href="/">Log in</a>
+      <a class="pr-btn pr-btn-dark" id="navTrial" href="/">Start free trial</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="pr-hero">
+      <span class="pr-badge">PRICING</span>
+      <h1>Simple, transparent pricing.</h1>
+      <p>Choose the plan that fits your logistics operation. Scale anytime.</p>
+      <div class="pr-switch" role="group" aria-label="Billing period">
+        <button type="button" class="active" data-period="monthly" aria-pressed="true">Monthly</button>
+        <button type="button" data-period="yearly" aria-pressed="false">Yearly <span class="pr-save">Save 17%</span></button>
+      </div>
+    </section>
+
+    <section class="pr-cards" id="plans" aria-live="polite">
+      <p class="pr-loading">Loading plans…</p>
+    </section>
+
+    <section class="pr-trust" aria-label="What every plan includes">
+      <span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c-3 3-3 15 0 18M12 3c3 3 3 15 0 18"/></svg>No setup fees</span>
+      <span><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/></svg><span><span id="trialDays">14</span>-day free trial</span></span>
+      <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h15l-4-4M20 15H5l4 4"/></svg>Upgrade or downgrade anytime</span>
+      <span><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2"/></svg>Enterprise-grade security</span>
+    </section>
+    <p class="pr-note">Prices in US dollars, per company, excluding taxes. Yearly plans are billed once a year.</p>
+  </main>
+
+  <footer class="pr-footer">© 2026 Veyra · The AI Workforce for Logistics</footer>
+  <script src="/pricing.js"></script>
+</body>
+</html>
