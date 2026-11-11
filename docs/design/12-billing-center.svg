@@ -1,0 +1,240 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1672" height="941" viewBox="0 0 1672 941" role="img" aria-labelledby="title desc">
+<title id="title">Billing Center — Veyra</title><desc id="desc">Manage logistics invoices, payments, expenses, cost analytics and payment methods.</desc>
+<defs>
+ <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#edf2ff"/><stop offset=".48" stop-color="#f8f9ff"/><stop offset="1" stop-color="#e8e5ff"/></linearGradient>
+ <linearGradient id="sidebar" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#101a39"/><stop offset="1" stop-color="#080f27"/></linearGradient>
+ <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#168bff"/><stop offset="1" stop-color="#3b52ef"/></linearGradient>
+ <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9562ff"/><stop offset="1" stop-color="#6128e9"/></linearGradient>
+ <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#208cff"/><stop offset=".55" stop-color="#5262f6"/><stop offset="1" stop-color="#9b45ef"/></linearGradient>
+ <linearGradient id="soft" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff" stop-opacity=".97"/><stop offset="1" stop-color="#f5f6ff" stop-opacity=".88"/></linearGradient>
+ <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#ffffff" stop-opacity=".94"/><stop offset="1" stop-color="#edf0ff" stop-opacity=".78"/></linearGradient>
+ <linearGradient id="orb" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#35c9ff"/><stop offset=".45" stop-color="#365cff"/><stop offset="1" stop-color="#a64aff"/></linearGradient>
+ <linearGradient id="green" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#42d58d"/><stop offset="1" stop-color="#16a96a"/></linearGradient>
+ <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%"><feGaussianBlur in="SourceAlpha" stdDeviation="9"/><feOffset dy="5"/><feComponentTransfer><feFuncA type="linear" slope=".12"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ <filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="12" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.2" fill="#9ea9db" opacity=".26"/></pattern>
+</defs>
+<rect x="0" y="0" width="1672" height="941" rx="0" fill="url(#bg)" stroke="none" stroke-width="1" opacity="1" />
+<ellipse cx="1350" cy="40" rx="420" ry="250" fill="#a99bff" opacity="0.15" />
+<ellipse cx="720" cy="0" rx="360" ry="170" fill="#8ac4ff" opacity="0.12" />
+<rect x="0" y="0" width="244" height="941" rx="0" fill="url(#sidebar)" stroke="none" stroke-width="1" opacity="1" />
+<path d="M37 25 Q45 14 54 25 L68 47 Q73 55 66 63 Q60 70 53 63 L34 34 Q30 29 37 25 Z" fill="url(#blue)" stroke="none" stroke-width="1" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<path d="M79 24 Q87 14 97 22 Q102 27 98 34 L77 64 Q70 73 62 66 Q56 60 62 52 Z" fill="url(#violet)" stroke="none" stroke-width="1" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="114" y="55" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="29" font-weight="750" fill="#ffffff" text-anchor="start" >Veyra</text>
+<text x="48" y="120" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >⌂</text>
+<text x="91" y="120" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Dashboard</text>
+<text x="48" y="169" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >◇</text>
+<text x="91" y="169" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Shipments</text>
+<text x="48" y="218" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >▤</text>
+<text x="91" y="218" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Quotes</text>
+<text x="48" y="267" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >◎</text>
+<text x="91" y="267" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Carriers</text>
+<text x="48" y="316" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >✧</text>
+<text x="91" y="316" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >AI Center</text>
+<text x="48" y="365" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >✉</text>
+<text x="91" y="365" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Inbox</text>
+<rect x="190" y="342" width="34" height="25" rx="12.5" fill="#794cff" stroke="none" stroke-width="1" opacity="1" />
+<text x="207.0" y="359.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#ffffff" text-anchor="middle" >12</text>
+<text x="48" y="414" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >▥</text>
+<text x="91" y="414" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Analytics</text>
+<text x="48" y="463" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >ϟ</text>
+<text x="91" y="463" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Automations</text>
+<rect x="18" y="481" width="210" height="47" rx="15" fill="url(#accent)" stroke="#8ca2ff" stroke-width="1" opacity="0.98" filter="url(#shadow)"/>
+<text x="48" y="512" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >▣</text>
+<text x="91" y="512" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Billing</text>
+<text x="48" y="561" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="650" fill="#ecf1ff" text-anchor="start" >⚙</text>
+<text x="91" y="561" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="650" fill="#c6cee8" text-anchor="start" >Settings</text>
+<rect x="18" y="626" width="210" height="284" rx="20" fill="#111e48" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<path d="M27 702 C82 654 116 722 167 673 S224 689 224 675" fill="none" stroke="#9e74ff" stroke-width="3" opacity="1" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+<path d="M26 704 C74 674 115 719 166 690 S220 691 225 689" fill="none" stroke="#35c6ff" stroke-width="2" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<text x="122" y="755" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#ffffff" text-anchor="middle" >Veyra AI</text>
+<text x="122" y="783" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="450" fill="#cbd6f7" text-anchor="middle" >Your logistics co-pilot</text>
+<rect x="42" y="815" width="162" height="42" rx="13" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="1" />
+<text x="123.0" y="841.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="650" fill="#26345b" text-anchor="middle" >Ask Veyra AI</text>
+<rect x="244" y="0" width="1428" height="70" rx="0" fill="#ffffff" stroke="none" stroke-width="1" opacity="0.34" />
+<rect x="272" y="13" width="590" height="42" rx="22" fill="#ffffff" stroke="#d9def5" stroke-width="1.2" opacity="0.76" />
+<circle cx="294" cy="34" r="7" fill="none" stroke="#4b5b85" stroke-width="2" opacity="1" />
+<path d="M299,39 L305,45" stroke="#4b5b85" stroke-width="2" opacity="1" fill="none"/>
+<text x="318" y="40" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="450" fill="#667394" text-anchor="start" >Search shipments, quotes, carriers...</text>
+<rect x="794" y="19" width="51" height="29" rx="14.5" fill="#f0f2fc" stroke="none" stroke-width="1" opacity="1" />
+<text x="819.5" y="38.5" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#59678d" text-anchor="middle" >⌘K</text>
+<text x="1378" y="43" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="24" font-weight="600" fill="#35456f" text-anchor="start" >♧</text>
+<circle cx="1439" cy="34" r="20" fill="url(#accent)" stroke="none" stroke-width="1" opacity="1" />
+<text x="1439" y="40" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="18" font-weight="700" fill="#ffffff" text-anchor="middle" >A</text>
+<text x="1471" y="31" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="15" font-weight="700" fill="#16213f" text-anchor="start" >Abdumannop</text>
+<text x="1471" y="49" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="500" fill="#657395" text-anchor="start" >Veyra Admin</text>
+<text x="278" y="112" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="31" font-weight="750" fill="#101a35" text-anchor="start" >Billing Center</text>
+<text x="280" y="142" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="15" font-weight="450" fill="#536287" text-anchor="start" >Manage invoices, payments, costs, and logistics finances in one place.</text>
+<rect x="278" y="140" width="100" height="42" rx="21" fill="url(#accent)" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="328.0" y="167" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#fff" text-anchor="middle" >Overview</text>
+<rect x="388" y="140" width="100" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="438.0" y="167" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Invoices</text>
+<rect x="498" y="140" width="105" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="550.5" y="167" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Payments</text>
+<rect x="613" y="140" width="105" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="665.5" y="167" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Expenses</text>
+<rect x="728" y="140" width="140" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="798.0" y="167" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Cost Analytics</text>
+<rect x="878" y="140" width="150" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="953.0" y="167" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Billing Settings</text>
+<rect x="1440" y="140" width="190" height="42" rx="13" fill="url(#accent)" stroke="none" stroke-width="1" opacity="1" />
+<text x="1535.0" y="166.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="650" fill="#ffffff" text-anchor="middle" >＋ Create Invoice</text>
+<rect x="278" y="198" width="320" height="116" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<circle cx="317.0" cy="237.0" r="21.0" fill="#e5f0ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="317.0" y="242.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#267bfa" text-anchor="middle" >◈</text>
+<text x="352" y="237" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="600" fill="#536080" text-anchor="start" >Total Spend (30d)</text>
+<text x="300" y="280" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="27" font-weight="760" fill="#111a32" text-anchor="start" >$2.19M</text>
+<text x="580" y="280" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#11a66a" text-anchor="end" >↑ +11%</text>
+<path d="M468 291 C493 275 503 293 523 275 S558 280 580 260" fill="none" stroke="#6d5dff" stroke-width="2.8" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="618" y="198" width="320" height="116" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<circle cx="657.0" cy="237.0" r="21.0" fill="#eee7ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="657.0" y="242.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#8050ef" text-anchor="middle" >▤</text>
+<text x="692" y="237" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="600" fill="#536080" text-anchor="start" >Outstanding</text>
+<text x="640" y="280" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="27" font-weight="760" fill="#111a32" text-anchor="start" >$284.6K</text>
+<text x="920" y="280" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#11a66a" text-anchor="end" >↑ +6%</text>
+<path d="M808 291 C833 275 843 293 863 275 S898 280 920 260" fill="none" stroke="#6d5dff" stroke-width="2.8" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="958" y="198" width="320" height="116" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<circle cx="997.0" cy="237.0" r="21.0" fill="#e1f8ed" stroke="none" stroke-width="1" opacity="1" />
+<text x="997.0" y="242.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#17a96e" text-anchor="middle" >✓</text>
+<text x="1032" y="237" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="600" fill="#536080" text-anchor="start" >Paid</text>
+<text x="980" y="280" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="27" font-weight="760" fill="#111a32" text-anchor="start" >$1.84M</text>
+<text x="1260" y="280" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#11a66a" text-anchor="end" >↑ +14%</text>
+<path d="M1148 291 C1173 275 1183 293 1203 275 S1238 280 1260 260" fill="none" stroke="#6d5dff" stroke-width="2.8" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="1298" y="198" width="320" height="116" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<circle cx="1337.0" cy="237.0" r="21.0" fill="#fff1dd" stroke="none" stroke-width="1" opacity="1" />
+<text x="1337.0" y="242.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="750" fill="#df8d20" text-anchor="middle" >◷</text>
+<text x="1372" y="237" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="600" fill="#536080" text-anchor="start" >Due Soon</text>
+<text x="1320" y="280" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="27" font-weight="760" fill="#111a32" text-anchor="start" >$127.8K</text>
+<text x="1600" y="280" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#11a66a" text-anchor="end" >Next 7 days</text>
+<path d="M1488 291 C1513 275 1523 293 1543 275 S1578 280 1600 260" fill="none" stroke="#6d5dff" stroke-width="2.8" opacity="1" stroke-linecap="round" stroke-linejoin="round" />
+<rect x="278" y="326" width="480" height="360" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="300" y="364" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#17213f" text-anchor="start" >Invoices (24)</text>
+<rect x="296" y="380" width="55" height="42" rx="21" fill="url(#accent)" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="323.5" y="407" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#fff" text-anchor="middle" >All</text>
+<rect x="361" y="380" width="65" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="393.5" y="407" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Open</text>
+<rect x="436" y="380" width="60" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="466.0" y="407" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Paid</text>
+<rect x="506" y="380" width="90" height="42" rx="21" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="0.92" />
+<text x="551.0" y="407" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#35446b" text-anchor="middle" >Overdue</text>
+<text x="300" y="445" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="750" fill="#17213f" text-anchor="start" >INV-89214</text>
+<text x="300" y="463" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#6d7a9b" text-anchor="start" >DHL Operations</text>
+<text x="525" y="454" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="750" fill="#1d2948" text-anchor="start" >$42,600</text>
+<rect x="642" y="436" width="90" height="24" rx="12.0" fill="#e5edff" stroke="none" stroke-width="1" opacity="1" />
+<text x="687.0" y="453.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#2869e8" text-anchor="middle" >Open</text>
+<text x="300" y="493" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="750" fill="#17213f" text-anchor="start" >INV-89213</text>
+<text x="300" y="511" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#6d7a9b" text-anchor="start" >Maersk Line</text>
+<text x="525" y="502" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="750" fill="#1d2948" text-anchor="start" >$128,300</text>
+<rect x="642" y="484" width="90" height="24" rx="12.0" fill="#e2f8eb" stroke="none" stroke-width="1" opacity="1" />
+<text x="687.0" y="501.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#15945d" text-anchor="middle" >Paid</text>
+<text x="300" y="541" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="750" fill="#17213f" text-anchor="start" >INV-89212</text>
+<text x="300" y="559" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#6d7a9b" text-anchor="start" >Turkish Cargo</text>
+<text x="525" y="550" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="750" fill="#1d2948" text-anchor="start" >$36,900</text>
+<rect x="642" y="532" width="90" height="24" rx="12.0" fill="#fff0d9" stroke="none" stroke-width="1" opacity="1" />
+<text x="687.0" y="549.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#c17b20" text-anchor="middle" >Due Soon</text>
+<text x="300" y="589" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="750" fill="#17213f" text-anchor="start" >INV-89211</text>
+<text x="300" y="607" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#6d7a9b" text-anchor="start" >FedEx Express</text>
+<text x="525" y="598" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="750" fill="#1d2948" text-anchor="start" >$27,400</text>
+<rect x="642" y="580" width="90" height="24" rx="12.0" fill="#ffe6ea" stroke="none" stroke-width="1" opacity="1" />
+<text x="687.0" y="597.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#dc4e67" text-anchor="middle" >Overdue</text>
+<text x="300" y="637" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="750" fill="#17213f" text-anchor="start" >INV-89210</text>
+<text x="300" y="655" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#6d7a9b" text-anchor="start" >MSC</text>
+<text x="525" y="646" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="750" fill="#1d2948" text-anchor="start" >$89,200</text>
+<rect x="642" y="628" width="90" height="24" rx="12.0" fill="#e2f8eb" stroke="none" stroke-width="1" opacity="1" />
+<text x="687.0" y="645.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="650" fill="#15945d" text-anchor="middle" >Paid</text>
+<rect x="778" y="326" width="515" height="360" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="802" y="364" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#17213f" text-anchor="start" >Invoice Details</text>
+<text x="802" y="407" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="22" font-weight="800" fill="#17213f" text-anchor="start" >INV-89214</text>
+<text x="802" y="430" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="500" fill="#6c7a9b" text-anchor="start" >DHL Operations</text>
+<text x="1265" y="404" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="11" font-weight="600" fill="#677596" text-anchor="end" >Due Jan 29, 2025</text>
+<rect x="800" y="452" width="468" height="38" rx="10" fill="#f4f6ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="812" y="477" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#667393" text-anchor="start" >Description</text>
+<text x="982" y="477" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#667393" text-anchor="start" >Qty</text>
+<text x="1027" y="477" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#667393" text-anchor="start" >Unit Price</text>
+<text x="1142" y="477" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#667393" text-anchor="start" >Amount</text>
+<path d="M800,528 L1268,528" stroke="#e7ebf8" stroke-width="1" opacity="1" fill="none"/>
+<text x="812" y="518" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >Air Freight</text>
+<text x="982" y="518" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >1</text>
+<text x="1027" y="518" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >$38,000</text>
+<text x="1142" y="518" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >$38,000</text>
+<path d="M800,566 L1268,566" stroke="#e7ebf8" stroke-width="1" opacity="1" fill="none"/>
+<text x="812" y="556" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >Handling</text>
+<text x="982" y="556" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >1</text>
+<text x="1027" y="556" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >$2,400</text>
+<text x="1142" y="556" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >$2,400</text>
+<path d="M800,604 L1268,604" stroke="#e7ebf8" stroke-width="1" opacity="1" fill="none"/>
+<text x="812" y="594" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >Documentation</text>
+<text x="982" y="594" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >1</text>
+<text x="1027" y="594" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >$1,200</text>
+<text x="1142" y="594" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >$1,200</text>
+<path d="M800,642 L1268,642" stroke="#e7ebf8" stroke-width="1" opacity="1" fill="none"/>
+<text x="812" y="632" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >Insurance</text>
+<text x="982" y="632" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >1</text>
+<text x="1027" y="632" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >$1,000</text>
+<text x="1142" y="632" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="550" fill="#273453" text-anchor="start" >$1,000</text>
+<rect x="800" y="646" width="468" height="26" rx="8" fill="#eae5ff" stroke="none" stroke-width="1" opacity="1" />
+<text x="816" y="665" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="13" font-weight="700" fill="#17213f" text-anchor="start" >Total Amount</text>
+<text x="1250" y="665" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="16" font-weight="800" fill="#632ee5" text-anchor="end" >$42,600</text>
+<rect x="800" y="692" width="130" height="36" rx="13" fill="url(#accent)" stroke="none" stroke-width="1" opacity="1" />
+<text x="865.0" y="715.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="650" fill="#ffffff" text-anchor="middle" >Pay Now</text>
+<rect x="940" y="692" width="140" height="36" rx="13" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="1" />
+<text x="1010.0" y="715.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="650" fill="#26345b" text-anchor="middle" >Download</text>
+<rect x="1090" y="692" width="175" height="36" rx="13" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="1" />
+<text x="1177.5" y="715.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="650" fill="#26345b" text-anchor="middle" >Share Invoice</text>
+<rect x="1313" y="326" width="321" height="360" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="1337" y="364" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="20" font-weight="750" fill="#17213f" text-anchor="start" >Payment Methods</text>
+<rect x="1330" y="383" width="287" height="54" rx="12" fill="#f5f6ff" stroke="#e4e8f6" stroke-width="1" opacity="1" />
+<circle cx="1351" cy="410" r="8" fill="#7850ef" stroke="#aab6dc" stroke-width="1.5" opacity="1" />
+<text x="1372" y="406" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#17213f" text-anchor="start" >Company Balance</text>
+<text x="1372" y="425" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#7180a0" text-anchor="start" >Available: $285,000</text>
+<rect x="1330" y="446" width="287" height="54" rx="12" fill="#f5f6ff" stroke="#e4e8f6" stroke-width="1" opacity="1" />
+<circle cx="1351" cy="473" r="8" fill="#ffffff" stroke="#aab6dc" stroke-width="1.5" opacity="1" />
+<text x="1372" y="469" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#17213f" text-anchor="start" >Credit / Debit Card</text>
+<text x="1372" y="488" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#7180a0" text-anchor="start" >Visa, Mastercard</text>
+<rect x="1330" y="509" width="287" height="54" rx="12" fill="#f5f6ff" stroke="#e4e8f6" stroke-width="1" opacity="1" />
+<circle cx="1351" cy="536" r="8" fill="#ffffff" stroke="#aab6dc" stroke-width="1.5" opacity="1" />
+<text x="1372" y="532" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#17213f" text-anchor="start" >Bank Transfer (ACH)</text>
+<text x="1372" y="551" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#7180a0" text-anchor="start" >1–3 business days</text>
+<rect x="1330" y="572" width="287" height="54" rx="12" fill="#f5f6ff" stroke="#e4e8f6" stroke-width="1" opacity="1" />
+<circle cx="1351" cy="599" r="8" fill="#ffffff" stroke="#aab6dc" stroke-width="1.5" opacity="1" />
+<text x="1372" y="595" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="700" fill="#17213f" text-anchor="start" >Wire Transfer</text>
+<text x="1372" y="614" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="10" font-weight="500" fill="#7180a0" text-anchor="start" >International payments</text>
+<rect x="278" y="710" width="480" height="200" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="300" y="748" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="19" font-weight="750" fill="#17213f" text-anchor="start" >Spending by Category</text>
+<circle cx="390" cy="820" r="60" fill="none" stroke="#8250ef" stroke-width="16" opacity="1" />
+<circle cx="390" cy="820" r="60" fill="none" stroke="#2689ff" stroke-width="16" opacity="1" stroke-dasharray="100 277" stroke-dashoffset="-145"/>
+<circle cx="390" cy="820" r="60" fill="none" stroke="#30c07c" stroke-width="16" opacity="1" stroke-dasharray="65 312" stroke-dashoffset="-247"/>
+<text x="390" y="825" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="17" font-weight="800" fill="#17213e" text-anchor="middle" >$2.19M</text>
+<text x="500" y="790" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Air Freight</text>
+<text x="725" y="790" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="750" fill="#3e4f75" text-anchor="end" >42%</text>
+<text x="500" y="818" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Ocean Freight</text>
+<text x="725" y="818" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="750" fill="#3e4f75" text-anchor="end" >28%</text>
+<text x="500" y="846" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Road Freight</text>
+<text x="725" y="846" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="750" fill="#3e4f75" text-anchor="end" >18%</text>
+<text x="500" y="874" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#17213f" text-anchor="start" >Other</text>
+<text x="725" y="874" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="750" fill="#3e4f75" text-anchor="end" >12%</text>
+<rect x="778" y="710" width="515" height="200" rx="22" fill="url(#glass)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="802" y="748" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="19" font-weight="750" fill="#17213f" text-anchor="start" >Monthly Spend Trend</text>
+<path d="M800,792.0 L1265,792.0" stroke="#e1e6f6" stroke-width="1" opacity="0.9" fill="none"/>
+<path d="M800,820.0 L1265,820.0" stroke="#e1e6f6" stroke-width="1" opacity="0.9" fill="none"/>
+<path d="M800,848.0 L1265,848.0" stroke="#e1e6f6" stroke-width="1" opacity="0.9" fill="none"/>
+<rect x="810.0" y="835.68" width="25.833333333333332" height="40.32" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="847.0833333333334" y="822.24" width="25.833333333333332" height="53.76" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="884.1666666666666" y="828.96" width="25.833333333333332" height="47.04" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="921.25" y="806.56" width="25.833333333333332" height="69.44" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="958.3333333333334" y="799.84" width="25.833333333333332" height="76.16000000000001" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="995.4166666666666" y="814.4" width="25.833333333333332" height="61.60000000000001" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="1032.5" y="794.24" width="25.833333333333332" height="81.75999999999999" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="1069.5833333333333" y="785.28" width="25.833333333333332" height="90.72" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="1106.6666666666667" y="804.3199999999999" width="25.833333333333332" height="71.68" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="1143.75" y="790.88" width="25.833333333333332" height="85.12" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="1180.8333333333333" y="775.2" width="25.833333333333332" height="100.8" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="1217.9166666666667" y="767.36" width="25.833333333333332" height="108.64" rx="6" fill="url(#accent)" stroke="none" stroke-width="1" opacity="0.82" />
+<rect x="1313" y="710" width="321" height="200" rx="22" fill="url(#accent)" stroke="#ffffff" stroke-width="1.2" opacity="0.92" filter="url(#shadow)"/>
+<text x="1337" y="748" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="18" font-weight="750" fill="#ffffff" text-anchor="start" >✦ Veyra AI Insight</text>
+<text x="1337" y="783" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#ffffff" text-anchor="start" >3 invoices are due soon.</text>
+<text x="1337" y="806" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#ffffff" text-anchor="start" >Review carrier mix to reduce</text>
+<text x="1337" y="829" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="12" font-weight="550" fill="#ffffff" text-anchor="start" >costs on upcoming routes.</text>
+<rect x="1337" y="852" width="220" height="36" rx="13" fill="#f5f6ff" stroke="#ffffff" stroke-width="1" opacity="1" />
+<text x="1447.0" y="875.0" font-family="Inter, SF Pro Display, Arial, sans-serif" font-size="14" font-weight="650" fill="#26345b" text-anchor="middle" >Optimize Costs with AI</text>
+</svg>
