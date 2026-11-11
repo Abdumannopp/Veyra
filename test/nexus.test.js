@@ -13,7 +13,6 @@ process.env.API_RATE_LIMIT_MAX = '5000';
 process.env.WEIGHT_UNIT = 'kg';
 process.env.CURRENCY = 'UZS';
 process.env.MAX_RATE = '100000000';
-process.env.MESSAGE_LANGUAGE = 'en';
 process.env.OPENROUTER_API_KEY = 'sk-or-test';
 delete process.env.OPENROUTER_MODEL;
 process.env.MESSAGING_PROVIDER = 'twilio';

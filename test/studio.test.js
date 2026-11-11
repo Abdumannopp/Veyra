@@ -6,7 +6,7 @@ const path = require('node:path');
 const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-studio-'));
-Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 's.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', MESSAGE_LANGUAGE: 'en' });
+Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 's.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000' });
 const { app, initialize } = require('../server');
 const { db } = require('../database');
 const nexus = require('../agents/nexus');

@@ -14,7 +14,6 @@ process.env.BCRYPT_COST = '10';
 process.env.API_RATE_LIMIT_MAX = '5000';
 process.env.WEIGHT_UNIT = 'kg';
 process.env.CURRENCY = 'USD';
-process.env.MESSAGE_LANGUAGE = 'en';
 process.env.OPENROUTER_API_KEY = 'sk-or-test';
 process.env.MESSAGING_PROVIDER = 'twilio';
 process.env.TWILIO_ACCOUNT_SID = 'AC00000000000000000000000000000000';
@@ -141,9 +140,9 @@ after(async () => {
 
 test('multipart parser: fields, binary files, and refusal of broken or oversized forms', () => {
   const binary = crypto.randomBytes(5000);
-  const form = multipart({ subject: 'Salom', text: 'line1\r\nline2' }, [{ field: 'attachment1', filename: 'a "b".pdf'.replace(/"/g, ''), content: binary }]);
+  const form = multipart({ subject: 'Hello', text: 'line1\r\nline2' }, [{ field: 'attachment1', filename: 'a "b".pdf'.replace(/"/g, ''), content: binary }]);
   const parsed = parseMultipart(form.body, form.contentType);
-  assert.equal(parsed.fields.subject, 'Salom');
+  assert.equal(parsed.fields.subject, 'Hello');
   assert.equal(parsed.fields.text, 'line1\r\nline2');
   assert.equal(parsed.files.length, 1);
   assert.ok(parsed.files[0].content.equals(binary), 'file bytes are unchanged');
@@ -157,7 +156,7 @@ test('document type and load number are guessed from names and words', () => {
   assert.equal(guessDocumentType('CMR_123.pdf'), 'cmr');
   assert.equal(guessDocumentType('scan.pdf', 'here is the cmr'), 'cmr');
   assert.equal(guessDocumentType('POD-signed.jpg'), 'pod');
-  assert.equal(guessDocumentType('IMG_0001.jpg', 'yuk topshirildi'), 'pod');
+  assert.equal(guessDocumentType('IMG_0001.jpg', 'proof of delivery attached'), 'pod');
   assert.equal(guessDocumentType('podium.pdf'), null);
   assert.equal(guessDocumentType('invoice.pdf'), null);
   assert.deepEqual(mentionedShipmentIds('re: SHP-12 and shp 7, also SHP#12'), [12, 7]);

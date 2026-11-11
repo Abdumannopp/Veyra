@@ -6,7 +6,7 @@ const path = require('node:path');
 const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-cc-'));
-Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'c.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', CURRENCY: 'USD', MESSAGE_LANGUAGE: 'en', OPENROUTER_API_KEY: 'sk-or-test' });
+Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'c.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', CURRENCY: 'USD', OPENROUTER_API_KEY: 'sk-or-test' });
 const { app, initialize } = require('../server');
 const { db } = require('../database');
 const aiGateway = require('../ai/gateway');

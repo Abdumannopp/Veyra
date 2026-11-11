@@ -22,7 +22,6 @@ const geo = require('../integrations/geo');
 
 const defaults = {
   flow: { weightUnit: 'kg', currency: 'USD', equipment: [], maxRate: 10000000, maxWeight: 1000000 },
-  language: 'en',
   staleHours: 12,
   aiDailyLimit: 300,
   formatMoney: (value) => String(value)
@@ -296,7 +295,7 @@ async function onShipmentDispatched({ tenantId, shipmentId }) {
 async function draftMessageTask(tenantId, shipment, recipient, purpose, dedupeKey, extraTitle = '') {
   const tenant = await db.getTenant(tenantId);
   const draft = relayAgent.draftMessage({
-    shipment, recipient, purpose, language: settings.language, company: tenant?.name || '', formatMoney: settings.formatMoney
+    shipment, recipient, purpose, company: tenant?.name || '', formatMoney: settings.formatMoney
   });
   if (!draft?.to) return false;
   const what = { booking_confirmation: 'booking', pickup_details: 'pickup details', location_request: 'ask for location', status_update: 'status update', delivered: 'delivered' }[draft.purpose] || draft.purpose;
@@ -305,7 +304,7 @@ async function draftMessageTask(tenantId, shipment, recipient, purpose, dedupeKe
     title: `Message the ${recipient} about SHP-${shipment.id}: ${what}${extraTitle}`,
     shipmentId: shipment.id,
     dedupeKey,
-    payload: { recipient, purpose: draft.purpose, language: draft.language, body: draft.body, to: draft.to }
+    payload: { recipient, purpose: draft.purpose, body: draft.body, to: draft.to }
   });
   return result.created;
 }

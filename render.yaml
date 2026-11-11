@@ -34,8 +34,6 @@ services:
         value: USD
       - key: MAX_RATE
         value: "10000000"
-      - key: MESSAGE_LANGUAGE
-        value: uz
       # Encrypts each company's saved Twilio token. Keep it; if it changes, Twilio settings are entered again.
       - key: SECRETS_KEY
         generateValue: true

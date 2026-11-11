@@ -177,10 +177,9 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || (isProduction ? '0.0.0.0' : '127.0.0.1');
 const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? null : 'veyra-dev-secret');
 
-// Region settings: one product, configured per deployment (kg or lb, local currency, message language).
+// Region settings: one product, configured per deployment (kg or lb, local currency).
 const WEIGHT_UNIT = ['kg', 'lb'].includes(String(process.env.WEIGHT_UNIT).toLowerCase()) ? String(process.env.WEIGHT_UNIT).toLowerCase() : 'kg';
 const CURRENCY = /^[A-Z]{3}$/.test(String(process.env.CURRENCY || '')) ? process.env.CURRENCY : 'USD';
-const MESSAGE_LANGUAGE = relayAgent.LANGUAGES.includes(String(process.env.MESSAGE_LANGUAGE || '').toLowerCase()) ? String(process.env.MESSAGE_LANGUAGE).toLowerCase() : 'en';
 const EQUIPMENT = ['Dry Van', 'Tent / Curtainsider', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
 const MAX_WEIGHT = 1000000;
 // Sanity bound for money fields. Raise MAX_RATE for currencies with large numbers (e.g. UZS).
@@ -262,7 +261,6 @@ const parseMoney = (value) => parseMoneyUpTo(value, MAX_RATE);
 
 nexus.configure({
   flow: { weightUnit: WEIGHT_UNIT, currency: CURRENCY, equipment: EQUIPMENT, maxRate: MAX_RATE, maxWeight: MAX_WEIGHT },
-  language: MESSAGE_LANGUAGE,
   staleHours: STALE_TRACKING_HOURS,
   aiDailyLimit: AI_DAILY_LIMIT_PER_TENANT,
   formatMoney: (value) => {
@@ -742,7 +740,6 @@ app.get('/api/config', (req, res) => {
     staleTrackingHours: STALE_TRACKING_HOURS,
     ai: { enabled: aiGateway.isEnabled() },
     // Which channels can send depends on the company: see GET /api/messaging/status (after sign-in).
-    messaging: { language: MESSAGE_LANGUAGE, languages: relayAgent.LANGUAGES },
     documents: { maxMb: DOC_MAX_BYTES / (1024 * 1024), types: DOC_MIME_TYPES },
     nexus: { enabled: process.env.NEXUS_ENABLED !== 'false' }
   });
@@ -1895,7 +1892,7 @@ app.get('/api/shipments/:id/messages', authMiddleware, requirePermission('shipme
 
 app.post('/api/shipments/:id/messages/draft', authMiddleware, requirePermission('shipments:message'), async (req, res) => {
   const shipmentId = parseShipmentId(req.params.id);
-  const { recipient, purpose, language } = req.body || {};
+  const { recipient, purpose } = req.body || {};
   if (!shipmentId || !MESSAGE_RECIPIENTS.includes(recipient)) {
     return res.status(400).json({ success: false, message: `Choose who the message is for: ${MESSAGE_RECIPIENTS.join(', ')}.` });
   }
@@ -1906,7 +1903,6 @@ app.post('/api/shipments/:id/messages/draft', authMiddleware, requirePermission(
       shipment,
       recipient,
       purpose,
-      language: typeof language === 'string' ? language : MESSAGE_LANGUAGE,
       company: req.user.tenantName,
       formatMoney
     });
