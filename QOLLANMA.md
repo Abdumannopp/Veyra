@@ -291,3 +291,15 @@ Chap menyuda **Tracking**. Bu sahifada yo'ldagi barcha yuklar ko'rinadi:
 - pastda: barcha yuklar ro'yxati va faol ogohlantirishlar.
 
 Xarita shahar joylashuvini bilishi uchun `.env` faylida `GEO_PROVIDER=osm` bo'lishi kerak. Sahifa har 2 daqiqada o'zi yangilanadi.
+
+## Automation Studio (o'z qoidalaringiz)
+
+Chap menyuda **Automation Studio**. Bu yerda kod yozmasdan qoida tuzasiz: "yuk bilan shu narsa bo'lsa, keyingi qadamni tayyorla".
+- **1. When (qachon):** yangi yuk yaratilsa, yuk holati o'zgarsa (masalan Exception yoki Delivered), mashina band qilinsa yoki hujjat yuklansa.
+- **2. Only if (faqat agar, ixtiyoriy):** mijoz, qayerdan, qayerga yoki transport turi shu so'zni o'z ichiga olsa (masalan, qayerga = "RU").
+- **3. Then (unda):** vazifa yaratish yoki mijozga, tashuvchiga, haydovchiga xabar qoralamasi tayyorlash. Vazifa nomida `{id}`, `{customer}`, `{origin}`, `{destination}`, `{status}` yuk ma'lumotiga almashadi.
+- **Run test:** yuk raqamini yozing (masalan SHP-12) va qoida unga mos kelishini ko'ring. Test hech narsa yaratmaydi.
+- **Templates:** tayyor qoidalar, bir bosishda qo'shiladi va o'zgartirsa bo'ladi.
+- **Runs & history:** har bir qoida qachon, qaysi yukda ishlagani va natijasi.
+
+Qoidalar faqat tayyorlaydi: xabarni yuborish va mashinani band qilish baribir odamning tugmasi bilan bo'ladi. Qoidani faqat administrator o'zgartira oladi.

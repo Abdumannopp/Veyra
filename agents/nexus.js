@@ -10,6 +10,7 @@
 // Every reaction is idempotent (tasks carry a dedupe key), runs after the web request has
 // finished, and failures are logged, never thrown at the person who triggered the event.
 const db = require('../database');
+const studio = require('./studio');
 const aiGateway = require('../ai/gateway');
 const flowAgent = require('./flow');
 const scoutAgent = require('./scout');
@@ -88,6 +89,56 @@ async function aiAvailable(tenantId) {
 }
 
 async function handle(event, context) {
+  await handleBuiltIn(event, context);
+  if (WORKFLOW_EVENTS.includes(event)) await runWorkflows(event, context);
+}
+
+/* ---------- Automation Studio: the company's own rules ---------- */
+const WORKFLOW_EVENTS = Object.keys(studio.TRIGGERS);
+
+// Runs after the built-in reaction, so a rule sees the load as the built-in jobs left it.
+// A rule that fails does not stop the others; each run is logged for "Runs & history".
+async function runWorkflows(event, context) {
+  const { tenantId, shipmentId } = context || {};
+  if (!tenantId || !shipmentId) return;
+  const workflows = await db.listActiveWorkflows(tenantId, event);
+  if (!workflows.length) return;
+  const shipment = await db.getShipment(tenantId, shipmentId);
+  if (!shipment) return;
+  const facts = { type: event, status: context.status || shipment.status };
+  // One run per rule, load and moment: the same status reached twice runs again, a repeated event does not.
+  const moment = event === 'document.uploaded' ? `doc${context.documentId}` : event === 'shipment.status' ? `${facts.status}:${await db.countStatusReached(tenantId, shipmentId, facts.status)}` : event === 'shipment.dispatched' ? `booked:${await db.countStatusReached(tenantId, shipmentId, 'Dispatched')}` : 'once';
+  for (const workflow of workflows) {
+    if (!studio.evaluate(workflow, facts, shipment).matched) continue;
+    const done = [];
+    try {
+      for (const [index, action] of workflow.actions.entries()) {
+        const dedupeKey = `wf:${workflow.id}:${shipmentId}:${moment}:${index}`;
+        if (action.type === 'create_task') {
+          const result = await db.createTask(tenantId, {
+            kind: 'attention',
+            title: studio.fillText(action.title, shipment).slice(0, 200),
+            shipmentId,
+            dedupeKey,
+            payload: { text: action.note ? studio.fillText(action.note, shipment) : `Created by the workflow "${workflow.name}".`, workflow: workflow.name }
+          });
+          done.push(result.created ? 'task created' : 'task already open');
+        } else {
+          const recipient = studio.ACTIONS[action.type].recipient;
+          const created = await draftMessageTask(tenantId, shipment, recipient, action.purpose, dedupeKey, ` (${workflow.name})`);
+          done.push(created ? `${recipient} message drafted` : `no ${recipient} phone, message skipped`);
+        }
+      }
+      await db.recordWorkflowRun(tenantId, { workflowId: workflow.id, shipmentId, status: 'done', detail: done.join('; ') });
+    } catch (error) {
+      console.error(`[NEXUS] workflow ${workflow.id} failed:`, error.message);
+      await db.recordWorkflowRun(tenantId, { workflowId: workflow.id, shipmentId, status: 'failed', detail: [...done, `stopped: ${error.message}`].join('; ').slice(0, 300) })
+        .catch(() => {});
+    }
+  }
+}
+
+async function handleBuiltIn(event, context) {
   switch (event) {
     case 'inbox.received': return onInboxReceived(context);
     case 'shipment.status': return onShipmentStatus(context);

@@ -77,6 +77,14 @@ const {
   getPulseData,
   listSentinelLoads,
   listTrackingOverview,
+  listWorkflows,
+  getWorkflow,
+  createWorkflow,
+  updateWorkflow,
+  setWorkflowEnabled,
+  deleteWorkflow,
+  listWorkflowRuns,
+  getWorkflowStats,
   getInboxItem,
   listInboxItems,
   countInboxItemsToday,
@@ -133,6 +141,7 @@ const vaultAgent = require('./agents/vault');
 const routeAgent = require('./agents/route');
 const pulseAgent = require('./agents/pulse');
 const sentinelAgent = require('./agents/sentinel');
+const studio = require('./agents/studio');
 const nexus = require('./agents/nexus');
 const { parseInbound, senderAllowed, mentionedShipmentIds, guessDocumentType, stripHtml } = require('./lib/inbound-email');
 const messaging = require('./integrations/messaging');
@@ -1023,6 +1032,7 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       tenantId: req.user.tenantId
     });
 
+    nexus.emit('shipment.created', { tenantId: req.user.tenantId, shipmentId: parseShipmentId(shipment.id) });
     let documentsAttached = 0;
     if (inboxId !== null) {
       const newId = parseShipmentId(shipment.id);
@@ -1312,6 +1322,121 @@ app.get('/api/tracking/overview', authMiddleware, requirePermission('shipments:r
     });
   } catch (error) {
     return sendError(res, error, 'Tracking unavailable.', 'tracking overview');
+  }
+});
+
+/* =========================================================
+   AUTOMATION STUDIO: the company's own "when ... then ..." rules
+   ========================================================= */
+const workflowId = (value) => (/^\d{1,9}$/.test(String(value)) ? Number(value) : null);
+
+app.get('/api/automation/studio', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const [tenant, workflows, runs, stats] = await Promise.all([
+      getTenant(req.user.tenantId), listWorkflows(req.user.tenantId), listWorkflowRuns(req.user.tenantId, 50), getWorkflowStats(req.user.tenantId)
+    ]);
+    const builtIn = studio.BUILT_IN.map((item) => ({ ...item, on: tenant.automationSettings?.[item.key] !== false }));
+    const active = workflows.filter((workflow) => workflow.enabled).length + builtIn.filter((item) => item.on).length;
+    return res.json({
+      success: true,
+      nexus: { enabled: process.env.NEXUS_ENABLED !== 'false' },
+      canChange: hasPermission(req.user, 'settings:write'),
+      stats: {
+        active,
+        custom: workflows.length,
+        runs30: stats.runs30,
+        successRate: stats.runs30 ? Math.round(((stats.runs30 - stats.failed30) / stats.runs30) * 100) : null
+      },
+      builtIn,
+      workflows: workflows.map((workflow) => ({
+        ...workflow,
+        triggerText: studio.describeTrigger(workflow),
+        actionTexts: workflow.actions.map((action) => studio.describeAction(action))
+      })),
+      runs,
+      templates: studio.TEMPLATES,
+      options: {
+        triggers: studio.TRIGGERS,
+        statuses: studio.STATUSES,
+        fields: studio.FIELDS,
+        actions: Object.fromEntries(Object.entries(studio.ACTIONS).map(([key, spec]) => [key, { label: spec.label, purposes: spec.purposes || null }])),
+        purposes: studio.PURPOSE_LABELS,
+        limits: studio.LIMITS
+      }
+    });
+  } catch (error) {
+    return sendError(res, error, 'Automation Studio unavailable.', 'automation studio');
+  }
+});
+
+app.post('/api/automation/workflows', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const fields = studio.validateWorkflow(req.body);
+    const workflow = await createWorkflow(req.user.tenantId, fields, req.user.id, studio.LIMITS.perCompany);
+    audit(req, 'workflow.created', `${workflow.name} (#${workflow.id})`);
+    return res.status(201).json({ success: true, workflow });
+  } catch (error) {
+    return sendError(res, error, 'The workflow could not be saved.', 'workflow create');
+  }
+});
+
+app.put('/api/automation/workflows/:id', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const id = workflowId(req.params.id);
+    if (!id) return res.status(404).json({ success: false, message: 'Workflow not found.' });
+    const fields = studio.validateWorkflow(req.body);
+    const workflow = await updateWorkflow(req.user.tenantId, id, fields);
+    audit(req, 'workflow.changed', `${workflow.name} (#${id})`);
+    return res.json({ success: true, workflow });
+  } catch (error) {
+    return sendError(res, error, 'The workflow could not be saved.', 'workflow update');
+  }
+});
+
+app.patch('/api/automation/workflows/:id', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const id = workflowId(req.params.id);
+    if (!id || typeof req.body?.enabled !== 'boolean') return res.status(400).json({ success: false, message: 'Send enabled: true or false.' });
+    const workflow = await setWorkflowEnabled(req.user.tenantId, id, req.body.enabled);
+    audit(req, 'workflow.changed', `${workflow.name} (#${id}): ${workflow.enabled ? 'on' : 'off'}`);
+    return res.json({ success: true, workflow });
+  } catch (error) {
+    return sendError(res, error, 'The workflow could not be changed.', 'workflow toggle');
+  }
+});
+
+app.delete('/api/automation/workflows/:id', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const id = workflowId(req.params.id);
+    const current = id ? await getWorkflow(req.user.tenantId, id) : null;
+    if (!current) return res.status(404).json({ success: false, message: 'Workflow not found.' });
+    await deleteWorkflow(req.user.tenantId, id);
+    audit(req, 'workflow.deleted', `${current.name} (#${id})`);
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'The workflow could not be deleted.', 'workflow delete');
+  }
+});
+
+// "Run test": checks a rule (saved or not yet saved) against one load. Changes nothing.
+app.post('/api/automation/test', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const workflow = studio.validateWorkflow(req.body?.workflow);
+    const shipmentId = parseShipmentId(req.body?.shipmentId);
+    const shipment = shipmentId ? await getShipment(req.user.tenantId, shipmentId) : null;
+    if (!shipment) return res.status(404).json({ success: false, message: 'Load not found.' });
+    // The test pretends the trigger just happened to this load.
+    const result = studio.evaluate(workflow, { type: workflow.trigger, status: workflow.triggerStatus }, shipment);
+    return res.json({
+      success: true,
+      shipment: { id: `SHP-${shipment.id}`, customer: shipment.customer, origin: shipment.origin, destination: shipment.destination, equipment: shipment.equipment, status: shipment.status },
+      trigger: studio.describeTrigger(workflow),
+      conditions: result.conditions,
+      matched: result.matched,
+      actions: result.matched ? workflow.actions.map((action) => studio.describeAction(action, shipment)) : []
+    });
+  } catch (error) {
+    return sendError(res, error, 'The test could not run.', 'workflow test');
   }
 });
 

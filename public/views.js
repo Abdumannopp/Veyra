@@ -7,7 +7,7 @@
    fetchDashboardData, loadAdminConsole.
    ========================================================= */
 (function () {
-  const VIEWS = ['dashboard', 'shipments', 'tracking', 'quotes', 'inbox', 'command', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
+  const VIEWS = ['dashboard', 'shipments', 'tracking', 'quotes', 'inbox', 'command', 'automation', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
   const STATUS_ORDER = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
   const STATUS_COLORS = {
     New: '#2563ff',
@@ -153,7 +153,7 @@
     const { view, params } = parseHash();
     state.view = view;
     state.params = params;
-    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', tracking: 'Global Tracking', quotes: 'Quotes', command: 'AI Command Center', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
+    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', tracking: 'Global Tracking', quotes: 'Quotes', command: 'AI Command Center', automation: 'Automation Studio', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
     document.title = `${TITLES[view]} | Veyra`;
 
     document.querySelectorAll('.view[data-view]').forEach((node) => node.classList.toggle('hidden', node.dataset.view !== view));
@@ -192,6 +192,9 @@
     } else if (view === 'command') {
       if (search) search.value = '';
       renderCommand();
+    } else if (view === 'automation') {
+      if (search) search.value = '';
+      renderStudio();
     } else if (view === 'tracking') {
       if (search) search.value = '';
       renderTracking();
@@ -1795,6 +1798,298 @@
   }
 
   /* =========================================================
+     AUTOMATION STUDIO: "when ... then ..." rules, drawn as a flow
+     ========================================================= */
+  const studioState = { tab: 'workflows', selected: null, draft: null, data: null, testLoad: '', test: null };
+  const blankWorkflow = () => ({ name: 'New workflow', description: '', trigger: 'shipment.status', triggerStatus: 'Delivered', conditions: [], actions: [{ type: 'create_task', title: 'Check {id} · {customer}', note: '' }], enabled: true });
+  const copyRule = (rule) => JSON.parse(JSON.stringify({
+    name: rule.name, description: rule.description || '', trigger: rule.trigger, triggerStatus: rule.triggerStatus || null,
+    conditions: rule.conditions || [], actions: rule.actions || [], enabled: rule.enabled !== false
+  }));
+
+  async function renderStudio(keepDraft = false) {
+    const container = document.getElementById('studioView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!container.children.length) loading(container);
+    try {
+      studioState.data = await api('/api/automation/studio');
+    } catch (error) {
+      return errorState(container, error.message, () => renderStudio());
+    }
+    if (state.view !== 'automation') return;
+    const data = studioState.data;
+    const exists = (key) => (key?.startsWith('w:') ? data.workflows.some((w) => `w:${w.id}` === key) : key?.startsWith('b:') ? data.builtIn.some((b) => `b:${b.key}` === key) : key === 'new');
+    if (!exists(studioState.selected)) {
+      studioState.selected = data.workflows[0] ? `w:${data.workflows[0].id}` : `b:${data.builtIn[0].key}`;
+      keepDraft = false;
+    }
+    if (!keepDraft) loadDraft();
+    drawStudio();
+  }
+
+  function loadDraft() {
+    const { data, selected } = studioState;
+    studioState.test = null;
+    if (selected === 'new') return;
+    const rule = selected.startsWith('w:') ? data.workflows.find((w) => `w:${w.id}` === selected) : null;
+    studioState.draft = rule ? copyRule(rule) : null;
+  }
+
+  function selectStudio(key, draft = null) {
+    studioState.selected = key;
+    studioState.tab = 'workflows';
+    if (draft) {
+      studioState.draft = draft;
+      studioState.test = null;
+    } else loadDraft();
+    drawStudio();
+  }
+
+  function drawStudio() {
+    const container = document.getElementById('studioView');
+    const data = studioState.data;
+    if (!container || !data) return;
+    const stats = data.stats;
+    const kpis = el('div', { class: 'stats-grid kpi-grid' }, [
+      kpiCard('Active flows', String(stats.active), `${stats.custom} of your own, ${data.builtIn.length} built in`, 'bolt', 'violet'),
+      kpiCard('Runs', String(stats.runs30), 'Your workflows, last 30 days', 'check-square', 'blue'),
+      kpiCard('Success rate', stats.successRate === null ? '—' : `${stats.successRate}%`, stats.runs30 ? 'Runs that finished every step' : 'No runs yet', 'check-circle', 'green'),
+      kpiCard('Prepared, not sent', 'Always', 'Rules prepare tasks and drafts; people send', 'eye', 'amber')
+    ]);
+    const tabs = el('div', { class: 'studio-bar' }, [
+      el('div', { class: 'studio-tabs', role: 'tablist' }, [['workflows', 'Workflows'], ['templates', `Templates (${data.templates.length})`], ['runs', `Runs & history (${data.runs.length})`]].map(([key, label]) => el('button', {
+        type: 'button', role: 'tab', class: studioState.tab === key ? 'active' : '', 'aria-selected': String(studioState.tab === key),
+        onclick: () => { studioState.tab = key; drawStudio(); }
+      }, label))),
+      data.canChange ? el('button', { class: 'btn btn-primary small', type: 'button', onclick: () => selectStudio('new', blankWorkflow()) }, '+ Create workflow') : null
+    ]);
+    const warn = data.nexus.enabled ? null : el('p', { class: 'warn-line', text: 'NEXUS is switched off on the server (NEXUS_ENABLED=false), so no workflow runs.' });
+    let body;
+    if (studioState.tab === 'templates') body = studioTemplates(data);
+    else if (studioState.tab === 'runs') body = studioRuns(data);
+    else body = el('div', { class: 'studio-grid' }, [studioList(data), studioCanvas(data), studioPanel(data)]);
+    container.replaceChildren(...[kpis, tabs, warn, body].filter(Boolean));
+  }
+
+  function studioList(data) {
+    const item = (key, title, sub, on) => el('li', {}, el('button', {
+      type: 'button', class: `studio-item${studioState.selected === key ? ' active' : ''}`, onclick: () => selectStudio(key)
+    }, [el('span', { class: `studio-dot ${on ? 'on' : 'off'}` }), el('span', {}, [el('strong', { text: title }), el('small', { text: sub })])]));
+    return el('div', { class: 'card studio-list' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Your workflows' }), el('small', { text: data.workflows.length ? 'Rules your company wrote' : 'None yet: create one or use a template' })])),
+      el('ul', {}, [
+        studioState.selected === 'new' ? item('new', studioState.draft?.name || 'New workflow', 'Not saved yet', true) : null,
+        ...data.workflows.map((w) => item(`w:${w.id}`, w.name, `${w.triggerText} · ${w.runs30} run${w.runs30 === 1 ? '' : 's'}`, w.enabled))
+      ]),
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Built in' }), el('small', { text: 'What the agents do by themselves' })])),
+      el('ul', {}, data.builtIn.map((b) => item(`b:${b.key}`, b.name, b.trigger, b.on)))
+    ]);
+  }
+
+  // The selected rule drawn top to bottom: trigger, conditions, each action, done.
+  function studioCanvas(data) {
+    const { selected, draft } = studioState;
+    const opts = data.options;
+    let title; let on; let nodes;
+    if (selected.startsWith('b:')) {
+      const b = data.builtIn.find((x) => `b:${x.key}` === selected);
+      title = b.name; on = b.on;
+      nodes = [['trigger', 'Trigger', b.trigger], ...b.steps.map((step) => ['ai', 'AI step', step]), ['action', 'Result', b.result]];
+    } else {
+      title = draft.name || 'Untitled'; on = draft.enabled;
+      const triggerText = draft.trigger === 'shipment.status' ? `A load becomes ${draft.triggerStatus || '…'}` : opts.triggers[draft.trigger];
+      nodes = [['trigger', 'Trigger', triggerText]];
+      if (draft.conditions.length) nodes.push(['check', 'Only if', draft.conditions.map((c) => `${opts.fields[c.field]} contains "${c.value || '…'}"`).join(' and ')]);
+      draft.actions.forEach((a) => nodes.push(['action', opts.actions[a.type]?.label || 'Action', a.type === 'create_task' ? (a.title || '…') : (opts.purposes[a.purpose] || a.purpose)]));
+    }
+    nodes.push(['done', 'Complete', 'Waits in Inbox & tasks for a person']);
+    return el('div', { class: 'card studio-canvas' }, [
+      el('div', { class: 'mini-head' }, [
+        el('span', {}, [el('strong', { text: title }), el('small', { text: selected.startsWith('b:') ? 'Built-in workflow' : selected === 'new' ? 'Draft' : 'Your workflow' })]),
+        el('span', { class: `agent-state ${on ? 'on' : 'off'}`, text: on ? 'Active' : 'Off' })
+      ]),
+      el('ol', { class: 'flow' }, nodes.map(([kind, label, text]) => el('li', { class: `flow-node ${kind}` }, [el('strong', { text: label }), el('small', { text })])))
+    ]);
+  }
+
+  function studioPanel(data) {
+    const { selected } = studioState;
+    if (selected.startsWith('b:')) {
+      const b = data.builtIn.find((x) => `b:${x.key}` === selected);
+      const input = el('input', { type: 'checkbox', role: 'switch', 'aria-label': b.name, disabled: !data.canChange });
+      input.checked = b.on;
+      input.addEventListener('change', async () => {
+        input.disabled = true;
+        try {
+          await api('/api/settings/automations', { method: 'PUT', body: JSON.stringify({ [b.key]: input.checked }) });
+          toast(`${b.name}: ${input.checked ? 'on' : 'off'}.`);
+          await renderStudio(true);
+        } catch (error) {
+          input.checked = !input.checked;
+          input.disabled = false;
+          toast(error.message, 'error');
+        }
+      });
+      return el('div', { class: 'card studio-panel' }, [
+        el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Step configuration' }), el('small', { text: 'Built-in workflows can be switched on or off' })])),
+        el('div', { class: 'studio-row' }, [el('span', { text: 'Runs automatically' }), el('label', { class: 'switch' }, [input, el('span', { class: 'switch-track', 'aria-hidden': 'true' })])]),
+        el('p', { class: 'muted', text: `When: ${b.trigger}. Then: ${b.steps.join(', ')}. Result: ${b.result}.` }),
+        data.canChange ? null : el('p', { class: 'muted', text: 'Only an administrator can change workflows.' }),
+        el('div', { class: 'studio-tip' }, [el('strong', { text: 'Veyra AI tip' }), el('small', { text: 'Need something these do not cover? Create your own workflow or start from a template.' })])
+      ]);
+    }
+    return studioEditor(data);
+  }
+
+  function studioEditor(data) {
+    const draft = studioState.draft;
+    const opts = data.options;
+    const ro = !data.canChange;
+    const redraw = (_value, typing = false) => {
+      if (!typing) return drawStudio();
+      const canvas = document.querySelector('#studioView .studio-canvas');
+      if (canvas) canvas.replaceWith(studioCanvas(data));
+    };
+    const select = (value, entries, onchange, label) => {
+      const node = el('select', { 'aria-label': label, disabled: ro, onchange: (event) => onchange(event.target.value) }, entries.map(([key, text]) => el('option', { value: key, text })));
+      node.value = value ?? '';
+      return node;
+    };
+    const text = (value, max, onchange, label, placeholder = '') => el('input', {
+      type: 'text', value: value || '', maxlength: max, 'aria-label': label, placeholder, disabled: ro,
+      // Typing only redraws the flow, so the field keeps focus and a click on Save is not lost.
+      oninput: (event) => { onchange(event.target.value, true); }
+    });
+    const field = (label, control) => el('label', { class: 'studio-field' }, [el('span', { text: label }), control]);
+
+    const conditions = draft.conditions.map((c, index) => el('div', { class: 'studio-line' }, [
+      select(c.field, Object.entries(opts.fields), (v) => { c.field = v; redraw(); }, 'Field'),
+      text(c.value, opts.limits.value, (v, t) => { c.value = v; redraw(v, t); }, 'Contains', 'contains…'),
+      ro ? null : el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove condition', onclick: () => { draft.conditions.splice(index, 1); redraw(); } }, '×')
+    ]));
+    const actions = draft.actions.map((a, index) => el('div', { class: 'studio-action' }, [
+      el('div', { class: 'studio-line' }, [
+        select(a.type, Object.entries(opts.actions).map(([k, v]) => [k, v.label]), (v) => {
+          draft.actions[index] = v === 'create_task' ? { type: v, title: 'Check {id}', note: '' } : { type: v, purpose: opts.actions[v].purposes[0] };
+          redraw();
+        }, 'Action'),
+        ro || draft.actions.length < 2 ? null : el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Remove action', onclick: () => { draft.actions.splice(index, 1); redraw(); } }, '×')
+      ]),
+      a.type === 'create_task'
+        ? text(a.title, opts.limits.title, (v, t) => { a.title = v; redraw(v, t); }, 'Task title', 'Task title, e.g. Call {customer} about {id}')
+        : select(a.purpose, opts.actions[a.type].purposes.map((p) => [p, opts.purposes[p]]), (v) => { a.purpose = v; redraw(); }, 'Message')
+    ]));
+
+    const enabled = el('input', { type: 'checkbox', role: 'switch', 'aria-label': 'Active', disabled: ro, onchange: (event) => { draft.enabled = event.target.checked; redraw(); } });
+    enabled.checked = draft.enabled;
+    const isNew = studioState.selected === 'new';
+    const id = isNew ? null : Number(studioState.selected.slice(2));
+
+    async function save(button) {
+      button.disabled = true;
+      try {
+        const result = await api(isNew ? '/api/automation/workflows' : `/api/automation/workflows/${id}`, { method: isNew ? 'POST' : 'PUT', body: JSON.stringify(draft) });
+        toast(`Saved "${result.workflow.name}".`);
+        studioState.selected = `w:${result.workflow.id}`;
+        await renderStudio();
+      } catch (error) {
+        toast(error.message, 'error');
+        button.disabled = false;
+      }
+    }
+    async function remove(button) {
+      if (!window.confirm(`Delete the workflow "${draft.name}"?`)) return;
+      button.disabled = true;
+      try {
+        await api(`/api/automation/workflows/${id}`, { method: 'DELETE' });
+        toast('Workflow deleted.');
+        studioState.selected = null;
+        await renderStudio();
+      } catch (error) {
+        toast(error.message, 'error');
+        button.disabled = false;
+      }
+    }
+    async function runTest(button) {
+      button.disabled = true;
+      try {
+        studioState.test = await api('/api/automation/test', { method: 'POST', body: JSON.stringify({ workflow: draft, shipmentId: studioState.testLoad.trim() }) });
+      } catch (error) {
+        studioState.test = { error: error.message };
+      }
+      redraw();
+    }
+
+    const test = studioState.test;
+    const testResult = !test ? null : test.error ? el('p', { class: 'warn-line', text: test.error }) : el('div', { class: `studio-test ${test.matched ? 'ok' : 'no'}` }, [
+      el('strong', { text: test.matched ? `${test.shipment.id} matches: this would happen` : `${test.shipment.id} does not match` }),
+      el('ul', {}, [
+        ...test.conditions.map((c) => el('li', { text: `${c.ok ? '✓' : '✗'} ${c.label} "${c.actual || '—'}" contains "${c.value}"` })),
+        ...test.actions.map((a) => el('li', { text: `→ ${a}` }))
+      ]),
+      el('small', { class: 'muted', text: 'Test only: nothing was created.' })
+    ]);
+
+    return el('div', { class: 'card studio-panel' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Step configuration' }), el('small', { text: ro ? 'Only an administrator can change workflows' : 'Changes show on the flow right away' })])),
+      field('Name', text(draft.name, opts.limits.name, (v, t) => { draft.name = v; redraw(v, t); }, 'Name')),
+      el('div', { class: 'studio-row' }, [el('span', { text: 'Active' }), el('label', { class: 'switch' }, [enabled, el('span', { class: 'switch-track', 'aria-hidden': 'true' })])]),
+      el('h4', { text: '1. When' }),
+      select(draft.trigger, Object.entries(opts.triggers), (v) => { draft.trigger = v; draft.triggerStatus = v === 'shipment.status' ? (draft.triggerStatus || 'Delivered') : null; redraw(); }, 'Trigger'),
+      draft.trigger === 'shipment.status' ? field('Status', select(draft.triggerStatus, opts.statuses.map((s) => [s, s]), (v) => { draft.triggerStatus = v; redraw(); }, 'Status')) : null,
+      el('h4', { text: '2. Only if (optional)' }),
+      ...conditions,
+      ro || draft.conditions.length >= opts.limits.conditions ? null : el('button', { class: 'btn btn-ghost small', type: 'button', onclick: () => { draft.conditions.push({ field: 'customer', value: '' }); redraw(); } }, '+ Add condition'),
+      el('h4', { text: '3. Then' }),
+      ...actions,
+      ro || draft.actions.length >= opts.limits.actions ? null : el('button', { class: 'btn btn-ghost small', type: 'button', onclick: () => { draft.actions.push({ type: 'create_task', title: '', note: '' }); redraw(); } }, '+ Add action'),
+      el('small', { class: 'muted', text: 'In a task title, {id}, {customer}, {origin}, {destination} and {status} become the load\'s values.' }),
+      el('h4', { text: 'Run test' }),
+      el('div', { class: 'studio-line' }, [
+        el('input', { type: 'text', placeholder: 'Load, e.g. SHP-12', 'aria-label': 'Load to test', value: studioState.testLoad, oninput: (event) => { studioState.testLoad = event.target.value; } }),
+        el('button', { class: 'btn btn-ghost small', type: 'button', onclick: (event) => runTest(event.currentTarget) }, 'Run test')
+      ]),
+      testResult,
+      ro ? null : el('div', { class: 'studio-buttons' }, [
+        el('button', { class: 'btn btn-primary small', type: 'button', onclick: (event) => save(event.currentTarget) }, isNew ? 'Create workflow' : 'Save changes'),
+        isNew ? el('button', { class: 'btn btn-ghost small', type: 'button', onclick: () => { studioState.selected = null; renderStudio(); } }, 'Cancel')
+          : el('button', { class: 'btn btn-ghost small danger', type: 'button', onclick: (event) => remove(event.currentTarget) }, 'Delete')
+      ])
+    ]);
+  }
+
+  function studioTemplates(data) {
+    return el('div', { class: 'studio-templates' }, data.templates.map((t) => el('div', { class: 'card studio-template' }, [
+      el('span', { class: 'stat-icon violet' }, icon('bolt', '')),
+      el('strong', { text: t.name }),
+      el('p', { class: 'muted', text: t.description }),
+      el('ul', {}, [
+        el('li', { text: `When: ${t.trigger === 'shipment.status' ? `a load becomes ${t.triggerStatus}` : data.options.triggers[t.trigger].toLowerCase()}` }),
+        ...t.conditions.map((c) => el('li', { text: `Only if: ${data.options.fields[c.field]} contains "${c.value}"` })),
+        ...t.actions.map((a) => el('li', { text: `Then: ${a.type === 'create_task' ? a.title : `${data.options.actions[a.type].label.toLowerCase()} (${data.options.purposes[a.purpose]})`}` }))
+      ]),
+      data.canChange ? el('button', { class: 'btn btn-primary small', type: 'button', onclick: () => selectStudio('new', copyRule(t)) }, 'Use template') : null
+    ])));
+  }
+
+  function studioRuns(data) {
+    if (!data.runs.length) {
+      return el('div', { class: 'card empty-state' }, [el('span', { class: 'empty-icon' }, icon('check-square')), el('h3', { text: 'No runs yet' }), el('p', { text: 'Each time one of your workflows runs, it is listed here.' })]);
+    }
+    return el('div', { class: 'card table-card' }, el('div', { class: 'table-scroll' }, el('table', { class: 'data-table' }, [
+      el('thead', {}, el('tr', {}, ['When', 'Workflow', 'Load', 'Result', 'What happened'].map((h) => el('th', { text: h })))),
+      el('tbody', {}, data.runs.map((run) => el('tr', {}, [
+        el('td', { text: typeof formatTimestamp === 'function' ? formatTimestamp(run.createdAt) : run.createdAt }),
+        el('td', { text: run.workflowName }),
+        el('td', {}, run.shipmentId ? el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(run.shipmentId) }, run.shipmentId) : '—'),
+        el('td', {}, el('span', { class: `tag ${run.status === 'done' ? 'delivered' : 'exception'}`, text: run.status === 'done' ? 'Done' : 'Failed' })),
+        el('td', { text: run.detail || '' })
+      ])))
+    ])));
+  }
+
+  /* =========================================================
      AI AGENTS: what each agent does, whether it is on, what it did
      ========================================================= */
   const AGENTS = [
@@ -1962,6 +2257,7 @@
     if (state.view === 'quotes') await renderQuotes();
     if (state.view === 'command') await renderCommand();
     if (state.view === 'tracking') await renderTracking();
+    if (state.view === 'automation') await renderStudio(true);
     if (state.view === 'billing') await renderBilling();
     loadNotifications();
   }
