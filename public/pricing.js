@@ -36,6 +36,7 @@
   const money = (n) => `$${Number(n).toLocaleString('en-US')}`;
   // With a sales address set, buttons open an email; without one, they lead to sign-in.
   function ctaHref(plan) {
+    if (state.data?.signup && !plan.contactSales) return `/signup?plan=${encodeURIComponent(plan.key)}&period=${state.period}`;
     const email = state.data?.salesEmail;
     if (!email) return '/';
     const subject = plan.contactSales ? `Veyra ${plan.name}: talk to sales` : `Veyra ${plan.name}: start a free trial (${state.period})`;

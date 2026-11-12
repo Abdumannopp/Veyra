@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Create your account | Veyra</title>
+  <meta name="robots" content="noindex" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  <link rel="stylesheet" href="/pricing.css" />
+</head>
+<body>
+  <header class="pr-nav">
+    <a class="pr-logo" href="/pricing" aria-label="Veyra pricing"><img src="/brand/veyra-logo.svg" alt="Veyra" width="120" height="32" /></a>
+    <nav class="pr-actions">
+      <a class="pr-btn pr-btn-light" href="/pricing">Plans</a>
+      <a class="pr-btn pr-btn-light" href="/">Log in</a>
+    </nav>
+  </header>
+
+  <main class="su-wrap">
+    <section class="su-card" aria-labelledby="suTitle">
+      <span class="pr-badge">START FREE TRIAL</span>
+      <h1 id="suTitle">Create your company account</h1>
+      <p class="su-sub" id="suSub">Pick a plan, create your account and start working in a minute.</p>
+
+      <form id="signupForm" novalidate>
+        <div class="su-row">
+          <label>Plan
+            <select name="plan" required></select>
+          </label>
+          <label>Billing
+            <select name="period">
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly (save 17%)</option>
+            </select>
+          </label>
+        </div>
+        <p class="su-plan" id="suPlan" aria-live="polite"></p>
+        <label>Company name
+          <input name="companyName" required maxlength="120" autocomplete="organization" />
+        </label>
+        <label>Your name
+          <input name="name" required maxlength="120" autocomplete="name" />
+        </label>
+        <label>Work email
+          <input name="email" type="email" required maxlength="254" autocomplete="email" />
+        </label>
+        <label>Password
+          <input name="password" type="password" required minlength="8" autocomplete="new-password" />
+          <small>At least 8 characters, with a letter and a number.</small>
+        </label>
+        <p class="su-error" id="suError" role="alert"></p>
+        <button class="pr-btn pr-btn-dark su-submit" type="submit">Create account</button>
+        <p class="su-note" id="suNote"></p>
+      </form>
+    </section>
+  </main>
+
+  <footer class="pr-footer">© 2026 Veyra · The AI Workforce for Logistics</footer>
+  <script src="/signup.js"></script>
+</body>
+</html>

@@ -2260,6 +2260,7 @@
 
   /* ---------- Paddle: pay for a plan by card ---------- */
   let paddleReady = null;
+  let autoCheckoutDone = null;
   // Paddle.js is loaded only when someone is about to pay, straight from Paddle.
   function loadPaddle(info) {
     if (paddleReady) return paddleReady;
@@ -2299,7 +2300,8 @@
 
   function payByCard(billing) {
     const info = billing.paddle;
-    let period = info.period || 'monthly';
+    const wanted = !info.subscribed && info.plans[state.params.get('pay')] ? state.params.get('pay') : null;
+    let period = wanted && ['monthly', 'yearly'].includes(state.params.get('period')) ? state.params.get('period') : (info.period || 'monthly');
     const box = el('div', { class: 'plan-pay' });
     const draw = () => {
       const current = billing.plan.key;
@@ -2311,6 +2313,7 @@
         return el('button', {
           type: 'button',
           class: `plan-pay-option${isCurrent ? ' current' : ''}`,
+          dataset: { plan: key },
           disabled: isCurrent || (switchMode && !info.canSwitch),
           onclick: (event) => choose(key, event.currentTarget)
         }, [el('strong', { text: label }), el('small', { text: period === 'yearly' ? `$${yearlyPerMonth} / month, billed yearly` : `$${price} / month` })]);
@@ -2359,6 +2362,12 @@
       button.disabled = false;
     }
     draw();
+    // Straight from sign-up: open the checkout for the plan they chose (once per visit).
+    if (wanted && info.plans[wanted][period] && autoCheckoutDone !== `${wanted}:${period}`) {
+      autoCheckoutDone = `${wanted}:${period}`;
+      const button = [...box.querySelectorAll('.plan-pay-option')].find((node) => node.dataset.plan === wanted);
+      if (button) setTimeout(() => choose(wanted, button), 300);
+    }
     return box;
   }
 

@@ -197,3 +197,13 @@ Yearly billing costs 10 months (shown as "Save 17%").
 - **Limits:** a company cannot add more people than its plan allows (disabled people do not count) or more loads in a calendar month. Features outside the plan answer with a short message naming the plan that includes them.
 - **Billing page:** each company sees its plan, trial days left, how much of its limits it has used and what the plan includes.
 - Set `SALES_EMAIL` on the server so "Start free trial", "Contact sales" and "Change plan" open an email to you.
+
+## Self sign-up
+
+When card payment (Paddle) is set up, new customers do everything themselves:
+
+1. On `/pricing` they press **Start free trial** under a plan (Starter, Growth or Scale).
+2. On `/signup` they enter the company name, their name, email and password. Their company is created with them as its administrator, on a 14-day trial of that plan, and they are signed in.
+3. Veyra opens Paddle's checkout for the plan they chose. After payment the plan becomes **Active** and the company works with exactly that plan's limits and features.
+
+Each signed-up company is separate and sees only its own data. Enterprise is still arranged with sales. Set `COMPANY_SIGNUP=false` to close sign-up, or `true` to open it without card payment (trial only).
