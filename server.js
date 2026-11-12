@@ -78,6 +78,8 @@ const {
   listSentinelLoads,
   listTrackingOverview,
   countShipmentsThisMonth,
+  findTenantByPaddleSubscription,
+  applyPaddleSubscription,
   countActiveUsers,
   updateTenantPlan,
   listWorkflows,
@@ -146,6 +148,7 @@ const pulseAgent = require('./agents/pulse');
 const sentinelAgent = require('./agents/sentinel');
 const studio = require('./agents/studio');
 const plans = require('./lib/plans');
+const paddle = require('./integrations/paddle');
 const nexus = require('./agents/nexus');
 const { parseInbound, senderAllowed, mentionedShipmentIds, guessDocumentType, stripHtml } = require('./lib/inbound-email');
 const messaging = require('./integrations/messaging');
@@ -207,6 +210,7 @@ const INBOX_MAX_ATTACHMENTS = readPositiveInteger(process.env.INBOX_MAX_ATTACHME
 // Small pictures in an email are almost always signature logos, not documents.
 const INBOX_MIN_IMAGE_BYTES = 10 * 1024;
 const TWILIO_STATUS_PREFIX = '/api/integrations/twilio/status/';
+const PADDLE_WEBHOOK_PATH = '/api/integrations/paddle/webhook';
 // The public https address of this server. Twilio reports "delivered / read / failed" to it.
 // Render and Railway tell the app its address; elsewhere set PUBLIC_URL. Without it, delivery reports are off.
 const PUBLIC_URL = (() => {
@@ -284,17 +288,21 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  // Paddle's checkout (only when it is configured) runs in a frame from Paddle and may open a PayPal window.
+  const paddleOn = paddle.enabled();
+  const paddleFrames = 'https://buy.paddle.com https://sandbox-buy.paddle.com';
+  res.setHeader('Permissions-Policy', `camera=(), microphone=(), geolocation=(), payment=(${paddleOn ? `self "https://buy.paddle.com" "https://sandbox-buy.paddle.com"` : ''})`);
+  res.setHeader('Cross-Origin-Opener-Policy', paddleOn ? 'same-origin-allow-popups' : 'same-origin');
   // Defence in depth against XSS: only same-origin scripts, no inline <script>, no framing.
   res.setHeader('Content-Security-Policy', [
     "default-src 'self'",
-    "script-src 'self'",
-    "style-src 'self' https://fonts.googleapis.com",
+    `script-src 'self'${paddleOn ? ' https://cdn.paddle.com' : ''}`,
+    `style-src 'self' https://fonts.googleapis.com${paddleOn ? ' https://cdn.paddle.com' : ''}`,
     "style-src-attr 'unsafe-inline'",
     "font-src 'self' https://fonts.gstatic.com",
-    "img-src 'self' data:",
-    "connect-src 'self'",
+    `img-src 'self' data:${paddleOn ? ' https://cdn.paddle.com' : ''}`,
+    `connect-src 'self'${paddleOn ? ' https://*.paddle.com' : ''}`,
+    `frame-src ${paddleOn ? paddleFrames : "'none'"}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -321,7 +329,7 @@ const parseInboxBody = (req, res, next) => inboxMultipart(req, res, (multipartEr
   : inboxJson(req, res, (jsonError) => (jsonError ? next(jsonError) : inboxForm(req, res, next)))));
 app.use((req, res, next) => {
   if (req.path === GPS_WEBHOOK_PATH) return gpsJson(req, res, next);
-  if (req.path.startsWith(INBOX_WEBHOOK_PREFIX) || req.path.startsWith(TWILIO_STATUS_PREFIX)) return next();
+  if (req.path.startsWith(INBOX_WEBHOOK_PREFIX) || req.path.startsWith(TWILIO_STATUS_PREFIX) || req.path === PADDLE_WEBHOOK_PATH) return next();
   return smallJson(req, res, next);
 });
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -3204,14 +3212,133 @@ app.get('/api/billing/plan', authMiddleware, async (req, res) => {
       success: true,
       plan: { ...plan, capabilities: Object.fromEntries(Object.entries(plans.CAPABILITIES).map(([key, label]) => [key, { label, on: plan.capabilities.includes(key) }])) },
       usage: { users: usersUsed, shipmentsThisMonth: shipmentsUsed },
-      salesEmail: SALES_EMAIL
+      salesEmail: SALES_EMAIL,
+      paddle: await paddleStatus(req)
     });
   } catch (error) {
     return sendError(res, error, 'Plan unavailable.', 'billing plan');
   }
 });
 
-// The platform owner changes a company's plan, status, trial or limits (payments are handled outside Veyra for now).
+/* ---------- Paddle: card payments for plans ---------- */
+async function paddleStatus(req) {
+  if (!paddle.enabled()) return { enabled: false };
+  const tenant = await getTenant(req.user.tenantId);
+  const available = paddle.prices();
+  return {
+    enabled: true,
+    environment: paddle.environment(),
+    clientToken: paddle.clientToken(),
+    canPay: hasPermission(req.user, 'settings:write'),
+    subscribed: Boolean(tenant.paddleSubscriptionId) && tenant.planStatus !== 'cancelled',
+    canManage: paddle.apiEnabled() && Boolean(tenant.paddleCustomerId),
+    canSwitch: paddle.apiEnabled() && Boolean(tenant.paddleSubscriptionId) && tenant.planStatus !== 'cancelled',
+    period: tenant.billingPeriod || null,
+    plans: Object.fromEntries(Object.entries(available).map(([key, byPeriod]) => {
+      const listed = plans.publicPlans().find((entry) => entry.key === key);
+      return [key, { monthly: Boolean(byPeriod.monthly), yearly: Boolean(byPeriod.yearly), name: listed.name, price: listed.monthly, yearlyPerMonth: listed.yearlyPerMonth }];
+    }))
+  };
+}
+
+function readPlanChoice(body) {
+  const plan = body?.plan;
+  const period = body?.period;
+  if (!paddle.PLAN_KEYS.includes(plan) || !paddle.PERIODS.includes(period)) {
+    throw httpError(400, 'Choose a plan (starter, growth, scale) and a period (monthly, yearly). Enterprise is arranged with sales.');
+  }
+  const priceId = paddle.priceFor(plan, period);
+  if (!priceId) throw httpError(400, `The ${plan} ${period} price is not set up for card payment yet.`);
+  return { plan, period, priceId };
+}
+
+// What the browser needs to open Paddle's checkout. Card details go to Paddle, never to Veyra.
+app.post('/api/billing/checkout', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    if (!paddle.enabled()) return res.status(503).json({ success: false, message: 'Card payment is not set up on this server.' });
+    const choice = readPlanChoice(req.body);
+    const tenant = await getTenant(req.user.tenantId);
+    if (tenant.paddleSubscriptionId && tenant.planStatus !== 'cancelled') {
+      return res.status(409).json({ success: false, message: 'This company already has a subscription. Switch plans instead.' });
+    }
+    audit(req, 'billing.checkout', `${choice.plan} ${choice.period}`);
+    return res.json({
+      success: true,
+      checkout: {
+        priceId: choice.priceId,
+        environment: paddle.environment(),
+        clientToken: paddle.clientToken(),
+        email: req.user.email,
+        customData: paddle.referenceFor(req.user.tenantId, JWT_SECRET)
+      }
+    });
+  } catch (error) {
+    return sendError(res, error, 'Checkout could not start.', 'paddle checkout');
+  }
+});
+
+// Switch an existing subscription to another plan or period (Paddle charges or credits the difference).
+app.post('/api/billing/change-plan', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    if (!paddle.apiEnabled()) return res.status(503).json({ success: false, message: 'Plan switching needs PADDLE_API_KEY on the server.' });
+    const choice = readPlanChoice(req.body);
+    const tenant = await getTenant(req.user.tenantId);
+    if (!tenant.paddleSubscriptionId || tenant.planStatus === 'cancelled') {
+      return res.status(409).json({ success: false, message: 'There is no active subscription to switch. Subscribe first.' });
+    }
+    const data = await paddle.changePlan(tenant.paddleSubscriptionId, choice.priceId);
+    const update = paddle.readSubscriptionEvent({ event_type: 'subscription.updated', data });
+    if (update?.plan) await applyPaddleSubscription(req.user.tenantId, update);
+    audit(req, 'billing.plan_changed', `${choice.plan} ${choice.period}`);
+    return res.json({ success: true, plan: await planOf(req.user.tenantId) });
+  } catch (error) {
+    return sendError(res, error, 'The plan could not be switched.', 'paddle change');
+  }
+});
+
+// Paddle's own page for invoices, the card on file and cancelling.
+app.post('/api/billing/portal', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    if (!paddle.apiEnabled()) return res.status(503).json({ success: false, message: 'The billing portal needs PADDLE_API_KEY on the server.' });
+    const tenant = await getTenant(req.user.tenantId);
+    if (!tenant.paddleCustomerId) return res.status(409).json({ success: false, message: 'This company has not paid by card yet.' });
+    const url = await paddle.portalUrl(tenant.paddleCustomerId, tenant.paddleSubscriptionId);
+    if (!url || !/^https:\/\/[a-z0-9.-]+\.paddle\.com\//i.test(url)) return res.status(502).json({ success: false, message: 'Paddle did not return a portal link.' });
+    return res.json({ success: true, url });
+  } catch (error) {
+    return sendError(res, error, 'The billing portal could not open.', 'paddle portal');
+  }
+});
+
+// Paddle's notifications. Only a correctly signed message changes a plan.
+app.post(PADDLE_WEBHOOK_PATH, express.raw({ type: () => true, limit: '1mb' }), async (req, res) => {
+  if (!paddle.enabled()) return res.status(404).json({ success: false, message: 'Not found.' });
+  if (!paddle.verifySignature(req.body, req.get('paddle-signature'))) {
+    return res.status(401).json({ success: false, message: 'Invalid signature.' });
+  }
+  let event;
+  try {
+    event = JSON.parse(req.body.toString('utf8'));
+  } catch (_) {
+    return res.status(400).json({ success: false, message: 'Body must be JSON.' });
+  }
+  try {
+    const update = paddle.readSubscriptionEvent(event);
+    if (!update) return res.json({ success: true, ignored: true });
+    // The company comes from the signed reference set at checkout, or from a subscription seen before.
+    const tenantId = paddle.tenantFromReference(update.customData, JWT_SECRET) || await findTenantByPaddleSubscription(update.subscriptionId);
+    if (!tenantId) return res.json({ success: true, ignored: true, reason: 'unknown company' });
+    const applied = await applyPaddleSubscription(tenantId, update);
+    if (applied) {
+      await recordAudit(tenantId, { actorId: null, action: 'billing.paddle', detail: `${event.event_type}: ${update.plan || 'plan unchanged'}, ${update.status || 'status unchanged'}` }).catch(() => {});
+    }
+    return res.json({ success: true, applied });
+  } catch (error) {
+    return sendError(res, error, 'Webhook could not be processed.', 'paddle webhook');
+  }
+});
+
+// The platform owner changes a company's plan, status, trial or limits (card payments arrive through Paddle).
 app.patch('/api/platform/tenants/:id/plan', authMiddleware, requirePlatformAdmin, async (req, res) => {
   try {
     const tenantId = /^\d{1,9}$/.test(String(req.params.id)) ? Number(req.params.id) : null;

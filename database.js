@@ -337,7 +337,12 @@ async function initialize() {
     ['plan_status', "TEXT NOT NULL DEFAULT 'active'"],
     ['trial_ends_at', 'TEXT'],
     ['user_limit', 'INTEGER'],
-    ['shipment_limit', 'INTEGER']
+    ['shipment_limit', 'INTEGER'],
+    // Paddle subscription (card payments): who pays, which subscription, and the newest change applied.
+    ['billing_period', 'TEXT'],
+    ['paddle_customer_id', 'TEXT'],
+    ['paddle_subscription_id', 'TEXT'],
+    ['paddle_changed_at', 'TEXT']
   ]);
 
   // Emails (and other messages) that arrived for a company, waiting to become loads.
@@ -637,7 +642,8 @@ async function getTenant(tenantId) {
     `SELECT id, name, gps_token_hash AS gpsTokenHash, inbox_token_hash AS inboxTokenHash,
        inbox_allowed_senders AS inboxAllowedSenders, messaging_config AS messagingConfig,
        imap_config AS imapConfig, imap_state AS imapState, automation_settings AS automationSettingsJson, created_at AS createdAt,
-       plan, plan_status AS planStatus, trial_ends_at AS trialEndsAt, user_limit AS userLimit, shipment_limit AS shipmentLimit
+       plan, plan_status AS planStatus, trial_ends_at AS trialEndsAt, user_limit AS userLimit, shipment_limit AS shipmentLimit,
+       billing_period AS billingPeriod, paddle_customer_id AS paddleCustomerId, paddle_subscription_id AS paddleSubscriptionId
      FROM tenants WHERE id = ?`,
     [assertTenant(tenantId)]
   );
@@ -2607,6 +2613,31 @@ async function updateTenantPlan(tenantId, change) {
   return getTenant(tenantId);
 }
 
+async function findTenantByPaddleSubscription(subscriptionId) {
+  if (!subscriptionId) return null;
+  const row = await get('SELECT id FROM tenants WHERE paddle_subscription_id = ?', [subscriptionId]);
+  return row ? row.id : null;
+}
+
+// Applies a Paddle subscription change. Older news than what is stored is ignored (webhooks can arrive
+// out of order). Returns false when nothing was changed.
+async function applyPaddleSubscription(tenantId, { plan, period, status, customerId, subscriptionId, changedAt }) {
+  assertTenant(tenantId);
+  const stamp = changedAt && !Number.isNaN(Date.parse(changedAt)) ? new Date(changedAt).toISOString() : new Date().toISOString();
+  const result = await run(
+    `UPDATE tenants SET
+       plan = COALESCE(?, plan),
+       billing_period = COALESCE(?, billing_period),
+       plan_status = COALESCE(?, plan_status),
+       paddle_customer_id = COALESCE(?, paddle_customer_id),
+       paddle_subscription_id = COALESCE(?, paddle_subscription_id),
+       paddle_changed_at = ?
+     WHERE id = ? AND (paddle_changed_at IS NULL OR paddle_changed_at <= ?)`,
+    [plan || null, period || null, status || null, customerId || null, subscriptionId || null, stamp, tenantId, stamp]
+  );
+  return result.changes > 0;
+}
+
 module.exports = {
   db,
   DB_PATH,
@@ -2676,6 +2707,8 @@ module.exports = {
   listTrackingOverview,
   countStatusReached,
   countShipmentsThisMonth,
+  findTenantByPaddleSubscription,
+  applyPaddleSubscription,
   countActiveUsers,
   updateTenantPlan,
   listWorkflows,

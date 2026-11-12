@@ -191,7 +191,8 @@ The public price list is at `/pricing` (no sign-in needed). There are four plans
 Yearly billing costs 10 months (shown as "Save 17%").
 
 - **New companies** start a 14-day free trial of the plan chosen in **Companies → Add company**.
-- **The platform owner** changes a company's plan and status in **Team & settings → Companies**: Trial, Active (paid), Payment overdue or Cancelled, and can add 14 more trial days. Payments are collected outside Veyra for now (bank transfer or invoice); mark the company Active once it has paid.
+- **Paying by card (Paddle):** a company administrator opens **Billing → Pay by card**, picks Monthly or Yearly and a plan, and pays in Paddle's secure window. The plan becomes Active by itself a few seconds later. Later, "Switch to …" changes the plan and "Invoices, card and cancel" opens Paddle's own page. Setup: see "Card payments (Paddle Billing)" in `DEPLOYMENT.md`.
+- **The platform owner** can still change a company's plan and status by hand in **Team & settings → Companies** (Trial, Active, Payment overdue, Cancelled, or +14 trial days), for example for Enterprise customers who pay by bank transfer.
 - **When a trial ends, a payment is overdue or a plan is cancelled**, everything stays readable, but no new loads or people can be added until the plan is active again.
 - **Limits:** a company cannot add more people than its plan allows (disabled people do not count) or more loads in a calendar month. Features outside the plan answer with a short message naming the plan that includes them.
 - **Billing page:** each company sees its plan, trial days left, how much of its limits it has used and what the plan includes.

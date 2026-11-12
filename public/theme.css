@@ -886,3 +886,15 @@ select option { background: var(--popover); color: var(--text); }
   .plan-card { grid-template-columns: 1fr; }
   .company-plan { justify-content: flex-start; }
 }
+
+/* ---------- Pay by card (Paddle) ---------- */
+.plan-pay { grid-column: 1 / -1; display: grid; gap: 12px; padding-top: 18px; border-top: 1px solid var(--hairline); }
+.plan-pay-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.plan-pay-head small { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.plan-pay-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.plan-pay-option { text-align: left; border: 1px solid var(--hairline); background: var(--fill); color: inherit; font: inherit; padding: 12px 14px; border-radius: 14px; cursor: pointer; display: grid; gap: 3px; }
+.plan-pay-option:hover:not(:disabled) { border-color: var(--accent); }
+.plan-pay-option small { color: var(--muted); font-size: 12.5px; }
+.plan-pay-option.current { border-color: #34c759; background: rgba(52, 199, 89, .1); cursor: default; }
+.plan-pay-option:disabled:not(.current) { opacity: .55; cursor: not-allowed; }
+.plan-pay > .btn { justify-self: start; }
