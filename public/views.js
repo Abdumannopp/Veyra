@@ -2253,8 +2253,113 @@
         el('span', { class: 'plan-cap-dot', 'aria-hidden': 'true', text: cap.on ? '✓' : '–' }),
         el('span', { text: cap.label }),
         el('span', { class: 'visually-hidden', text: cap.on ? ' (included)' : ' (not in this plan)' })
-      ])))
+      ]))),
+      billing.paddle?.enabled && billing.paddle.canPay ? payByCard(billing) : null
     ]);
+  }
+
+  /* ---------- Paddle: pay for a plan by card ---------- */
+  let paddleReady = null;
+  // Paddle.js is loaded only when someone is about to pay, straight from Paddle.
+  function loadPaddle(info) {
+    if (paddleReady) return paddleReady;
+    paddleReady = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.paddle.com/paddle/v2/paddle.js';
+      script.onload = () => {
+        try {
+          if (info.environment === 'sandbox') window.Paddle.Environment.set('sandbox');
+          window.Paddle.Initialize({
+            token: info.clientToken,
+            eventCallback: (event) => {
+              if (event?.name !== 'checkout.completed') return;
+              toast('Payment received. Your plan updates in a few seconds.');
+              // Paddle's webhook moves the plan; check back a few times.
+              let tries = 0;
+              const timer = setInterval(() => {
+                tries += 1;
+                if (state.view === 'billing') renderBilling();
+                if (tries >= 5) clearInterval(timer);
+              }, 3000);
+            }
+          });
+          resolve(window.Paddle);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      script.onerror = () => {
+        paddleReady = null;
+        reject(new Error('Paddle checkout could not load. Check your connection and try again.'));
+      };
+      document.head.append(script);
+    });
+    return paddleReady;
+  }
+
+  function payByCard(billing) {
+    const info = billing.paddle;
+    let period = info.period || 'monthly';
+    const box = el('div', { class: 'plan-pay' });
+    const draw = () => {
+      const current = billing.plan.key;
+      const switchMode = info.subscribed;
+      const buttons = Object.entries(info.plans).filter(([, periods]) => periods[period]).map(([key]) => {
+        const isCurrent = switchMode && key === current && period === (info.period || 'monthly');
+        const { name, price, yearlyPerMonth } = info.plans[key];
+        const label = isCurrent ? 'Current plan' : switchMode ? `Switch to ${name}` : `Subscribe to ${name}`;
+        return el('button', {
+          type: 'button',
+          class: `plan-pay-option${isCurrent ? ' current' : ''}`,
+          disabled: isCurrent || (switchMode && !info.canSwitch),
+          onclick: (event) => choose(key, event.currentTarget)
+        }, [el('strong', { text: label }), el('small', { text: period === 'yearly' ? `$${yearlyPerMonth} / month, billed yearly` : `$${price} / month` })]);
+      });
+      box.replaceChildren(...[
+        el('div', { class: 'plan-pay-head' }, [
+          el('span', {}, [el('strong', { text: switchMode ? 'Change plan' : 'Pay by card' }), el('small', { text: switchMode ? 'Paddle charges or credits the difference right away.' : 'Secure checkout by Paddle. Card details never reach Veyra.' })]),
+          el('div', { class: 'studio-tabs', role: 'group', 'aria-label': 'Billing period' }, [['monthly', 'Monthly'], ['yearly', 'Yearly · save 17%']].map(([key, text]) => el('button', {
+            type: 'button', class: period === key ? 'active' : '', 'aria-pressed': String(period === key), onclick: () => { period = key; draw(); }
+          }, text)))
+        ]),
+        buttons.length ? el('div', { class: 'plan-pay-options' }, buttons) : el('p', { class: 'muted', text: 'No plan is set up for this billing period yet.' }),
+        switchMode && !info.canSwitch ? el('p', { class: 'muted', text: 'To switch plans, contact us: the server has no Paddle API key yet.' }) : null,
+        info.canManage ? el('button', { class: 'btn btn-ghost small', type: 'button', onclick: (event) => openPortal(event.currentTarget) }, 'Invoices, card and cancel') : null
+      ].filter(Boolean));
+    };
+    async function choose(key, button) {
+      button.disabled = true;
+      try {
+        if (info.subscribed) {
+          if (!window.confirm(`Switch to ${info.plans[key].name} (${period})? Paddle charges or credits the difference now.`)) {
+            button.disabled = false;
+            return;
+          }
+          await api('/api/billing/change-plan', { method: 'POST', body: JSON.stringify({ plan: key, period }) });
+          toast(`Switched to ${info.plans[key].name}.`);
+          renderBilling();
+          return;
+        }
+        const { checkout } = await api('/api/billing/checkout', { method: 'POST', body: JSON.stringify({ plan: key, period }) });
+        const Paddle = await loadPaddle(info);
+        Paddle.Checkout.open({ items: [{ priceId: checkout.priceId, quantity: 1 }], customer: { email: checkout.email }, customData: checkout.customData });
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+      button.disabled = false;
+    }
+    async function openPortal(button) {
+      button.disabled = true;
+      try {
+        const { url } = await api('/api/billing/portal', { method: 'POST' });
+        window.open(url, '_blank', 'noopener');
+      } catch (error) {
+        toast(error.message, 'error');
+      }
+      button.disabled = false;
+    }
+    draw();
+    return box;
   }
 
   /* =========================================================

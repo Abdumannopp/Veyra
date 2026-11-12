@@ -133,3 +133,19 @@ NEXUS reacts to events (an order email arrives, a load reaches Sourcing, a truck
 - Keep SQLite on persistent storage and configure backups. SQLite is suitable for one app instance; use PostgreSQL before horizontal scaling.
 - Configure `ALLOWED_ORIGIN` only if a separate trusted frontend domain needs cross-origin API access. Same-origin hosting does not require it.
 - Add monitoring and restore-test your backups.
+
+## Card payments (Paddle Billing)
+
+Veyra sells its Starter, Growth and Scale plans through Paddle (Enterprise is arranged with sales). Paddle is the merchant of record: it takes the card, charges tax and sends invoices. Card details never reach Veyra.
+
+1. Create a Paddle account (start in the **sandbox**: sandbox-vendors.paddle.com).
+2. **Catalog → Products:** one product per plan (Starter, Growth, Scale), each with a monthly price and, if you sell it, a yearly price (USD 99 / 249 / 599 a month; yearly 990 / 2,490 / 5,990). Copy each price id (`pri_...`).
+3. **Developer tools → Authentication:** create a client-side token → `PADDLE_CLIENT_TOKEN`; optionally an API key with subscription and customer-portal access → `PADDLE_API_KEY`.
+4. **Developer tools → Notifications:** new destination `https://<your-domain>/api/integrations/paddle/webhook`, events `subscription.created`, `subscription.updated`, `subscription.activated`, `subscription.past_due`, `subscription.paused`, `subscription.resumed`, `subscription.canceled`. Copy its secret → `PADDLE_WEBHOOK_SECRET`.
+5. **Checkout → Website approval:** add your domain (needed in production).
+6. Set the variables from `.env.example` (`PADDLE_ENV=sandbox` first), redeploy, and pay for a plan from Billing with a Paddle test card. The plan changes within seconds, when the webhook arrives.
+7. When it works, repeat steps 2–5 in the live account and set `PADDLE_ENV=production`.
+
+What happens: a company administrator opens **Billing → Pay by card** and picks a plan; Paddle's checkout opens on top of Veyra. Paddle's signed webhook then sets the plan to Active. If a renewal fails, Paddle reports *past due* and Veyra locks adding new loads and people until it is paid; a cancelled subscription ends the same way when the paid period is over. With `PADDLE_API_KEY`, administrators can also switch plans (Paddle charges or credits the difference) and open Paddle's portal for invoices, the card on file and cancelling.
+
+Only correctly signed webhooks are accepted (5-minute window), each company is identified by a signed reference set at checkout, and older events never overwrite newer ones.
