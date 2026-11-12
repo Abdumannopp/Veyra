@@ -228,6 +228,9 @@ const PUBLIC_URL = (() => {
 const REGISTRATION_MODE = REGISTRATION_INVITE_CODE
   ? 'invite'
   : (!isProduction || process.env.ALLOW_OPEN_REGISTRATION === 'true' ? 'open' : 'closed');
+// A new company can sign itself up from the pricing page, choose a plan and pay by card.
+// On by default once card payment (Paddle) is set up; COMPANY_SIGNUP=true / false overrides.
+const companySignupOpen = () => (process.env.COMPANY_SIGNUP === 'true' ? true : process.env.COMPANY_SIGNUP === 'false' ? false : paddle.enabled());
 const SESSION_COOKIE = 'veyraSession';
 const SESSION_DURATION_SECONDS = 8 * 60 * 60;
 const AUTH_RATE_LIMIT_CONFIG = {
@@ -764,7 +767,44 @@ app.get('/api/health', (req, res) => {
 // Public settings the UI needs before sign-in (units, currency, whether sign-up is possible, features on).
 // The plans on the public pricing page. Prices are in US dollars.
 app.get('/api/plans', (req, res) => {
-  res.json({ success: true, currency: 'USD', trialDays: plans.TRIAL_DAYS, salesEmail: SALES_EMAIL, plans: plans.publicPlans() });
+  res.json({ success: true, currency: 'USD', trialDays: plans.TRIAL_DAYS, salesEmail: SALES_EMAIL, signup: companySignupOpen(), cardPayment: paddle.enabled(), plans: plans.publicPlans() });
+});
+
+// Self-service: a new company with its first administrator, on a free trial of the chosen plan.
+// The browser then goes straight to Billing to pay by card; Paddle's webhook makes the plan Active.
+app.post('/api/signup', registerLimiter, async (req, res) => {
+  try {
+    if (!companySignupOpen()) return res.status(403).json({ success: false, message: 'Sign-up is not open. Contact us to get an account.' });
+    const { companyName, name, email, password, plan = 'growth' } = req.body || {};
+    if (typeof companyName !== 'string' || !companyName.trim() || companyName.trim().length > MAX_LEN.companyName) {
+      return res.status(400).json({ success: false, message: `Company name is required (at most ${MAX_LEN.companyName} characters).` });
+    }
+    const identityError = validateNameAndEmail(name, email);
+    if (identityError) return res.status(400).json({ success: false, message: identityError });
+    const passwordError = validateNewPassword(password);
+    if (passwordError) return res.status(400).json({ success: false, message: passwordError });
+    // Enterprise is arranged with sales, never by self sign-up.
+    if (!paddle.PLAN_KEYS.includes(plan)) return res.status(400).json({ success: false, message: 'Choose Starter, Growth or Scale. For Enterprise, contact sales.' });
+
+    const result = await createTenantWithAdmin({
+      name: companyName.trim(),
+      adminName: name.trim(),
+      adminEmail: email.trim().toLowerCase(),
+      passwordHash: await bcrypt.hash(password, BCRYPT_COST),
+      plan,
+      trialDays: plans.TRIAL_DAYS
+    });
+    const user = await findUserByEmail(result.admin.email);
+    await issueSessionCookie(user, res);
+    recordAudit(result.tenant.id, { actorId: user.id, action: 'company.signup', detail: `${result.tenant.name}: ${plan} trial`, ip: getClientIp(req) }).catch(() => {});
+    return res.status(201).json({ success: true, user: sanitizeUser(user), company: { name: result.tenant.name, plan }, cardPayment: paddle.enabled() });
+  } catch (error) {
+    if (error.statusCode === 409 || String(error.code) === 'SQLITE_CONSTRAINT') {
+      // Same answer for a taken email or company name: do not reveal which accounts exist.
+      return res.status(409).json({ success: false, message: 'Sign-up could not be completed. Try signing in, or use a different email and company name.' });
+    }
+    return sendError(res, error, 'Sign-up failed. Please try again.', 'signup');
+  }
 });
 
 app.get('/api/config', (req, res) => {
@@ -1795,6 +1835,7 @@ app.get('/api/public/track/:token', publicTrackLimiter, async (req, res) => {
 app.get('/track/:token', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'track.html')));
 // Public price list (no sign-in).
 app.get('/pricing', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'pricing.html')));
+app.get('/signup', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'signup.html')));
 
 /* =========================================================
    BACKUPS: a daily copy of the whole database (platform owner only)
