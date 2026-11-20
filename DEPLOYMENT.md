@@ -155,3 +155,19 @@ Only correctly signed webhooks are accepted (5-minute window), each company is i
 `/terms`, `/privacy` and `/refunds` are generated from `lib/legal.js` with the `LEGAL_*` settings and `REFUND_DAYS`. They are a starting point for a B2B SaaS sold through Paddle, not legal advice: have them reviewed. Raise `TERMS_VERSION` in `lib/legal.js` when the texts change in substance; sign-up records the version each company accepted.
 
 `CURRENCY` and `WEIGHT_UNIT` are now only defaults: each company sets its own in Team & settings → Company.
+
+## PostgreSQL (recommended for production)
+
+Veyra runs on PostgreSQL when `DATABASE_URL` is set, and on a single SQLite file (`DATABASE_PATH`) when it is not. Tests and local development keep using SQLite; CI runs the full suite on both.
+
+**Railway:**
+1. In the project, **New → Database → PostgreSQL**.
+2. In the Veyra service, **Variables**: add `DATABASE_URL=${{Postgres.DATABASE_URL}}` and remove `DATABASE_PATH`.
+3. Redeploy. On first start Veyra creates its tables and the first administrator from `INITIAL_ADMIN_*`.
+4. The `/data` volume is no longer needed for the database.
+
+**Backups:** with PostgreSQL, Veyra's own daily file backup is switched off; use the database provider's backups (Railway: the PostgreSQL service's **Backups** tab). The platform backup endpoints answer 409 with that message.
+
+**How it works:** `lib/postgres.js` translates Veyra's SQL (placeholders, SQLite date functions, `INSERT OR IGNORE/REPLACE`, case-insensitive `LIKE`, types) and keeps timestamps as UTC text in the same format as before. One connection runs one statement at a time, like the SQLite file did; that is plenty for hundreds of companies, and a connection pool can come later.
+
+**Moving existing SQLite data:** not automated yet. A fresh PostgreSQL database is created on first start; if you already have companies in a SQLite file, ask for a migration script before switching.

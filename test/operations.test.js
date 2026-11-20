@@ -205,6 +205,13 @@ test('tracking link: shows status only, a new link replaces the old one, removal
 test('backups: platform owner only, a real database copy, old copies are pruned, names cannot escape the folder', async () => {
   assert.equal((await call(other, 'GET', '/api/platform/backups')).status, 403, 'a customer company admin cannot');
   assert.equal((await call(ops, 'POST', '/api/platform/backups')).status, 403);
+  // On PostgreSQL the database provider makes the backups; Veyra says so instead of copying a file.
+  if (require('../database').isPostgres) {
+    const res = await call(admin, 'POST', '/api/platform/backups');
+    assert.equal(res.status, 409);
+    assert.match((await res.json()).message, /database provider/);
+    return;
+  }
   const made = [];
   for (let i = 0; i < 3; i += 1) {
     const res = await call(admin, 'POST', '/api/platform/backups');

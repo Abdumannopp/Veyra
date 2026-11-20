@@ -15,7 +15,8 @@ const {
   dispatchShipment,
   listCarriers,
   listShipmentEvents,
-  listShipments
+  listShipments,
+  isPostgres
 } = require('../database');
 
 const TENANT = 1;
@@ -99,14 +100,22 @@ test('concurrent dispatches cannot assign one carrier to two shipments', async (
 test('failed audit insert rolls back shipment and carrier updates', async () => {
   const shipmentId = await createSourcingShipment('Rollback Load');
   const carrierId = 2;
-  await execute(`
-    CREATE TRIGGER fail_dispatch_audit
-    BEFORE INSERT ON shipment_events
-    WHEN NEW.to_status = 'Dispatched'
-    BEGIN
-      SELECT RAISE(ABORT, 'forced audit insert failure');
-    END
-  `);
+  // A trigger that makes the audit insert fail, in each database's own syntax.
+  if (isPostgres) {
+    await execute(`CREATE OR REPLACE FUNCTION fail_dispatch_audit() RETURNS trigger LANGUAGE plpgsql AS $fn$
+      BEGIN RAISE EXCEPTION 'forced audit insert failure'; END $fn$`);
+    await execute(`CREATE TRIGGER fail_dispatch_audit BEFORE INSERT ON shipment_events
+      FOR EACH ROW WHEN (NEW.to_status = 'Dispatched') EXECUTE FUNCTION fail_dispatch_audit()`);
+  } else {
+    await execute(`
+      CREATE TRIGGER fail_dispatch_audit
+      BEFORE INSERT ON shipment_events
+      WHEN NEW.to_status = 'Dispatched'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced audit insert failure');
+      END
+    `);
+  }
 
   await assert.rejects(
     dispatchShipment(TENANT, shipmentId, carrierId, 975, 1),
@@ -122,5 +131,5 @@ test('failed audit insert rolls back shipment and carrier updates', async () => 
   assert.equal(carrier.status, 'Available');
   assert.equal((await listShipmentEvents(TENANT, shipmentId)).filter((event) => event.status === 'Dispatched').length, 0);
 
-  await execute('DROP TRIGGER fail_dispatch_audit');
+  await execute(isPostgres ? 'DROP TRIGGER fail_dispatch_audit ON shipment_events' : 'DROP TRIGGER fail_dispatch_audit');
 });
