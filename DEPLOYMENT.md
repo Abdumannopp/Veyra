@@ -171,3 +171,15 @@ Veyra runs on PostgreSQL when `DATABASE_URL` is set, and on a single SQLite file
 **How it works:** `lib/postgres.js` translates Veyra's SQL (placeholders, SQLite date functions, `INSERT OR IGNORE/REPLACE`, case-insensitive `LIKE`, types) and keeps timestamps as UTC text in the same format as before. One connection runs one statement at a time, like the SQLite file did; that is plenty for hundreds of companies, and a connection pool can come later.
 
 **Moving existing SQLite data:** not automated yet. A fresh PostgreSQL database is created on first start; if you already have companies in a SQLite file, ask for a migration script before switching.
+
+## Database migrations
+
+Schema changes are versioned migrations (`database.js` → `MIGRATIONS`, runner in `lib/migrations.js`). Applied ids are kept in `schema_migrations`; the server applies missing ones at start, one process at a time.
+
+```bash
+npm run migrate -- status
+npm run migrate
+npm run migrate -- down 1
+```
+
+Take a backup before upgrading. `0001_baseline` (the schema before versioning) cannot be reversed: recovery is restoring that backup. New migrations must have a working `down()`, or say in it why not and how to recover.
