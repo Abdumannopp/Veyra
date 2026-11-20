@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
+// Built-in SQLite (node:sqlite): nothing to compile when the app is installed.
+const sqlite3 = require('./lib/sqlite');
 const { httpError, normalizePlate } = require('./lib/validation');
 const secrets = require('./lib/secrets');
 
