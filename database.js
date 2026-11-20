@@ -1,14 +1,22 @@
 const bcrypt = require('bcryptjs');
 const path = require('path');
-// Built-in SQLite (node:sqlite): nothing to compile when the app is installed.
-const sqlite3 = require('./lib/sqlite');
+const crypto = require('crypto');
 const { httpError, normalizePlate } = require('./lib/validation');
 const secrets = require('./lib/secrets');
 
 const DB_PATH = process.env.DATABASE_PATH
   ? path.resolve(process.env.DATABASE_PATH)
   : path.join(__dirname, 'data', 'veyra.db');
-const db = new sqlite3.Database(DB_PATH);
+// PostgreSQL when DATABASE_URL is set (production at scale); otherwise built-in SQLite in one file.
+const DATABASE_URL = String(process.env.DATABASE_URL || '').trim();
+const isPostgres = /^postgres(ql)?:\/\//i.test(DATABASE_URL);
+// Tests run in parallel against one PostgreSQL: each test file gets its own schema.
+const pgSchema = process.env.PG_TEST_SCHEMAS === '1'
+  ? `t_${crypto.createHash('sha1').update(DB_PATH).digest('hex').slice(0, 16)}`
+  : 'public';
+const db = isPostgres
+  ? new (require('./lib/postgres').Database)(DATABASE_URL, { schema: pgSchema })
+  : new (require('./lib/sqlite').Database)(DB_PATH);
 db.configure('busyTimeout', 10000);
 db.run('PRAGMA foreign_keys = ON');
 let hasLegacyEventStatusColumn = false;
@@ -177,6 +185,16 @@ async function initialize() {
     )
   `);
 
+  // Carriers first: loads point to them (PostgreSQL needs the table to exist before the reference).
+  await run(`
+    CREATE TABLE IF NOT EXISTS carriers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL
+    )
+  `);
+
   await ensureColumns('shipments', [
     ['reference', 'TEXT'],
     ['carrier_id', 'INTEGER REFERENCES carriers(id)'],
@@ -243,14 +261,6 @@ async function initialize() {
     }
   }
 
-  await run(`
-    CREATE TABLE IF NOT EXISTS carriers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      mode TEXT NOT NULL,
-      status TEXT NOT NULL
-    )
-  `);
   await ensureColumns('carriers', [
     ['phone', 'TEXT'],
     ['contact_name', 'TEXT'],
@@ -708,8 +718,9 @@ async function createTenantWithAdmin({ name, adminName, adminEmail, passwordHash
     // A new company starts on a free trial of the chosen plan.
     const tenant = await transaction.run(
       `INSERT INTO tenants (name, plan, plan_status, trial_ends_at, currency, weight_unit, terms_version, terms_accepted_at)
-       VALUES (?, ?, 'trial', datetime('now', ?), ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`,
-      [name, plan, `+${Number(trialDays)} days`, currency, weightUnit, termsVersion, termsVersion]
+       VALUES (?, ?, 'trial', datetime('now', ?), ?, ?, ?, ?)`,
+      [name, plan, `+${Number(trialDays)} days`, currency, weightUnit, termsVersion,
+        termsVersion ? new Date().toISOString().replace('T', ' ').slice(0, 19) : null]
     );
     const user = await transaction.run(
       "INSERT INTO users (name, email, password, role, tenant_id) VALUES (?, ?, ?, 'admin', ?)",
@@ -2676,6 +2687,7 @@ async function exportTenantData(tenantId) {
 }
 
 module.exports = {
+  isPostgres,
   db,
   DB_PATH,
   getUserPasswordHash,
