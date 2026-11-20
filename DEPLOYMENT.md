@@ -29,14 +29,14 @@ INITIAL_ADMIN_EMAIL=admin@your-domain.com
 INITIAL_ADMIN_PASSWORD=<unique password of at least 12 characters>
 ```
 
-4. Deploy. `railway.json` sets the build, start command, health check, and restart policy.
+4. Deploy. `railway.json` builds with the `Dockerfile` (Node 22, nothing to compile) and sets the start command, health check and restart policy.
 5. Add a Railway domain or custom domain. Store all generated secrets outside source control.
 
 The volume is persistent but SQLite remains a single-instance database. For multiple replicas, migrate to PostgreSQL first.
 
 ## VPS with systemd and Caddy
 
-Use Ubuntu/Debian with Node.js 20 or newer and a domain pointed at the VPS.
+Use Ubuntu/Debian with Node.js 22.13 or newer (it includes the SQLite module Veyra uses) and a domain pointed at the VPS.
 
 1. Install Node.js and Caddy, then create the service account and application directory:
 
