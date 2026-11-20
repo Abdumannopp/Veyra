@@ -207,3 +207,10 @@ When card payment (Paddle) is set up, new customers do everything themselves:
 3. Veyra opens Paddle's checkout for the plan they chose. After payment the plan becomes **Active** and the company works with exactly that plan's limits and features.
 
 Each signed-up company is separate and sees only its own data. Enterprise is still arranged with sales. Set `COMPANY_SIGNUP=false` to close sign-up, or `true` to open it without card payment (trial only).
+
+## Selling worldwide
+
+- **Legal pages:** `/terms`, `/privacy` and `/refunds` are public and linked from every page footer. Fill in `LEGAL_ENTITY`, `LEGAL_ADDRESS`, `LEGAL_COUNTRY` and `LEGAL_EMAIL` on the server, set `REFUND_DAYS`, and have a lawyer review the texts for your country before selling. Paddle checks these pages when it approves your website.
+- **Consent:** new companies must tick "I accept the Terms of Service and the Privacy Policy" at sign-up; the accepted version and time are saved.
+- **Currency and weight unit per company:** chosen at sign-up (guessed from the browser's country) and changed by an administrator in **Team & settings → Company**. New loads, quotes, invoices and prices use them. Amounts already saved are not converted.
+- **Company data download:** administrators press **Download company data** in Team & settings to get everything the company owns as one file (no passwords or keys). Deletion requests are handled by email, as the Privacy Policy says.

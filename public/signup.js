@@ -40,6 +40,20 @@
       option.textContent = `${plan.name} · ${money(plan.monthly)} / month`;
       planSelect.append(option);
     });
+    // Currency and unit: guess from the browser's region, the company can change them later.
+    const regions = data.regions || { currencies: ['USD'], defaultCurrency: 'USD', defaultWeightUnit: 'kg' };
+    regions.currencies.forEach((code) => {
+      const option = document.createElement('option');
+      option.value = code;
+      option.textContent = code;
+      form.elements.currency.append(option);
+    });
+    const locale = (navigator.language || 'en-US').toUpperCase();
+    const country = locale.split('-')[1] || '';
+    const byCountry = { US: 'USD', GB: 'GBP', CA: 'CAD', AU: 'AUD', CH: 'CHF', PL: 'PLN', CZ: 'CZK', RO: 'RON', TR: 'TRY', AE: 'AED', SA: 'SAR', IN: 'INR', CN: 'CNY', JP: 'JPY', KR: 'KRW', SG: 'SGD', MX: 'MXN', BR: 'BRL', ZA: 'ZAR', KZ: 'KZT', UZ: 'UZS', UA: 'UAH', GE: 'GEL', AZ: 'AZN', KG: 'KGS', TJ: 'TJS', NG: 'NGN', KE: 'KES', EG: 'EGP', DE: 'EUR', FR: 'EUR', IT: 'EUR', ES: 'EUR', NL: 'EUR', BE: 'EUR', AT: 'EUR', PT: 'EUR', IE: 'EUR', FI: 'EUR', LT: 'EUR', LV: 'EUR', EE: 'EUR', SK: 'EUR', SI: 'EUR', GR: 'EUR' };
+    const guessed = byCountry[country];
+    form.elements.currency.value = regions.currencies.includes(guessed) ? guessed : (regions.currencies.includes(regions.defaultCurrency) ? regions.defaultCurrency : 'USD');
+    form.elements.weightUnit.value = country === 'US' ? 'lb' : (regions.defaultWeightUnit || 'kg');
     const wanted = params.get('plan');
     planSelect.value = [...planSelect.options].some((option) => option.value === wanted) ? wanted : 'growth';
     periodSelect.value = params.get('period') === 'yearly' ? 'yearly' : 'monthly';
@@ -68,7 +82,10 @@
           name: form.elements.name.value.trim(),
           email: form.elements.email.value.trim(),
           password: form.elements.password.value,
-          plan: planSelect.value
+          plan: planSelect.value,
+          currency: form.elements.currency.value,
+          weightUnit: form.elements.weightUnit.value,
+          acceptTerms: form.elements.acceptTerms.checked
         })
       });
       const result = await response.json().catch(() => ({}));

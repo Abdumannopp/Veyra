@@ -21,7 +21,7 @@ const { db } = require('../database');
 let server; let base;
 const call = (cookie, method, url, body) => fetch(`${base}${url}`, { method, headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) }, body: body ? JSON.stringify(body) : undefined });
 const json = async (...args) => (await call(...args)).json();
-const person = (n, extra = {}) => ({ companyName: `Signup Co ${n}`, name: `Person ${n}`, email: `p${n}@signup.example`, password: 'signup-pass-123', ...extra });
+const person = (n, extra = {}) => ({ companyName: `Signup Co ${n}`, name: `Person ${n}`, email: `p${n}@signup.example`, password: 'signup-pass-123', acceptTerms: true, ...extra });
 function webhook(event) {
   const raw = JSON.stringify(event);
   const ts = Math.floor(Date.now() / 1000);

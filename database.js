@@ -343,7 +343,13 @@ async function initialize() {
     ['billing_period', 'TEXT'],
     ['paddle_customer_id', 'TEXT'],
     ['paddle_subscription_id', 'TEXT'],
-    ['paddle_changed_at', 'TEXT']
+    ['paddle_changed_at', 'TEXT'],
+    // Region per company (empty = the server default): ISO currency code and kg / lb.
+    ['currency', 'TEXT'],
+    ['weight_unit', 'TEXT'],
+    // Which version of the Terms and Privacy Policy the company accepted, and when.
+    ['terms_version', 'TEXT'],
+    ['terms_accepted_at', 'TEXT']
   ]);
 
   // Emails (and other messages) that arrived for a company, waiting to become loads.
@@ -644,7 +650,8 @@ async function getTenant(tenantId) {
        inbox_allowed_senders AS inboxAllowedSenders, messaging_config AS messagingConfig,
        imap_config AS imapConfig, imap_state AS imapState, automation_settings AS automationSettingsJson, created_at AS createdAt,
        plan, plan_status AS planStatus, trial_ends_at AS trialEndsAt, user_limit AS userLimit, shipment_limit AS shipmentLimit,
-       billing_period AS billingPeriod, paddle_customer_id AS paddleCustomerId, paddle_subscription_id AS paddleSubscriptionId
+       billing_period AS billingPeriod, paddle_customer_id AS paddleCustomerId, paddle_subscription_id AS paddleSubscriptionId,
+       currency, weight_unit AS weightUnit, terms_version AS termsVersion, terms_accepted_at AS termsAcceptedAt
      FROM tenants WHERE id = ?`,
     [assertTenant(tenantId)]
   );
@@ -690,7 +697,7 @@ async function listTenants() {
 }
 
 // A new customer company and its first administrator, created together or not at all.
-async function createTenantWithAdmin({ name, adminName, adminEmail, passwordHash, plan = 'growth', trialDays = 14 }) {
+async function createTenantWithAdmin({ name, adminName, adminEmail, passwordHash, plan = 'growth', trialDays = 14, currency = null, weightUnit = null, termsVersion = null }) {
   return withTransaction(async (transaction) => {
     if (await transaction.get('SELECT id FROM users WHERE email = ?', [adminEmail])) {
       throw httpError(409, 'A user with this email already exists.');
@@ -700,8 +707,9 @@ async function createTenantWithAdmin({ name, adminName, adminEmail, passwordHash
     }
     // A new company starts on a free trial of the chosen plan.
     const tenant = await transaction.run(
-      "INSERT INTO tenants (name, plan, plan_status, trial_ends_at) VALUES (?, ?, 'trial', datetime('now', ?))",
-      [name, plan, `+${Number(trialDays)} days`]
+      `INSERT INTO tenants (name, plan, plan_status, trial_ends_at, currency, weight_unit, terms_version, terms_accepted_at)
+       VALUES (?, ?, 'trial', datetime('now', ?), ?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)`,
+      [name, plan, `+${Number(trialDays)} days`, currency, weightUnit, termsVersion, termsVersion]
     );
     const user = await transaction.run(
       "INSERT INTO users (name, email, password, role, tenant_id) VALUES (?, ?, ?, 'admin', ?)",
@@ -907,7 +915,8 @@ async function findUserById(id) {
   if (!id || !Number.isInteger(Number(id))) return null;
   return get(
     `SELECT users.id, users.name, users.email, users.role, users.disabled_at AS disabledAt, users.tenant_id AS tenantId,
-       users.is_platform_admin AS isPlatformAdmin, tenants.name AS tenantName
+       users.is_platform_admin AS isPlatformAdmin, tenants.name AS tenantName,
+       tenants.currency AS tenantCurrency, tenants.weight_unit AS tenantWeightUnit
      FROM users JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?`,
     [Number(id)]
   );
@@ -2639,6 +2648,33 @@ async function applyPaddleSubscription(tenantId, { plan, period, status, custome
   return result.changes > 0;
 }
 
+/* ---------- region and data export ---------- */
+async function setTenantRegion(tenantId, { currency, weightUnit }) {
+  await run('UPDATE tenants SET currency = ?, weight_unit = ? WHERE id = ?', [currency, weightUnit, assertTenant(tenantId)]);
+  return getTenant(tenantId);
+}
+
+// Everything a company owns, for its own records or to move elsewhere (GDPR portability).
+// Passwords, tokens and encrypted provider settings are never included; files are listed, not embedded.
+async function exportTenantData(tenantId) {
+  assertTenant(tenantId);
+  const pick = (sql) => all(sql, [tenantId]);
+  const tenant = await get('SELECT id, name, created_at, plan, plan_status, currency, weight_unit, terms_version, terms_accepted_at FROM tenants WHERE id = ?', [tenantId]);
+  return {
+    exportedAt: new Date().toISOString(),
+    company: tenant,
+    users: await pick('SELECT id, name, email, role, disabled_at FROM users WHERE tenant_id = ? ORDER BY id'),
+    carriers: await pick('SELECT * FROM carriers WHERE tenant_id = ? ORDER BY id'),
+    shipments: await pick('SELECT * FROM shipments WHERE tenant_id = ? ORDER BY id'),
+    shipmentEvents: await pick('SELECT shipment_events.* FROM shipment_events JOIN shipments ON shipments.id = shipment_events.shipment_id WHERE shipments.tenant_id = ? ORDER BY shipment_events.id'),
+    trackingUpdates: await pick('SELECT tracking_updates.* FROM tracking_updates JOIN shipments ON shipments.id = tracking_updates.shipment_id WHERE shipments.tenant_id = ? ORDER BY tracking_updates.id'),
+    quotes: await pick('SELECT * FROM quotes WHERE tenant_id = ? ORDER BY id'),
+    messages: await pick('SELECT * FROM messages WHERE tenant_id = ? ORDER BY id'),
+    documents: await pick('SELECT id, shipment_id, filename, mime, size, created_at FROM documents WHERE tenant_id = ? ORDER BY id'),
+    workflows: await pick('SELECT * FROM workflows WHERE tenant_id = ? ORDER BY id')
+  };
+}
+
 module.exports = {
   db,
   DB_PATH,
@@ -2708,6 +2744,8 @@ module.exports = {
   listTrackingOverview,
   countStatusReached,
   countShipmentsThisMonth,
+  setTenantRegion,
+  exportTenantData,
   findTenantByPaddleSubscription,
   applyPaddleSubscription,
   countActiveUsers,

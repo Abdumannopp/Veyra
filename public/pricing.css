@@ -110,3 +110,15 @@ a { color: inherit; }
   .su-card { padding: 26px 20px 22px; }
   .su-row { grid-template-columns: 1fr; }
 }
+
+/* ---------- Legal pages and consent ---------- */
+.pr-footer a { color: inherit; }
+.legal { max-width: 760px; margin: 12px auto 0; padding: 36px 40px 40px; border-radius: 28px; background: var(--card); border: 1px solid #e4e8f1; box-shadow: var(--shadow); line-height: 1.6; }
+.legal h1 { margin: 0 0 4px; font-size: clamp(28px, 4vw, 38px); letter-spacing: -.03em; }
+.legal-updated { margin: 0 0 18px; color: #737b8c; font-size: 14px; }
+.legal h2 { margin: 26px 0 6px; font-size: 18px; letter-spacing: -.01em; }
+.legal p { margin: 0 0 10px; color: var(--ink-2); font-size: 15px; }
+.su-card label.su-consent { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; color: #343b4b; line-height: 1.45; }
+.su-card label.su-consent input { width: 18px; min-height: 18px; height: 18px; margin-top: 2px; flex: none; accent-color: var(--violet); }
+.su-consent a { color: var(--violet); }
+@media (max-width: 680px) { .legal { margin: 0 16px; padding: 24px 20px; } }

@@ -35,6 +35,21 @@ function configure(next) {
 
 const enabled = () => process.env.NEXUS_ENABLED !== 'false';
 
+// Each company reads orders and writes prices in its own currency and weight unit.
+async function regionFor(tenantId) {
+  const tenant = await db.getTenant(tenantId);
+  const currency = /^[A-Z]{3}$/.test(String(tenant?.currency || '')) ? tenant.currency : settings.flow.currency;
+  const weightUnit = ['kg', 'lb'].includes(tenant?.weightUnit) ? tenant.weightUnit : settings.flow.weightUnit;
+  return { currency, weightUnit };
+}
+const moneyFor = (currency) => (value) => {
+  try {
+    return Number(value).toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
+  } catch (_) {
+    return `${Number(value).toFixed(2)} ${currency}`;
+  }
+};
+
 // The jobs a company can switch on or off in the AI Command Center. Missing = on.
 const AUTOMATIONS = {
   readOrders: 'Read order emails with FLOW',
@@ -172,7 +187,7 @@ async function onInboxReceived({ tenantId, inboxId }) {
       note = ai.reason;
     } else {
       try {
-        parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, settings.flow, logger(tenantId));
+        parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, { ...settings.flow, ...(await regionFor(tenantId)) }, logger(tenantId));
         await db.updateInboxItem(tenantId, inboxId, { status: 'parsed', parsed });
       } catch (error) {
         note = 'FLOW could not read this email automatically.';
@@ -284,7 +299,7 @@ async function onShipmentDispatched({ tenantId, shipmentId }) {
   }
   if (!(await automationOn(tenantId, 'priceCheck'))) return;
   // PULSE: a price far from what this lane usually costs, or a load that loses money, is worth a second look.
-  const prices = pulseAgent.analyzePrices(await db.getPulseData(tenantId, shipmentId), { formatMoney: settings.formatMoney });
+  const prices = pulseAgent.analyzePrices(await db.getPulseData(tenantId, shipmentId), { formatMoney: moneyFor((await regionFor(tenantId)).currency) });
   const warnings = prices.flags.filter((flag) => flag.level === 'warn');
   if (warnings.length) {
     await db.createTask(tenantId, {
@@ -301,7 +316,7 @@ async function onShipmentDispatched({ tenantId, shipmentId }) {
 async function draftMessageTask(tenantId, shipment, recipient, purpose, dedupeKey, extraTitle = '') {
   const tenant = await db.getTenant(tenantId);
   const draft = relayAgent.draftMessage({
-    shipment, recipient, purpose, company: tenant?.name || '', formatMoney: settings.formatMoney
+    shipment, recipient, purpose, company: tenant?.name || '', formatMoney: moneyFor((await regionFor(tenantId)).currency)
   });
   if (!draft?.to) return false;
   const what = { booking_confirmation: 'booking', pickup_details: 'pickup details', location_request: 'ask for location', status_update: 'status update', delivered: 'delivered' }[draft.purpose] || draft.purpose;
@@ -337,7 +352,7 @@ async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = f
   const shipment = await db.getShipment(tenantId, shipmentId);
   if (!file || !shipment) return;
   try {
-    const fields = await vaultAgent.extractFields({ content: file.content, mime: file.mime, filename: file.filename }, settings.flow, logger(tenantId, shipmentId));
+    const fields = await vaultAgent.extractFields({ content: file.content, mime: file.mime, filename: file.filename }, { ...settings.flow, ...(await regionFor(tenantId)) }, logger(tenantId, shipmentId));
     const comparison = vaultAgent.compareWithShipment(fields, shipment);
     await db.updateDocumentExtraction(tenantId, documentId, { status: 'done', extracted: fields, comparison });
     if (comparison.mismatches > 0) {
