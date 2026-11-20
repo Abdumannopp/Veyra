@@ -149,6 +149,7 @@ const routeAgent = require('./agents/route');
 const pulseAgent = require('./agents/pulse');
 const sentinelAgent = require('./agents/sentinel');
 const studio = require('./agents/studio');
+const { isPostgres: databaseIsPostgres } = require('./database');
 const plans = require('./lib/plans');
 const paddle = require('./integrations/paddle');
 const legal = require('./lib/legal');
@@ -1909,7 +1910,8 @@ async function createBackup() {
 
 let backupTimer = null;
 function startBackups() {
-  if (backupTimer || process.env.BACKUP_ENABLED === 'false') return;
+  // PostgreSQL is backed up by its provider (for example Railway's database backups), not by Veyra.
+  if (backupTimer || process.env.BACKUP_ENABLED === 'false' || databaseIsPostgres) return;
   const check = async () => {
     try {
       const newest = listBackups()[0];
