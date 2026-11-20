@@ -547,6 +547,18 @@
                 <div class="mini-head"><span><strong>Backups</strong><small id="backupHint">A copy of the whole database is made every day</small></span><button class="btn btn-ghost small" type="button" id="backupNow">Back up now</button></div>
                 <div class="admin-list" id="backupList"></div>
               </div>
+              <div class="admin-box hidden" id="companySettingsBox">
+                <div class="mini-head"><span><strong>Company</strong><small>Currency and weight unit for new loads, quotes and prices; your data to download</small></span></div>
+                <form class="add-user-form" id="companySettingsForm">
+                  <label>Currency<select name="currency" aria-label="Currency"></select></label>
+                  <label>Weight unit<select name="weightUnit" aria-label="Weight unit"><option value="kg">Kilograms (kg)</option><option value="lb">Pounds (lb)</option></select></label>
+                  <div class="add-user-footer">
+                    <p class="shipment-form-message" id="companySettingsMessage" role="status"></p>
+                    <a class="btn btn-ghost small" id="companyExport" href="/api/company/export" download>Download company data</a>
+                    <button class="btn btn-primary small" type="submit">Save</button>
+                  </div>
+                </form>
+              </div>
               <div class="admin-box hidden" id="companiesBox">
                 <div class="mini-head"><span><strong>Companies</strong><small>Each customer company sees only its own data</small></span><button class="btn btn-ghost small" type="button" id="addCompanyToggle" aria-expanded="false" aria-controls="addCompanyForm">Add company</button></div>
                 <form class="add-user-form hidden" id="addCompanyForm">
@@ -692,7 +704,7 @@
         </aside>
       </section>
 
-      <footer class="site-footer">© 2026 VEYRA · The AI Workforce for Logistics</footer>
+      <footer class="site-footer">© 2026 VEYRA · The AI Workforce for Logistics · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/refunds">Refunds</a></footer>
     </div>
 
     <!-- ============ MODALS ============ -->

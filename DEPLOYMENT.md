@@ -149,3 +149,9 @@ Veyra sells its Starter, Growth and Scale plans through Paddle (Enterprise is ar
 What happens: a company administrator opens **Billing → Pay by card** and picks a plan; Paddle's checkout opens on top of Veyra. Paddle's signed webhook then sets the plan to Active. If a renewal fails, Paddle reports *past due* and Veyra locks adding new loads and people until it is paid; a cancelled subscription ends the same way when the paid period is over. With `PADDLE_API_KEY`, administrators can also switch plans (Paddle charges or credits the difference) and open Paddle's portal for invoices, the card on file and cancelling.
 
 Only correctly signed webhooks are accepted (5-minute window), each company is identified by a signed reference set at checkout, and older events never overwrite newer ones.
+
+## Legal pages and regions
+
+`/terms`, `/privacy` and `/refunds` are generated from `lib/legal.js` with the `LEGAL_*` settings and `REFUND_DAYS`. They are a starting point for a B2B SaaS sold through Paddle, not legal advice: have them reviewed. Raise `TERMS_VERSION` in `lib/legal.js` when the texts change in substance; sign-up records the version each company accepted.
+
+`CURRENCY` and `WEIGHT_UNIT` are now only defaults: each company sets its own in Team & settings → Company.

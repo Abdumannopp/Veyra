@@ -78,6 +78,8 @@ const {
   listSentinelLoads,
   listTrackingOverview,
   countShipmentsThisMonth,
+  setTenantRegion,
+  exportTenantData,
   findTenantByPaddleSubscription,
   applyPaddleSubscription,
   countActiveUsers,
@@ -149,6 +151,7 @@ const sentinelAgent = require('./agents/sentinel');
 const studio = require('./agents/studio');
 const plans = require('./lib/plans');
 const paddle = require('./integrations/paddle');
+const legal = require('./lib/legal');
 const nexus = require('./agents/nexus');
 const { parseInbound, senderAllowed, mentionedShipmentIds, guessDocumentType, stripHtml } = require('./lib/inbound-email');
 const messaging = require('./integrations/messaging');
@@ -367,12 +370,33 @@ function validateNameAndEmail(name, email) {
   return null;
 }
 
-function formatMoney(value) {
+function formatMoney(value, currency = CURRENCY) {
   try {
-    return Number(value).toLocaleString('en-US', { style: 'currency', currency: CURRENCY, maximumFractionDigits: 2 });
+    return Number(value).toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
   } catch (_) {
-    return `${Number(value).toFixed(2)} ${CURRENCY}`;
+    return `${Number(value).toFixed(2)} ${currency}`;
   }
+}
+const moneyIn = (currency) => (value) => formatMoney(value, currency);
+
+/* ---------- region: each company picks its currency and weight unit ---------- */
+// Common trading currencies; any other valid ISO code can be set by the server default.
+const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'PLN', 'CZK', 'RON', 'TRY', 'AED', 'SAR', 'INR', 'CNY', 'JPY', 'KRW', 'SGD', 'MXN', 'BRL', 'ZAR', 'KZT', 'UZS', 'RUB', 'UAH', 'GEL', 'AZN', 'KGS', 'TJS', 'NGN', 'KES', 'EGP'];
+const WEIGHT_UNITS = ['kg', 'lb'];
+const regionFrom = (currency, weightUnit) => ({
+  currency: /^[A-Z]{3}$/.test(String(currency || '')) ? currency : CURRENCY,
+  weightUnit: WEIGHT_UNITS.includes(weightUnit) ? weightUnit : WEIGHT_UNIT
+});
+async function regionOf(tenantId) {
+  const tenant = await getTenant(tenantId);
+  return regionFrom(tenant?.currency, tenant?.weightUnit);
+}
+function readRegion(body, { required = false } = {}) {
+  const currency = body?.currency === undefined || body?.currency === '' ? null : String(body.currency).toUpperCase();
+  const weightUnit = body?.weightUnit === undefined || body?.weightUnit === '' ? null : String(body.weightUnit).toLowerCase();
+  if ((required || currency !== null) && !CURRENCIES.includes(currency)) throw httpError(400, `Choose a currency: ${CURRENCIES.join(', ')}.`);
+  if ((required || weightUnit !== null) && !WEIGHT_UNITS.includes(weightUnit)) throw httpError(400, 'Choose a weight unit: kg or lb.');
+  return { currency, weightUnit };
 }
 
 function serializeShipment(shipment) {
@@ -668,7 +692,8 @@ async function authMiddleware(req, res, next) {
       jti: payload.jti,
       tenantId: user.tenantId,
       tenantName: user.tenantName,
-      isPlatformAdmin: Boolean(user.isPlatformAdmin)
+      isPlatformAdmin: Boolean(user.isPlatformAdmin),
+      region: regionFrom(user.tenantCurrency, user.tenantWeightUnit)
     };
     return next();
   } catch (error) {
@@ -767,7 +792,10 @@ app.get('/api/health', (req, res) => {
 // Public settings the UI needs before sign-in (units, currency, whether sign-up is possible, features on).
 // The plans on the public pricing page. Prices are in US dollars.
 app.get('/api/plans', (req, res) => {
-  res.json({ success: true, currency: 'USD', trialDays: plans.TRIAL_DAYS, salesEmail: SALES_EMAIL, signup: companySignupOpen(), cardPayment: paddle.enabled(), plans: plans.publicPlans() });
+  res.json({
+    success: true, currency: 'USD', trialDays: plans.TRIAL_DAYS, salesEmail: SALES_EMAIL, signup: companySignupOpen(), cardPayment: paddle.enabled(),
+    plans: plans.publicPlans(), regions: { currencies: CURRENCIES, weightUnits: WEIGHT_UNITS, defaultCurrency: CURRENCY, defaultWeightUnit: WEIGHT_UNIT }
+  });
 });
 
 // Self-service: a new company with its first administrator, on a free trial of the chosen plan.
@@ -775,7 +803,9 @@ app.get('/api/plans', (req, res) => {
 app.post('/api/signup', registerLimiter, async (req, res) => {
   try {
     if (!companySignupOpen()) return res.status(403).json({ success: false, message: 'Sign-up is not open. Contact us to get an account.' });
-    const { companyName, name, email, password, plan = 'growth' } = req.body || {};
+    const { companyName, name, email, password, plan = 'growth', acceptTerms } = req.body || {};
+    if (acceptTerms !== true) return res.status(400).json({ success: false, message: 'Please accept the Terms of Service and Privacy Policy.' });
+    const region = readRegion(req.body);
     if (typeof companyName !== 'string' || !companyName.trim() || companyName.trim().length > MAX_LEN.companyName) {
       return res.status(400).json({ success: false, message: `Company name is required (at most ${MAX_LEN.companyName} characters).` });
     }
@@ -792,7 +822,10 @@ app.post('/api/signup', registerLimiter, async (req, res) => {
       adminEmail: email.trim().toLowerCase(),
       passwordHash: await bcrypt.hash(password, BCRYPT_COST),
       plan,
-      trialDays: plans.TRIAL_DAYS
+      trialDays: plans.TRIAL_DAYS,
+      currency: region.currency,
+      weightUnit: region.weightUnit,
+      termsVersion: legal.TERMS_VERSION
     });
     const user = await findUserByEmail(result.admin.email);
     await issueSessionCookie(user, res);
@@ -1084,7 +1117,7 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       }
     }
     if (!customer?.trim() || !origin?.trim() || !destination?.trim() || weightValue === null || !EQUIPMENT.includes(equipment)) {
-      return res.status(400).json({ success: false, message: `Customer, route, a weight up to ${MAX_WEIGHT.toLocaleString('en-US')} ${WEIGHT_UNIT}, and valid equipment are required.` });
+      return res.status(400).json({ success: false, message: `Customer, route, a weight up to ${MAX_WEIGHT.toLocaleString('en-US')} ${req.user.region.weightUnit}, and valid equipment are required.` });
     }
     if (!pickupDate || !deliveryDate) {
       return res.status(400).json({ success: false, message: 'Pickup and delivery must be valid dates (YYYY-MM-DD).' });
@@ -1101,7 +1134,7 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       pickup,
       delivery,
       status: 'New',
-      weight: `${weightValue} ${WEIGHT_UNIT}`,
+      weight: `${weightValue} ${req.user.region.weightUnit}`,
       equipment,
       reference: reference?.trim(),
       trackingNumber: trackingNumber?.trim(),
@@ -1229,8 +1262,8 @@ app.patch('/api/shipments/:id', authMiddleware, requirePermission('shipments:cre
   }
   if (body.weight !== undefined) {
     const weight = parsePositiveNumber(body.weight, MAX_WEIGHT);
-    if (weight === null) return bad(`Weight must be a number up to ${MAX_WEIGHT.toLocaleString('en-US')} ${WEIGHT_UNIT}.`);
-    changes.weight = `${weight} ${WEIGHT_UNIT}`;
+    if (weight === null) return bad(`Weight must be a number up to ${MAX_WEIGHT.toLocaleString('en-US')} ${req.user.region.weightUnit}.`);
+    changes.weight = `${weight} ${req.user.region.weightUnit}`;
   }
   if (body.equipment !== undefined) {
     if (!EQUIPMENT.includes(body.equipment)) return bad(`Equipment must be one of: ${EQUIPMENT.join(', ')}.`);
@@ -1276,7 +1309,7 @@ app.patch('/api/shipments/:id/payment', authMiddleware, requirePermission('shipm
 // Money that is still open (delivered but unpaid).
 app.get('/api/finance/summary', authMiddleware, requirePermission('shipments:finance'), async (req, res) => {
   try {
-    res.json({ success: true, currency: CURRENCY, ...(await getFinanceSummary(req.user.tenantId)) });
+    res.json({ success: true, currency: req.user.region.currency, ...(await getFinanceSummary(req.user.tenantId)) });
   } catch (error) {
     return sendError(res, error, 'Finance summary unavailable.', 'finance');
   }
@@ -1313,7 +1346,7 @@ ${row('Cargo', [shipment.weight, shipment.equipment].filter(Boolean).join(' · '
 ${row('Customer reference', shipment.reference)}
 ${row('Truck', shipment.truck_plate)}
 </table>
-<p class="total"><span>Total due</span><strong>${e(formatMoney(shipment.customer_rate))}</strong></p>
+<p class="total"><span>Total due</span><strong>${e(formatMoney(shipment.customer_rate, req.user.region.currency))}</strong></p>
 <p class="state">${shipment.customer_paid_at ? `Paid on ${e(String(shipment.customer_paid_at).slice(0, 10))}` : 'Not paid yet'}</p>
 <p class="actions"><button type="button" id="printButton">Print or save as PDF</button></p>
 </main><script src="/print.js"></script></body></html>`);
@@ -1587,7 +1620,7 @@ const QUOTE_VALID_DAYS = 7;
 const isoDay = (offsetDays = 0) => new Date(Date.now() + offsetDays * 86400000).toISOString().slice(0, 10);
 
 // Reads quote fields from a request. partial = only what was sent (editing). Returns { fields } or { error }.
-function readQuoteFields(body, { partial = false } = {}) {
+function readQuoteFields(body, { partial = false, weightUnit = WEIGHT_UNIT } = {}) {
   const b = body && typeof body === 'object' ? body : {};
   const fields = {};
   const has = (key) => b[key] !== undefined;
@@ -1615,7 +1648,7 @@ function readQuoteFields(body, { partial = false } = {}) {
   if (has('weight')) {
     const empty = b.weight === null || b.weight === '';
     const weight = empty ? null : parsePositiveNumber(b.weight, MAX_WEIGHT);
-    if (!empty && weight === null) return { error: `Weight must be a number up to ${MAX_WEIGHT.toLocaleString('en-US')} ${WEIGHT_UNIT}.` };
+    if (!empty && weight === null) return { error: `Weight must be a number up to ${MAX_WEIGHT.toLocaleString('en-US')} ${weightUnit}.` };
     fields.weight = weight;
   }
   for (const key of ['pickup', 'delivery']) {
@@ -1642,6 +1675,7 @@ function readQuoteFields(body, { partial = false } = {}) {
 
 // What a lane usually costs, so the quote is priced on facts (PULSE). Nothing is saved.
 async function laneEstimate(tenantId, { origin, destination, equipment }) {
+  const formatMoney = moneyIn((await regionOf(tenantId)).currency);
   const data = await getLanePriceData(tenantId, { origin, destination, equipment });
   const first = pulseAgent.analyzePrices(data, { formatMoney });
   const expectedCost = first.carrier?.typical ?? first.market?.rate ?? null;
@@ -1672,7 +1706,7 @@ app.get('/api/quotes', authMiddleware, requirePermission('shipments:read'), asyn
 });
 
 app.post('/api/quotes', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
-  const parsed = readQuoteFields(req.body);
+  const parsed = readQuoteFields(req.body, { weightUnit: req.user.region.weightUnit });
   if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
   try {
     const quote = await createQuote(req.user.tenantId, parsed.fields, req.user.id);
@@ -1707,7 +1741,7 @@ app.patch('/api/quotes/:id', authMiddleware, requirePermission('shipments:create
   if (status !== undefined && !QUOTE_STATUSES.includes(status)) {
     return res.status(400).json({ success: false, message: `Status must be one of: ${QUOTE_STATUSES.join(', ')}.` });
   }
-  const parsed = readQuoteFields(rest, { partial: true });
+  const parsed = readQuoteFields(rest, { partial: true, weightUnit: req.user.region.weightUnit });
   if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
   if (!status && !Object.keys(parsed.fields).length) return res.status(400).json({ success: false, message: 'Send at least one change.' });
   try {
@@ -1731,9 +1765,9 @@ app.post('/api/quotes/:id/convert', authMiddleware, requirePermission('shipments
     if (!parseIsoDate(pickup) || !parseIsoDate(delivery) || delivery < pickup) {
       return res.status(400).json({ success: false, message: 'Pickup and delivery dates (YYYY-MM-DD, delivery not before pickup) are needed to create the load.' });
     }
-    if (!weightValue) return res.status(400).json({ success: false, message: `The weight (${WEIGHT_UNIT}) is needed to create the load.` });
+    if (!weightValue) return res.status(400).json({ success: false, message: `The weight (${req.user.region.weightUnit}) is needed to create the load.` });
     await requireShipmentRoom(req.user.tenantId);
-    const shipmentId = await convertQuote(req.user.tenantId, id, { pickup, delivery, weight: `${weightValue} ${WEIGHT_UNIT}`, actorId: req.user.id });
+    const shipmentId = await convertQuote(req.user.tenantId, id, { pickup, delivery, weight: `${weightValue} ${req.user.region.weightUnit}`, actorId: req.user.id });
     return res.status(201).json({ success: true, shipmentId: `SHP-${shipmentId}`, quote: await getQuote(req.user.tenantId, id) });
   } catch (error) {
     return sendError(res, error, 'The load could not be created.', 'quote convert');
@@ -1759,12 +1793,12 @@ app.get('/api/quotes/:id/print', authMiddleware, requirePermission('shipments:re
 <table>
 ${row('Route', `${quote.origin} → ${quote.destination}`)}
 ${row('Equipment', quote.equipment)}
-${row('Weight', quote.weight ? `${quote.weight} ${WEIGHT_UNIT}` : '')}
+${row('Weight', quote.weight ? `${quote.weight} ${req.user.region.weightUnit}` : '')}
 ${row('Pickup', quote.pickup)}
 ${row('Delivery', quote.delivery)}
 ${row('Notes', quote.notes)}
 </table>
-<p class="total"><span>Price</span><strong>${e(formatMoney(quote.price))}</strong></p>
+<p class="total"><span>Price</span><strong>${e(formatMoney(quote.price, req.user.region.currency))}</strong></p>
 <p class="state">Price for one full truck on this route. Valid until ${e(quote.validUntil)}.</p>
 <p class="actions"><button type="button" id="printButton">Print or save as PDF</button></p>
 </main><script src="/print.js"></script></body></html>`);
@@ -1836,6 +1870,10 @@ app.get('/track/:token', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'track
 // Public price list (no sign-in).
 app.get('/pricing', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'pricing.html')));
 app.get('/signup', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'signup.html')));
+// Terms, Privacy and Refund policy (public; Paddle and the law require them before selling).
+for (const key of Object.keys(legal.PAGES)) {
+  app.get(`/${key}`, (req, res) => res.type('html').send(legal.renderPage(key)));
+}
 
 /* =========================================================
    BACKUPS: a daily copy of the whole database (platform owner only)
@@ -1983,7 +2021,7 @@ app.post('/api/shipments/:id/messages/draft', authMiddleware, requirePermission(
       recipient,
       purpose,
       company: req.user.tenantName,
-      formatMoney
+      formatMoney: moneyIn(req.user.region.currency)
     });
     const tenant = await getTenant(req.user.tenantId);
     return res.json({ success: true, draft: { ...draft, recipient, channels: messaging.publicStatus(tenant, DEFAULT_TENANT_ID).channels } });
@@ -2125,7 +2163,7 @@ app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:cr
     const item = await getInboxItem(req.user.tenantId, itemId);
     if (!item) return res.status(404).json({ success: false, message: 'Message not found.' });
     if (['converted', 'dismissed'].includes(item.status)) return res.status(409).json({ success: false, message: 'This message was already handled.' });
-    const parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, flowSettings(), agentLogger(req));
+    const parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, flowSettings(req.user.region), agentLogger(req));
     await updateInboxItem(req.user.tenantId, itemId, { status: 'parsed', parsed, error: null });
     return res.json({ success: true, ...parsed });
   } catch (error) {
@@ -2133,8 +2171,8 @@ app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:cr
   }
 });
 
-function flowSettings() {
-  return { weightUnit: WEIGHT_UNIT, currency: CURRENCY, equipment: EQUIPMENT, maxRate: MAX_RATE, maxWeight: MAX_WEIGHT };
+function flowSettings(region = regionFrom()) {
+  return { weightUnit: region.weightUnit, currency: region.currency, equipment: EQUIPMENT, maxRate: MAX_RATE, maxWeight: MAX_WEIGHT };
 }
 
 // Which load is an email about? Its number (SHP-12) or, failing that, the load's own reference in the text.
@@ -2753,8 +2791,8 @@ app.post('/api/agents/flow/parse', authMiddleware, requirePermission('shipments:
   }
   try {
     const result = await flowAgent.parseOrder(text, {
-      weightUnit: WEIGHT_UNIT,
-      currency: CURRENCY,
+      weightUnit: req.user.region.weightUnit,
+      currency: req.user.region.currency,
       equipment: EQUIPMENT,
       maxRate: MAX_RATE,
       maxWeight: MAX_WEIGHT
@@ -2822,7 +2860,7 @@ app.get('/api/agents/pulse/:id', authMiddleware, requirePermission('shipments:re
     return res.status(400).json({ success: false, message: 'Prices must be positive numbers.' });
   }
   try {
-    return res.json({ success: true, ...pulseAgent.analyzePrices(await getPulseData(req.user.tenantId, shipmentId), { rate, customerRate, formatMoney }) });
+    return res.json({ success: true, ...pulseAgent.analyzePrices(await getPulseData(req.user.tenantId, shipmentId), { rate, customerRate, formatMoney: moneyIn(req.user.region.currency) }) });
   } catch (error) {
     return sendError(res, error, 'Price advice unavailable.', 'pulse');
   }
@@ -2892,6 +2930,7 @@ app.patch('/api/carriers/:id/status', authMiddleware, requirePermission('carrier
 app.get('/api/me', authMiddleware, (req, res) => {
   res.json({
     success: true,
+    region: req.user.region,
     user: {
       id: req.user.id,
       email: req.user.email,
@@ -3240,6 +3279,37 @@ app.get('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (re
     res.json({ success: true, tenants: await listTenants() });
   } catch (error) {
     return sendError(res, error, 'Companies unavailable.', 'tenants');
+  }
+});
+
+/* ---------- company settings: region and data export ---------- */
+app.get('/api/company/settings', authMiddleware, (req, res) => {
+  res.json({ success: true, region: req.user.region, currencies: CURRENCIES, weightUnits: WEIGHT_UNITS, canChange: hasPermission(req.user, 'settings:write') });
+});
+
+// New loads, quotes and prices use the new currency and unit; amounts already saved are not converted.
+app.put('/api/company/settings', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const region = readRegion(req.body, { required: true });
+    await setTenantRegion(req.user.tenantId, region);
+    audit(req, 'company.region', `${region.currency}, ${region.weightUnit}`);
+    return res.json({ success: true, region });
+  } catch (error) {
+    return sendError(res, error, 'Settings could not be saved.', 'company settings');
+  }
+});
+
+// Everything the company owns, as one JSON file (GDPR data portability). No passwords or keys.
+app.get('/api/company/export', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const data = await exportTenantData(req.user.tenantId);
+    audit(req, 'company.export', `${data.shipments.length} loads, ${data.users.length} users`);
+    const day = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Disposition', `attachment; filename="veyra-export-${day}.json"`);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.type('application/json').send(JSON.stringify(data, null, 2));
+  } catch (error) {
+    return sendError(res, error, 'The export could not be made.', 'company export');
   }
 });
 

@@ -51,6 +51,21 @@
           <input name="password" type="password" required minlength="8" autocomplete="new-password" />
           <small>At least 8 characters, with a letter and a number.</small>
         </label>
+        <div class="su-row">
+          <label>Currency
+            <select name="currency"></select>
+          </label>
+          <label>Weight unit
+            <select name="weightUnit">
+              <option value="kg">Kilograms (kg)</option>
+              <option value="lb">Pounds (lb)</option>
+            </select>
+          </label>
+        </div>
+        <label class="su-consent">
+          <input type="checkbox" name="acceptTerms" required />
+          <span>I accept the <a href="/terms" target="_blank" rel="noopener">Terms of Service</a> and the <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a> on behalf of my company.</span>
+        </label>
         <p class="su-error" id="suError" role="alert"></p>
         <button class="pr-btn pr-btn-dark su-submit" type="submit">Create account</button>
         <p class="su-note" id="suNote"></p>
@@ -58,7 +73,7 @@
     </section>
   </main>
 
-  <footer class="pr-footer">© 2026 Veyra · The AI Workforce for Logistics</footer>
+  <footer class="pr-footer">© 2026 Veyra · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/refunds">Refunds</a></footer>
   <script src="/signup.js"></script>
 </body>
 </html>

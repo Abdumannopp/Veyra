@@ -138,6 +138,11 @@ async function restoreSession() {
     const result = await response.json();
     const user = result.user;
     localStorage.setItem('veyraUser', JSON.stringify(user));
+    // Money and weights in the company's own currency and unit.
+    if (result.region) {
+      Object.assign(window.VeyraConfig, result.region);
+      applyConfig();
+    }
     await loadMessagingStatus(true);
     applyUserChrome(user);
     if (!topButton || !user?.name) return user;
@@ -568,6 +573,7 @@ async function loadAdminConsole() {
   }
 
   adminPanel.classList.remove('hidden');
+  loadCompanySettings();
 
   const userFilterButtons = document.querySelectorAll('.filter-button[data-filter]');
   const shipmentFilterButtons = document.querySelectorAll('.filter-button[data-shipment-filter]');
@@ -1250,6 +1256,60 @@ async function createGpsToken() {
   }
 }
 
+/* ---------- Company settings: currency, weight unit, data download (administrators) ---------- */
+async function loadCompanySettings() {
+  const box = document.getElementById('companySettingsBox');
+  const form = document.getElementById('companySettingsForm');
+  if (!box || !form) return;
+  try {
+    const response = await fetch('/api/company/settings', { headers: getAuthHeaders() });
+    const data = await response.json();
+    if (!response.ok || !data.canChange) {
+      box.classList.add('hidden');
+      return;
+    }
+    const select = form.elements.currency;
+    select.replaceChildren(...data.currencies.map((code) => {
+      const option = createTextElement('option', '', code);
+      option.value = code;
+      return option;
+    }));
+    select.value = data.region.currency;
+    form.elements.weightUnit.value = data.region.weightUnit;
+    box.classList.remove('hidden');
+  } catch (_) {
+    box.classList.add('hidden');
+  }
+}
+
+function bindCompanySettings() {
+  const form = document.getElementById('companySettingsForm');
+  const message = document.getElementById('companySettingsMessage');
+  if (!form || form.dataset.bound) return;
+  form.dataset.bound = '1';
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    message.textContent = '';
+    try {
+      const response = await fetch('/api/company/settings', {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ currency: form.elements.currency.value, weightUnit: form.elements.weightUnit.value })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save');
+      Object.assign(window.VeyraConfig, result.region);
+      applyConfig();
+      notify(`Saved: ${result.region.currency}, ${result.region.weightUnit}. Amounts already saved are not converted.`, 'ok');
+    } catch (error) {
+      message.textContent = error.message;
+    }
+    submit.disabled = false;
+  });
+}
+
 /* ---------- Companies panel (platform owner only) ---------- */
 async function loadCompaniesPanel() {
   const list = document.getElementById('companyList');
@@ -1360,6 +1420,7 @@ function bindCompanyManagement() {
 
 function bindTeamManagement() {
   bindCompanyManagement();
+  bindCompanySettings();
   const toggle = document.getElementById('addUserToggle');
   const form = document.getElementById('addUserForm');
   const message = document.getElementById('addUserMessage');
