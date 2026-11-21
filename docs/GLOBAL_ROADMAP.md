@@ -9,8 +9,8 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 |---|---|---|
 | 1.0 | PostgreSQL support behind `DATABASE_URL`, full suite on both databases in CI | Done |
 | 1.1 | Versioned migrations (`schema_migrations`, `npm run migrate`, up/down, lock) | Done |
-| 1.2 | SQLite → PostgreSQL copy with row counts and checksums, before switching traffic | Next |
-| 1.3 | Tenant-scoped transactions and PostgreSQL Row Level Security | Planned |
+| 1.2 | SQLite → PostgreSQL copy with row counts and checksums, before switching traffic | Done |
+| 1.3 | Tenant-scoped transactions and PostgreSQL Row Level Security | Next |
 | 1.4 | Money as exact decimals with an ISO currency per amount | Planned |
 | 1.5 | Durable background jobs (retries, idempotency keys) for AI, tracking, OCR, notifications | Planned |
 | 1.6 | Timezone and locale per company; UTC everywhere in storage | Planned |

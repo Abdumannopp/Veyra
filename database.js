@@ -2729,6 +2729,7 @@ async function exportTenantData(tenantId) {
 
 module.exports = {
   isPostgres,
+  pgSchema,
   MIGRATIONS,
   migrate,
   migrationRunner,

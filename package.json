@@ -10,7 +10,8 @@
     "prod": "cross-env NODE_ENV=production node server.js",
     "test": "node --test",
     "db:check": "node scripts/db-check.js",
-    "migrate": "node scripts/migrate.js"
+    "migrate": "node scripts/migrate.js",
+    "migrate:postgres": "node scripts/sqlite-to-postgres.js"
   },
   "keywords": [
     "logistics",
