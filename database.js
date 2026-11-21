@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { httpError, normalizePlate } = require('./lib/validation');
 const { createRunner } = require('./lib/migrations');
+const { normalizeCurrency, roundMoney, addMoney } = require('./lib/money');
 const { current: currentContext, runAsSystem, settingsFor } = require('./lib/tenant-context');
 const secrets = require('./lib/secrets');
 
@@ -30,6 +31,8 @@ const BCRYPT_COST = Math.min(Math.max(Number.parseInt(process.env.BCRYPT_COST, 1
 
 // Tenant 1 always exists: single-company installs and data from before multi-tenancy live there.
 const DEFAULT_TENANT_ID = 1;
+// Currency of amounts when a company has not chosen one (the server default, same rule as the app's).
+const DEFAULT_CURRENCY = normalizeCurrency(process.env.CURRENCY, 'USD');
 
 function runRaw(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -115,6 +118,12 @@ function withTransaction(work) {
   });
   connectionQueue = transaction.then(() => undefined, () => undefined);
   return transaction;
+}
+
+// The currency new amounts are entered in: the company's own, else the server default.
+async function currencyOf(tenantId, reader = get) {
+  const row = await reader('SELECT currency FROM tenants WHERE id = ?', [tenantId]);
+  return normalizeCurrency(row?.currency, DEFAULT_CURRENCY);
 }
 
 // Every data function is scoped to one company. A missing tenant is a programming error,
@@ -663,6 +672,26 @@ async function enforceRowLevelSecurity() {
   return true;
 }
 
+/* ---------- money: currency per amount, exact decimals ---------- */
+const MONEY_TABLES = ['shipments', 'quotes', 'market_rates'];
+const MONEY_COLUMNS = { shipments: ['rate', 'customer_rate'], quotes: ['price', 'carrier_cost'], market_rates: ['rate'] };
+
+async function addMoneyCurrency() {
+  for (const table of MONEY_TABLES) {
+    await ensureColumns(table, [['currency', 'TEXT']]);
+    // Existing amounts were entered in the company's currency at the time; label them with it.
+    await run(
+      `UPDATE ${table} SET currency = COALESCE(NULLIF((SELECT tenants.currency FROM tenants WHERE tenants.id = ${table}.tenant_id), ''), ?) WHERE currency IS NULL`,
+      [DEFAULT_CURRENCY]
+    );
+    if (isPostgres) {
+      for (const column of MONEY_COLUMNS[table]) {
+        await run(`ALTER TABLE ${table} ALTER COLUMN ${column} TYPE NUMERIC(18,4) USING ROUND(${column}::numeric, 4)`);
+      }
+    }
+  }
+}
+
 /* ---------- versioned migrations (lib/migrations.js) ---------- */
 // Add new schema changes as new entries at the end, never by editing an applied one.
 const MIGRATIONS = [
@@ -680,6 +709,15 @@ const MIGRATIONS = [
     name: 'PostgreSQL row level security: a company can only reach its own rows',
     up: (tx) => (isPostgres ? enableRowLevelSecurity(tx) : undefined),
     down: (tx) => (isPostgres ? disableRowLevelSecurity(tx) : undefined)
+  },
+  {
+    id: '0003_money_currency',
+    name: 'Every amount carries its ISO currency; PostgreSQL stores money as exact NUMERIC(18,4)',
+    transactional: false,
+    up: () => addMoneyCurrency(),
+    down: () => {
+      throw new Error('0003_money_currency cannot be reversed. Recovery: restore the database backup taken before the upgrade.');
+    }
   }
 ];
 
@@ -1308,10 +1346,12 @@ async function updateShipmentStatus(tenantId, id, status, actorId, note) {
 async function createShipment({ customer, origin, destination, pickup, delivery, status, weight, equipment, reference, trackingNumber, customerRate, customerPhone, actorId, tenantId }) {
   assertTenant(tenantId);
   return withTransaction(async (transaction) => {
+    const currency = await currencyOf(tenantId, transaction.get);
+    customerRate = customerRate === null || customerRate === undefined ? null : roundMoney(customerRate, currency);
     const result = await transaction.run(
-      `INSERT INTO shipments (customer, origin, destination, pickup, delivery, status, weight, equipment, reference, tracking_number, customer_rate, customer_phone, tenant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [customer, origin, destination, pickup, delivery, status, weight, equipment, reference || null, trackingNumber || null, customerRate ?? null, customerPhone || null, tenantId]
+      `INSERT INTO shipments (customer, origin, destination, pickup, delivery, status, weight, equipment, reference, tracking_number, customer_rate, currency, customer_phone, tenant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [customer, origin, destination, pickup, delivery, status, weight, equipment, reference || null, trackingNumber || null, customerRate, currency, customerPhone || null, tenantId]
     );
     await recordShipmentEvent(result.id, null, status, 'Shipment created', actorId, transaction.run);
 
@@ -1327,6 +1367,7 @@ async function createShipment({ customer, origin, destination, pickup, delivery,
       weight,
       equipment,
       customerRate: customerRate ?? null,
+      currency,
       customerPhone: customerPhone || null
     };
   });
@@ -1355,17 +1396,23 @@ async function updateShipmentDetails(tenantId, id, changes, actorId) {
     const sets = [];
     const params = [];
     const notes = [];
+    // A load keeps the currency it was first priced in; an unpriced load takes the company's current one.
+    const currency = row.currency || await currencyOf(tenantId, transaction.get);
     for (const [field, value] of Object.entries(changes)) {
       const [column, label] = EDITABLE_FIELDS[field] || [];
       if (!column || value === undefined) continue;
       const before = row[column] ?? null;
-      const after = value ?? null;
+      const after = column === 'customer_rate' && value !== null ? roundMoney(value, currency) : (value ?? null);
       if (String(before ?? '') === String(after ?? '')) continue;
       sets.push(`${column} = ?`);
       params.push(after);
       notes.push(`${label}: ${before ?? '—'} → ${after ?? '—'}`);
     }
     if (!sets.length) return { changed: [] };
+    if (!row.currency) {
+      sets.push('currency = ?');
+      params.push(currency);
+    }
     await transaction.run(`UPDATE shipments SET ${sets.join(', ')} WHERE id = ? AND tenant_id = ?`, [...params, id, tenantId]);
     // 'Updated' is not a status: it marks a correction in the history without touching status timings.
     await recordShipmentEvent(id, row.status, 'Updated', notes.join('; ').slice(0, 500), actorId, transaction.run);
@@ -1407,19 +1454,29 @@ async function setShipmentPayment(tenantId, id, { invoiceNumber, invoiced, custo
 }
 
 // Money that is still open: delivered loads the customer has not paid, and carriers not yet paid.
+// Totals add up only amounts in the company's current currency; loads priced in another currency
+// (kept from before the company changed currency) are listed under otherCurrencies, never mixed in.
 async function getFinanceSummary(tenantId) {
   assertTenant(tenantId);
+  const currency = await currencyOf(tenantId);
+  const inCurrency = `COALESCE(currency, '${DEFAULT_CURRENCY}')`;
   const totals = await get(`
     SELECT
-      SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN customer_rate ELSE 0 END) AS receivable,
+      ROUND(SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN customer_rate ELSE 0 END), 4) AS receivable,
       SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN 1 ELSE 0 END) AS receivableLoads,
       SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_invoiced_at IS NULL AND customer_rate IS NOT NULL THEN 1 ELSE 0 END) AS notInvoiced,
-      SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN rate ELSE 0 END) AS payable,
+      ROUND(SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN rate ELSE 0 END), 4) AS payable,
       SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN 1 ELSE 0 END) AS payableLoads
-    FROM shipments WHERE tenant_id = ?`, [tenantId]);
+    FROM shipments WHERE tenant_id = ? AND ${inCurrency} = ?`, [tenantId, currency]);
+  const others = await all(`
+    SELECT ${inCurrency} AS currency,
+      ROUND(SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN customer_rate ELSE 0 END), 4) AS receivable,
+      ROUND(SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN rate ELSE 0 END), 4) AS payable
+    FROM shipments WHERE tenant_id = ? AND ${inCurrency} <> ? AND status = 'Delivered'
+    GROUP BY ${inCurrency} ORDER BY currency`, [tenantId, currency]);
   const delivered = `(SELECT MAX(created_at) FROM shipment_events WHERE shipment_events.shipment_id = shipments.id AND shipment_events.to_status = 'Delivered')`;
   const open = await all(`
-    SELECT shipments.id, customer, customer_rate AS customerRate, rate, customer_invoice_number AS invoiceNumber,
+    SELECT shipments.id, customer, customer_rate AS customerRate, rate, ${inCurrency} AS currency, customer_invoice_number AS invoiceNumber,
       customer_invoiced_at AS invoicedAt, customer_paid_at AS customerPaidAt, carrier_paid_at AS carrierPaidAt,
       carriers.name AS carrierName, ${delivered} AS deliveredAt,
       CAST(julianday('now') - julianday(${delivered}) AS INTEGER) AS daysSinceDelivery
@@ -1428,11 +1485,13 @@ async function getFinanceSummary(tenantId) {
       AND ((customer_paid_at IS NULL AND customer_rate IS NOT NULL) OR (carrier_paid_at IS NULL AND rate IS NOT NULL))
     ORDER BY ${delivered} ASC LIMIT 100`, [tenantId]);
   return {
+    currency,
     receivable: Number(totals?.receivable) || 0,
     receivableLoads: Number(totals?.receivableLoads) || 0,
     notInvoiced: Number(totals?.notInvoiced) || 0,
     payable: Number(totals?.payable) || 0,
     payableLoads: Number(totals?.payableLoads) || 0,
+    otherCurrencies: others.map((row) => ({ currency: row.currency, receivable: Number(row.receivable) || 0, payable: Number(row.payable) || 0 })),
     open: open.map((row) => ({ ...row, id: `SHP-${row.id}` }))
   };
 }
@@ -1482,11 +1541,12 @@ async function dispatchShipment(tenantId, id, carrierId, rate, actorId, details 
     if (claimedCarrier.changes !== 1) throw httpError(409, 'Selected carrier is no longer available.');
 
     const { customerRate, driverName, driverPhone, truckPlate } = details;
+    const currency = shipment.currency || await currencyOf(tenantId, transaction.get);
     const assignedShipment = await transaction.run(
-      `UPDATE shipments SET carrier_id = ?, rate = ?, status = 'Dispatched',
+      `UPDATE shipments SET carrier_id = ?, rate = ?, currency = ?, status = 'Dispatched',
          customer_rate = COALESCE(?, customer_rate), driver_name = ?, driver_phone = ?, truck_plate = ?
        WHERE id = ? AND status = ? AND carrier_id IS NULL`,
-      [carrierId, rate, customerRate ?? null, driverName || null, driverPhone || null, truckPlate || null, id, shipment.status]
+      [carrierId, roundMoney(rate, currency), currency, roundMoney(customerRate ?? null, currency), driverName || null, driverPhone || null, truckPlate || null, id, shipment.status]
     );
     if (assignedShipment.changes !== 1) throw httpError(409, 'Shipment state changed before dispatch could be applied.');
 
@@ -1699,8 +1759,8 @@ async function listCarriersWithStats(tenantId) {
       SUM(CASE WHEN shipments.status NOT IN ('Delivered', 'Cancelled') THEN 1 ELSE 0 END) AS activeLoads,
       SUM(CASE WHEN shipments.status = 'Delivered' THEN 1 ELSE 0 END) AS deliveredLoads,
       SUM(CASE WHEN shipments.status = 'Exception' THEN 1 ELSE 0 END) AS exceptionLoads,
-      COALESCE(SUM(CASE WHEN shipments.status <> 'Cancelled' THEN shipments.rate END), 0) AS revenue,
-      AVG(CASE WHEN shipments.status <> 'Cancelled' THEN shipments.rate END) AS averageRate,
+      ROUND(COALESCE(SUM(CASE WHEN shipments.status <> 'Cancelled' THEN shipments.rate END), 0), 4) AS revenue,
+      ROUND(AVG(CASE WHEN shipments.status <> 'Cancelled' THEN shipments.rate END), 4) AS averageRate,
       MAX(CASE WHEN shipments.status NOT IN ('Delivered', 'Cancelled') THEN shipments.id END) AS currentShipmentId
     FROM carriers
     LEFT JOIN shipments ON shipments.carrier_id = carriers.id
@@ -1736,7 +1796,7 @@ async function getScoutData(tenantId, shipmentId) {
     SELECT carriers.id, carriers.name, carriers.mode, carriers.phone,
       SUM(CASE WHEN shipments.status = 'Delivered' THEN 1 ELSE 0 END) AS delivered,
       SUM(CASE WHEN shipments.status = 'Delivered' AND lower(shipments.origin) = lower(?) AND lower(shipments.destination) = lower(?) THEN 1 ELSE 0 END) AS laneDelivered,
-      AVG(CASE WHEN shipments.status <> 'Cancelled' AND lower(shipments.origin) = lower(?) AND lower(shipments.destination) = lower(?) THEN shipments.rate END) AS laneAverageRate,
+      ROUND(AVG(CASE WHEN shipments.status <> 'Cancelled' AND lower(shipments.origin) = lower(?) AND lower(shipments.destination) = lower(?) THEN shipments.rate END), 4) AS laneAverageRate,
       (SELECT COUNT(DISTINCT shipment_events.shipment_id) FROM shipment_events
          JOIN shipments AS s2 ON s2.id = shipment_events.shipment_id
          WHERE s2.carrier_id = carriers.id AND shipment_events.to_status = 'Exception') AS exceptionLoads
@@ -1746,7 +1806,7 @@ async function getScoutData(tenantId, shipmentId) {
     GROUP BY carriers.id
   `, [...lane, ...lane, tenantId]);
   const market = await get(
-    "SELECT AVG(rate) AS averageRate, COUNT(rate) AS loads FROM shipments WHERE tenant_id = ? AND status <> 'Cancelled' AND lower(origin) = lower(?) AND lower(destination) = lower(?)",
+    "SELECT ROUND(AVG(rate), 4) AS averageRate, COUNT(rate) AS loads FROM shipments WHERE tenant_id = ? AND status <> 'Cancelled' AND lower(origin) = lower(?) AND lower(destination) = lower(?)",
     [tenantId, ...lane]
   );
   return {
@@ -1811,7 +1871,7 @@ async function getAnalyticsPayload(tenantId, { days = 7 } = {}) {
       SUM(CASE WHEN status = 'Pending Approval' THEN 1 ELSE 0 END) AS pending,
       SUM(CASE WHEN status = 'Delivered' THEN 1 ELSE 0 END) AS delivered,
       SUM(CASE WHEN status = 'Exception' THEN 1 ELSE 0 END) AS exceptions,
-      AVG(CASE WHEN rate IS NOT NULL THEN rate END) AS averageRate
+      ROUND(AVG(CASE WHEN rate IS NOT NULL THEN rate END), 4) AS averageRate
       FROM shipments WHERE tenant_id = ?`, [tenantId]),
     listCarriers(tenantId)
   ]);
@@ -1863,16 +1923,16 @@ async function getAnalyticsReport(tenantId, { days = 7 } = {}) {
   const base = await getAnalyticsPayload(tenantId, { days });
   const [equipmentRows, laneRows, customerRows, revenueRow, carrierStats] = await Promise.all([
     all("SELECT COALESCE(equipment, 'Unspecified') AS label, COUNT(*) AS total FROM shipments WHERE tenant_id = ? GROUP BY COALESCE(equipment, 'Unspecified') ORDER BY total DESC", [tenantId]),
-    all(`SELECT origin, destination, COUNT(*) AS total, AVG(CASE WHEN status <> 'Cancelled' THEN rate END) AS averageRate
+    all(`SELECT origin, destination, COUNT(*) AS total, ROUND(AVG(CASE WHEN status <> 'Cancelled' THEN rate END), 4) AS averageRate
       FROM shipments WHERE tenant_id = ? GROUP BY origin, destination ORDER BY total DESC, origin LIMIT 5`, [tenantId]),
     all(`SELECT customer, COUNT(*) AS total,
       SUM(CASE WHEN status NOT IN ('Delivered', 'Cancelled') THEN 1 ELSE 0 END) AS active,
-      COALESCE(SUM(CASE WHEN status <> 'Cancelled' THEN rate END), 0) AS revenue
+      ROUND(COALESCE(SUM(CASE WHEN status <> 'Cancelled' THEN rate END), 0), 4) AS revenue
       FROM shipments WHERE tenant_id = ? GROUP BY customer ORDER BY total DESC, revenue DESC, customer LIMIT 5`, [tenantId]),
     // rate = what we pay the carrier; customer_rate = what the customer pays us. Margin needs both.
-    get(`SELECT COALESCE(SUM(rate), 0) AS revenue, COUNT(rate) AS pricedLoads,
-      COALESCE(SUM(CASE WHEN rate IS NOT NULL AND customer_rate IS NOT NULL THEN customer_rate - rate END), 0) AS margin,
-      COALESCE(SUM(CASE WHEN rate IS NOT NULL AND customer_rate IS NOT NULL THEN customer_rate END), 0) AS marginBase,
+    get(`SELECT ROUND(COALESCE(SUM(rate), 0), 4) AS revenue, COUNT(rate) AS pricedLoads,
+      ROUND(COALESCE(SUM(CASE WHEN rate IS NOT NULL AND customer_rate IS NOT NULL THEN customer_rate - rate END), 0), 4) AS margin,
+      ROUND(COALESCE(SUM(CASE WHEN rate IS NOT NULL AND customer_rate IS NOT NULL THEN customer_rate END), 0), 4) AS marginBase,
       SUM(CASE WHEN rate IS NOT NULL AND customer_rate IS NOT NULL THEN 1 ELSE 0 END) AS marginLoads
       FROM shipments WHERE tenant_id = ? AND status <> 'Cancelled'`, [tenantId]),
     listCarriersWithStats(tenantId)
@@ -2237,7 +2297,7 @@ async function listOpenTasksByKeyPrefix(tenantId, prefix) {
 
 /* ---------------- market prices (PULSE) ---------------- */
 
-const mapMarketRate = (row) => ({ id: row.id, origin: row.origin, destination: row.destination, equipment: row.equipment || null, rate: Number(row.rate), updatedAt: row.updated_at });
+const mapMarketRate = (row) => ({ id: row.id, origin: row.origin, destination: row.destination, equipment: row.equipment || null, rate: Number(row.rate), currency: row.currency || DEFAULT_CURRENCY, updatedAt: row.updated_at });
 
 async function listMarketRates(tenantId) {
   return (await all('SELECT * FROM market_rates WHERE tenant_id = ? ORDER BY lower(origin), lower(destination), equipment LIMIT 2000', [assertTenant(tenantId)])).map(mapMarketRate);
@@ -2246,12 +2306,14 @@ async function listMarketRates(tenantId) {
 // Adds or updates one lane price. Returns 'created' or 'updated'.
 async function upsertMarketRate(tenantId, { origin, destination, equipment = '', rate }) {
   assertTenant(tenantId);
+  const currency = await currencyOf(tenantId);
+  rate = roundMoney(rate, currency);
   const existing = await get('SELECT id FROM market_rates WHERE tenant_id = ? AND lower(origin) = lower(?) AND lower(destination) = lower(?) AND equipment = ?', [tenantId, origin, destination, equipment]);
   if (existing) {
-    await run('UPDATE market_rates SET rate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?', [rate, existing.id, tenantId]);
+    await run('UPDATE market_rates SET rate = ?, currency = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?', [rate, currency, existing.id, tenantId]);
     return 'updated';
   }
-  await run('INSERT INTO market_rates (tenant_id, origin, destination, equipment, rate) VALUES (?, ?, ?, ?, ?)', [tenantId, origin, destination, equipment, rate]);
+  await run('INSERT INTO market_rates (tenant_id, origin, destination, equipment, rate, currency) VALUES (?, ?, ?, ?, ?, ?)', [tenantId, origin, destination, equipment, rate, currency]);
   return 'created';
 }
 
@@ -2298,6 +2360,9 @@ const QUOTE_FIELDS = {
   weight: 'weight', pickup: 'pickup', delivery: 'delivery', price: 'price', carrierCost: 'carrier_cost', validUntil: 'valid_until', notes: 'notes'
 };
 
+// Amounts are kept to the minor unit of the quote's currency.
+const quoteValue = (key, value, currency) => (['price', 'carrierCost'].includes(key) && value !== null && value !== undefined ? roundMoney(value, currency) : value);
+
 // A sent quote whose date has passed shows as expired (nothing is stored for that).
 function mapQuote(row) {
   const today = new Date().toISOString().slice(0, 10);
@@ -2315,7 +2380,8 @@ function mapQuote(row) {
     delivery: row.delivery || null,
     price: Number(row.price),
     carrierCost: row.carrier_cost === null ? null : Number(row.carrier_cost),
-    margin: row.carrier_cost === null ? null : Math.round((row.price - row.carrier_cost) * 100) / 100,
+    currency: row.currency || DEFAULT_CURRENCY,
+    margin: row.carrier_cost === null ? null : addMoney(row.currency || DEFAULT_CURRENCY, row.price, -row.carrier_cost),
     validUntil: row.valid_until,
     notes: row.notes || null,
     status: expired ? 'expired' : row.status,
@@ -2331,9 +2397,10 @@ const QUOTE_SELECT = 'SELECT quotes.*, users.name AS createdBy FROM quotes LEFT 
 async function createQuote(tenantId, fields, actorId) {
   assertTenant(tenantId);
   const columns = Object.keys(QUOTE_FIELDS).filter((key) => fields[key] !== undefined);
+  const currency = await currencyOf(tenantId);
   const result = await run(
-    `INSERT INTO quotes (tenant_id, created_by, ${columns.map((key) => QUOTE_FIELDS[key]).join(', ')}) VALUES (?, ?, ${columns.map(() => '?').join(', ')})`,
-    [tenantId, actorId || null, ...columns.map((key) => fields[key])]
+    `INSERT INTO quotes (tenant_id, created_by, currency, ${columns.map((key) => QUOTE_FIELDS[key]).join(', ')}) VALUES (?, ?, ?, ${columns.map(() => '?').join(', ')})`,
+    [tenantId, actorId || null, currency, ...columns.map((key) => quoteValue(key, fields[key], currency))]
   );
   return getQuote(tenantId, result.id);
 }
@@ -2357,7 +2424,7 @@ async function updateQuote(tenantId, id, fields, status) {
   if (editable.length && (current.shipmentId || current.status === 'declined')) throw httpError(409, 'This quote is closed and can no longer be edited.');
   if (status && current.shipmentId) throw httpError(409, 'This quote already became a load.');
   const sets = editable.map((key) => `${QUOTE_FIELDS[key]} = ?`);
-  const params = editable.map((key) => fields[key]);
+  const params = editable.map((key) => quoteValue(key, fields[key], current.currency));
   if (status) {
     sets.push('status = ?');
     params.push(status);
@@ -2376,9 +2443,9 @@ async function convertQuote(tenantId, id, { pickup, delivery, weight, actorId })
     if (row.shipment_id) throw httpError(409, `This quote already became SHP-${row.shipment_id}.`);
     if (row.status === 'declined') throw httpError(409, 'A declined quote cannot become a load.');
     const result = await transaction.run(
-      `INSERT INTO shipments (customer, origin, destination, pickup, delivery, status, weight, equipment, reference, customer_rate, customer_phone, tenant_id)
-       VALUES (?, ?, ?, ?, ?, 'New', ?, ?, ?, ?, ?, ?)`,
-      [row.customer, row.origin, row.destination, pickup, delivery, weight, row.equipment, `Q-${row.id}`, row.price, row.customer_phone || null, tenantId]
+      `INSERT INTO shipments (customer, origin, destination, pickup, delivery, status, weight, equipment, reference, customer_rate, currency, customer_phone, tenant_id)
+       VALUES (?, ?, ?, ?, ?, 'New', ?, ?, ?, ?, ?, ?, ?)`,
+      [row.customer, row.origin, row.destination, pickup, delivery, weight, row.equipment, `Q-${row.id}`, row.price, row.currency || await currencyOf(tenantId, transaction.get), row.customer_phone || null, tenantId]
     );
     await recordShipmentEvent(result.id, null, 'New', `Created from quote Q-${row.id}`, actorId, transaction.run);
     await transaction.run("UPDATE quotes SET status = 'accepted', shipment_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [result.id, id]);

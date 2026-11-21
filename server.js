@@ -151,6 +151,7 @@ const sentinelAgent = require('./agents/sentinel');
 const studio = require('./agents/studio');
 const { isPostgres: databaseIsPostgres } = require('./database');
 const { runAsSystem, runAsTenant } = require('./lib/tenant-context');
+const { addMoney } = require('./lib/money');
 const plans = require('./lib/plans');
 const paddle = require('./integrations/paddle');
 const legal = require('./lib/legal');
@@ -420,7 +421,8 @@ function serializeShipment(shipment) {
     carrierId: shipment.carrier_id,
     rate: shipment.rate,
     customerRate: shipment.customer_rate ?? null,
-    margin: hasMargin ? Math.round((shipment.customer_rate - shipment.rate) * 100) / 100 : null,
+    currency: shipment.currency || CURRENCY,
+    margin: hasMargin ? addMoney(shipment.currency || CURRENCY, shipment.customer_rate, -shipment.rate) : null,
     weight: shipment.weight,
     equipment: shipment.equipment,
     carrierName: shipment.carrierName,
