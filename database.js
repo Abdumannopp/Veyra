@@ -5,6 +5,7 @@ const { httpError, normalizePlate } = require('./lib/validation');
 const { createRunner } = require('./lib/migrations');
 const { normalizeCurrency, roundMoney, addMoney } = require('./lib/money');
 const timeLib = require('./lib/time');
+const legsLib = require('./lib/legs');
 const { current: currentContext, runAsSystem, settingsFor } = require('./lib/tenant-context');
 const secrets = require('./lib/secrets');
 
@@ -771,6 +772,74 @@ const MIGRATIONS = [
     down: (tx) => {
       throw new Error('0005_company_time_zone_locale cannot be reversed. Recovery: restore the database backup taken before the upgrade (the new columns are harmless if left).');
     }
+  },
+  {
+    id: '0006_shipment_legs',
+    name: 'Shipment legs: one order, several legs by road, ocean, air, rail, warehouse or last mile',
+    transactional: false,
+    up: async (tx) => {
+      await ensureColumns('shipments', [['leg_mode', "TEXT NOT NULL DEFAULT 'single'"]]);
+      await ensureColumns('documents', [['leg_id', 'INTEGER']]);
+      await ensureColumns('tracking_updates', [['leg_id', 'INTEGER']]);
+      await run(`
+        CREATE TABLE IF NOT EXISTS shipment_legs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          shipment_id INTEGER NOT NULL REFERENCES shipments(id),
+          sequence INTEGER NOT NULL,
+          mode TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'Planned',
+          carrier_id INTEGER REFERENCES carriers(id),
+          origin TEXT NOT NULL,
+          destination TEXT NOT NULL,
+          scheduled_pickup TEXT,
+          scheduled_delivery TEXT,
+          price REAL,
+          currency TEXT,
+          reference TEXT,
+          details TEXT NOT NULL DEFAULT '{}',
+          last_location TEXT,
+          eta TEXT,
+          last_tracked_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
+      await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_shipment_legs_sequence ON shipment_legs (shipment_id, sequence)');
+      await run('CREATE INDEX IF NOT EXISTS idx_shipment_legs_tenant ON shipment_legs (tenant_id, shipment_id)');
+      await run(`
+        CREATE TABLE IF NOT EXISTS leg_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          leg_id INTEGER NOT NULL REFERENCES shipment_legs(id),
+          from_status TEXT,
+          to_status TEXT NOT NULL,
+          note TEXT,
+          actor_id INTEGER,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
+      await run('CREATE INDEX IF NOT EXISTS idx_leg_events_leg ON leg_events (leg_id, id)');
+      await run(`
+        CREATE TABLE IF NOT EXISTS leg_handovers (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          shipment_id INTEGER NOT NULL REFERENCES shipments(id),
+          from_leg_id INTEGER NOT NULL REFERENCES shipment_legs(id),
+          to_leg_id INTEGER NOT NULL REFERENCES shipment_legs(id),
+          location TEXT,
+          received_by TEXT,
+          note TEXT,
+          actor_id INTEGER,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
+      await run('CREATE INDEX IF NOT EXISTS idx_leg_handovers_shipment ON leg_handovers (shipment_id, id)');
+      if (isPostgres) {
+        await run('ALTER TABLE shipment_legs ALTER COLUMN price TYPE NUMERIC(18,4) USING ROUND(price::numeric, 4)');
+        for (const table of ['shipment_legs', 'leg_events', 'leg_handovers']) await protectTenantTable(tx, table);
+      }
+    },
+    down: () => {
+      throw new Error('0006_shipment_legs cannot be reversed. Recovery: restore the database backup taken before the upgrade.');
+    }
   }
 ];
 
@@ -1331,6 +1400,11 @@ async function getShipment(tenantId, id) {
   return get(`${SHIPMENT_SELECT} WHERE shipments.id = ? AND shipments.tenant_id = ?`, [id, assertTenant(tenantId)]);
 }
 
+// A load with several legs is driven through its legs (API /api/v2); the classic single-truck actions would contradict them.
+function assertSingleLeg(shipment) {
+  if (shipment.leg_mode === 'multi') throw httpError(409, 'This load has several legs. Update its legs instead (API /api/v2/legs).');
+}
+
 const STATUS_TRANSITIONS = {
   New: ['Sourcing', 'Cancelled'],
   // 'Dispatched' is reachable only through dispatchShipment (needs carrier + rate).
@@ -1362,8 +1436,9 @@ async function recordShipmentEvent(shipmentId, fromStatus, toStatus, note, actor
 async function updateShipmentStatus(tenantId, id, status, actorId, note) {
   assertTenant(tenantId);
   return withTransaction(async (transaction) => {
-    const current = await transaction.get('SELECT id, status, carrier_id FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+    const current = await transaction.get('SELECT id, status, carrier_id, leg_mode FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
     if (!current) throw httpError(404, 'Shipment not found.');
+    assertSingleLeg(current);
 
     if (!(STATUS_TRANSITIONS[current.status] || []).includes(status)) {
       throw httpError(409, `Cannot move shipment from ${current.status} to ${status}.`);
@@ -1401,9 +1476,14 @@ async function updateShipmentStatus(tenantId, id, status, actorId, note) {
   });
 }
 
-async function createShipment({ customer, origin, destination, pickup, delivery, status, weight, equipment, reference, trackingNumber, customerRate, customerPhone, actorId, tenantId }) {
-  assertTenant(tenantId);
-  return withTransaction(async (transaction) => {
+async function createShipment(fields) {
+  assertTenant(fields.tenantId);
+  return withTransaction((transaction) => insertShipment(transaction, fields));
+}
+
+// The insert itself, inside a transaction the caller already holds.
+async function insertShipment(transaction, { customer, origin, destination, pickup, delivery, status, weight, equipment, reference, trackingNumber, customerRate, customerPhone, actorId, tenantId }) {
+  {
     const currency = await currencyOf(tenantId, transaction.get);
     customerRate = customerRate === null || customerRate === undefined ? null : roundMoney(customerRate, currency);
     const result = await transaction.run(
@@ -1428,7 +1508,7 @@ async function createShipment({ customer, origin, destination, pickup, delivery,
       currency,
       customerPhone: customerPhone || null
     };
-  });
+  }
 }
 
 const EDITABLE_FIELDS = {
@@ -1575,8 +1655,9 @@ async function findSharedShipment(tokenHash) {
 async function dispatchShipment(tenantId, id, carrierId, rate, actorId, details = {}) {
   assertTenant(tenantId);
   return withTransaction(async (transaction) => {
-    const shipment = await transaction.get('SELECT id, status, carrier_id FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+    const shipment = await transaction.get('SELECT id, status, carrier_id, currency, leg_mode FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
     if (!shipment) throw httpError(404, 'Shipment not found.');
+    assertSingleLeg(shipment);
     if (!['Sourcing', 'Pending Approval'].includes(shipment.status) || shipment.carrier_id) {
       throw httpError(409, 'Shipment must be unassigned and in sourcing or pending approval before dispatch.');
     }
@@ -1620,8 +1701,9 @@ async function dispatchShipment(tenantId, id, carrierId, rate, actorId, details 
 async function addTrackingUpdate(tenantId, shipmentId, { location, eta, note }, actorId) {
   assertTenant(tenantId);
   return withTransaction(async (transaction) => {
-    const shipment = await transaction.get('SELECT id, status FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+    const shipment = await transaction.get('SELECT id, status, leg_mode FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
     if (!shipment) throw httpError(404, 'Shipment not found.');
+    assertSingleLeg(shipment);
     if (!TRACKABLE_STATUSES.includes(shipment.status)) {
       throw httpError(409, `Location updates are only possible while a load is ${TRACKABLE_STATUSES.join(', ')}.`);
     }
@@ -2968,6 +3050,267 @@ async function exportTenantData(tenantId) {
   };
 }
 
+/* ---------- shipment legs (lib/legs.js has the rules) ---------- */
+// A load is one customer order. A classic single-truck load has no leg rows: it is shown as one ROAD leg built
+// from the load itself. Adding a second leg (or creating a load with legs) turns it into a multi-leg load whose
+// legs are stored; from then on its status, price and tracking come from the legs.
+const LEG_SELECT = `SELECT l.id, l.shipment_id AS shipmentId, l.sequence, l.mode, l.status, l.carrier_id AS carrierId, carriers.name AS carrierName,
+    l.origin, l.destination, l.scheduled_pickup AS scheduledPickup, l.scheduled_delivery AS scheduledDelivery, l.price, l.currency, l.reference,
+    l.details, l.last_location AS lastLocation, l.eta, l.last_tracked_at AS lastTrackedAt, l.created_at AS createdAt, l.updated_at AS updatedAt
+  FROM shipment_legs l LEFT JOIN carriers ON carriers.id = l.carrier_id`;
+
+function mapLeg(row) {
+  let details = {};
+  try {
+    details = JSON.parse(row.details || '{}') || {};
+  } catch (_) {
+    details = {};
+  }
+  return {
+    id: row.id, shipmentId: row.shipmentId, sequence: Number(row.sequence), mode: row.mode, status: row.status,
+    carrierId: row.carrierId ?? null, carrierName: row.carrierName || null, origin: row.origin, destination: row.destination,
+    scheduledPickup: row.scheduledPickup || null, scheduledDelivery: row.scheduledDelivery || null,
+    price: row.price === null || row.price === undefined ? null : Number(row.price), currency: row.currency || null,
+    reference: row.reference || null, details, lastLocation: row.lastLocation || null, eta: row.eta || null,
+    lastTrackedAt: row.lastTrackedAt || null, createdAt: row.createdAt, updatedAt: row.updatedAt, synthetic: false
+  };
+}
+
+// The classic load as its one ROAD leg (nothing is stored for it).
+function syntheticLeg(row) {
+  const details = {};
+  for (const [key, column] of [['truckPlate', 'truck_plate'], ['driverName', 'driver_name'], ['driverPhone', 'driver_phone'], ['equipment', 'equipment']]) {
+    if (row[column]) details[key] = String(row[column]);
+  }
+  return {
+    id: null, shipmentId: row.id, sequence: 1, mode: 'ROAD', status: legsLib.LEG_STATUS_OF_SHIPMENT[row.status] || 'Planned',
+    carrierId: row.carrier_id ?? null, carrierName: row.carrierName || null, origin: row.origin, destination: row.destination,
+    scheduledPickup: row.pickup || null, scheduledDelivery: row.delivery || null,
+    price: row.rate === null || row.rate === undefined ? null : Number(row.rate), currency: row.currency || null, reference: row.reference || null,
+    details, lastLocation: row.last_location || null, eta: row.eta || null, lastTrackedAt: row.last_tracked_at || null,
+    createdAt: row.created_at, updatedAt: row.created_at, synthetic: true
+  };
+}
+
+async function getShipmentLegs(tenantId, shipmentId) {
+  assertTenant(tenantId);
+  const shipment = await get(
+    'SELECT shipments.*, carriers.name AS carrierName FROM shipments LEFT JOIN carriers ON carriers.id = shipments.carrier_id WHERE shipments.id = ? AND shipments.tenant_id = ?',
+    [shipmentId, tenantId]
+  );
+  if (!shipment) return null;
+  const base = { shipmentId: shipment.id, status: shipment.status, currency: shipment.currency || null };
+  if (shipment.leg_mode !== 'multi') return { ...base, multi: false, legs: [syntheticLeg(shipment)], handovers: [], events: [] };
+  const [legs, handovers, events] = await Promise.all([
+    all(`${LEG_SELECT} WHERE l.shipment_id = ? AND l.tenant_id = ? ORDER BY l.sequence`, [shipmentId, tenantId]),
+    all('SELECT id, from_leg_id AS fromLegId, to_leg_id AS toLegId, location, received_by AS receivedBy, note, created_at AS createdAt FROM leg_handovers WHERE shipment_id = ? AND tenant_id = ? ORDER BY id', [shipmentId, tenantId]),
+    all(`SELECT e.id, e.leg_id AS legId, e.from_status AS fromStatus, e.to_status AS toStatus, e.note, e.created_at AS createdAt, users.name AS actor
+      FROM leg_events e LEFT JOIN users ON users.id = e.actor_id
+      WHERE e.tenant_id = ? AND e.leg_id IN (SELECT id FROM shipment_legs WHERE shipment_id = ?) ORDER BY e.id DESC LIMIT 200`, [tenantId, shipmentId])
+  ]);
+  return { ...base, multi: true, legs: legs.map(mapLeg), handovers: handovers.map((row) => ({ ...row })), events: events.map((row) => ({ ...row })) };
+}
+
+async function getLeg(tenantId, legId) {
+  assertTenant(tenantId);
+  const row = await get(`${LEG_SELECT} WHERE l.id = ? AND l.tenant_id = ?`, [legId, tenantId]);
+  return row ? mapLeg(row) : null;
+}
+
+async function recordLegEvent(tx, tenantId, legId, fromStatus, toStatus, note, actorId) {
+  await tx.run('INSERT INTO leg_events (tenant_id, leg_id, from_status, to_status, note, actor_id) VALUES (?, ?, ?, ?, ?, ?)',
+    [tenantId, legId, fromStatus || null, toStatus, note ? String(note).slice(0, 500) : null, actorId || null]);
+}
+
+async function insertLeg(tx, tenantId, shipment, sequence, input, actorId, { status = 'Planned' } = {}) {
+  const currency = input.currency || shipment.currency || (await currencyOf(tenantId, tx.get));
+  const price = input.price === null || input.price === undefined ? null : roundMoney(input.price, currency);
+  if (input.carrierId) {
+    if (!(await tx.get('SELECT id FROM carriers WHERE id = ? AND tenant_id = ?', [input.carrierId, tenantId]))) throw httpError(404, 'Carrier not found.');
+  }
+  const result = await tx.run(
+    `INSERT INTO shipment_legs (tenant_id, shipment_id, sequence, mode, status, carrier_id, origin, destination, scheduled_pickup, scheduled_delivery, price, currency, reference, details, last_location, eta)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [tenantId, shipment.id, sequence, input.mode, status, input.carrierId || null, input.origin, input.destination, input.scheduledPickup || null,
+      input.scheduledDelivery || null, price, currency, input.reference || null, JSON.stringify(input.details || {}), input.lastLocation || null, input.eta || null]
+  );
+  await recordLegEvent(tx, tenantId, result.id, null, status, `Leg ${sequence} (${input.mode}) added`, actorId);
+  return result.id;
+}
+
+// The load's own status and price follow its legs: status from the legs, price = the legs' prices when every leg
+// that is still going has one in the load's currency (otherwise unknown, so left empty rather than guessed).
+async function rollupShipment(tx, tenantId, shipmentId, actorId, note) {
+  const shipment = await tx.get('SELECT id, status, currency FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+  const legs = await tx.all('SELECT status, price, currency FROM shipment_legs WHERE shipment_id = ? AND tenant_id = ? ORDER BY sequence', [shipmentId, tenantId]);
+  const status = legsLib.rollupStatus(legs.map((leg) => leg.status));
+  const live = legs.filter((leg) => leg.status !== 'Cancelled');
+  const priced = live.filter((leg) => leg.price !== null && leg.price !== undefined && (leg.currency || shipment.currency) === shipment.currency);
+  const rate = live.length && priced.length === live.length ? addMoney(shipment.currency, ...priced.map((leg) => Number(leg.price))) : null;
+  await tx.run('UPDATE shipments SET status = ?, rate = ? WHERE id = ?', [status, rate, shipmentId]);
+  if (status !== shipment.status) await recordShipmentEvent(shipmentId, shipment.status, status, note, actorId, tx.run);
+  return status;
+}
+
+// A new load made of several legs.
+async function createShipmentWithLegs({ legs, ...fields }) {
+  assertTenant(fields.tenantId);
+  return withTransaction(async (tx) => {
+    const created = await insertShipment(tx, { ...fields, status: 'New' });
+    const shipmentId = Number(String(created.id).replace('SHP-', ''));
+    await tx.run("UPDATE shipments SET leg_mode = 'multi' WHERE id = ?", [shipmentId]);
+    let sequence = 0;
+    for (const input of legs) {
+      sequence += 1;
+      await insertLeg(tx, fields.tenantId, { id: shipmentId, currency: created.currency }, sequence, input, fields.actorId);
+    }
+    await rollupShipment(tx, fields.tenantId, shipmentId, fields.actorId, 'Legs planned');
+    return { ...created, id: `SHP-${shipmentId}`, shipmentId };
+  });
+}
+
+// Adds a leg at the end. A classic load becomes a multi-leg load (allowed until its truck is booked).
+async function addLeg(tenantId, shipmentId, input, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const shipment = await tx.get('SELECT shipments.*, carriers.name AS carrierName FROM shipments LEFT JOIN carriers ON carriers.id = shipments.carrier_id WHERE shipments.id = ? AND shipments.tenant_id = ?', [shipmentId, tenantId]);
+    if (!shipment) throw httpError(404, 'Shipment not found.');
+    if (['Delivered', 'Cancelled'].includes(shipment.status)) throw httpError(409, `A ${shipment.status.toLowerCase()} load cannot get another leg.`);
+    if (shipment.leg_mode !== 'multi') {
+      if (shipment.carrier_id || ['Dispatched', 'In Transit', 'Exception'].includes(shipment.status)) {
+        throw httpError(409, 'A load whose truck is already booked cannot be split into legs. Add the legs before booking.');
+      }
+      const first = syntheticLeg(shipment);
+      await insertLeg(tx, tenantId, shipment, 1, {
+        mode: 'ROAD', origin: first.origin, destination: first.destination, carrierId: null, price: first.price, currency: first.currency,
+        scheduledPickup: first.scheduledPickup, scheduledDelivery: first.scheduledDelivery, reference: first.reference, details: first.details,
+        lastLocation: first.lastLocation, eta: first.eta
+      }, actorId, { status: first.status });
+      await tx.run("UPDATE shipments SET leg_mode = 'multi' WHERE id = ?", [shipmentId]);
+    }
+    const last = await tx.get('SELECT MAX(sequence) AS sequence FROM shipment_legs WHERE shipment_id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+    const sequence = Number(last?.sequence || 0) + 1;
+    const id = await insertLeg(tx, tenantId, shipment, sequence, input, actorId);
+    await rollupShipment(tx, tenantId, shipmentId, actorId, `Leg ${sequence} (${input.mode}) added`);
+    return { id, sequence };
+  });
+}
+
+const LEG_FIELDS = {
+  mode: 'mode', origin: 'origin', destination: 'destination', carrierId: 'carrier_id', price: 'price', currency: 'currency',
+  scheduledPickup: 'scheduled_pickup', scheduledDelivery: 'scheduled_delivery', reference: 'reference', eta: 'eta'
+};
+
+// Changes a leg that is not finished. The mode can only change while the leg is still planned.
+async function updateLeg(tenantId, legId, changes, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const leg = await tx.get('SELECT * FROM shipment_legs WHERE id = ? AND tenant_id = ?', [legId, tenantId]);
+    if (!leg) throw httpError(404, 'Leg not found.');
+    if (!legsLib.OPEN_LEG_STATUSES.includes(leg.status)) throw httpError(409, `A ${leg.status.toLowerCase()} leg can no longer be edited.`);
+    if (changes.mode !== undefined && changes.mode !== leg.mode && leg.status !== 'Planned') throw httpError(409, 'The mode can only change while the leg is planned.');
+    const shipment = await tx.get('SELECT id, currency FROM shipments WHERE id = ? AND tenant_id = ?', [leg.shipment_id, tenantId]);
+    if (changes.carrierId) {
+      if (!(await tx.get('SELECT id FROM carriers WHERE id = ? AND tenant_id = ?', [changes.carrierId, tenantId]))) throw httpError(404, 'Carrier not found.');
+    }
+    const sets = [];
+    const params = [];
+    const notes = [];
+    const currency = changes.currency || leg.currency || shipment.currency;
+    for (const [field, column] of Object.entries(LEG_FIELDS)) {
+      if (changes[field] === undefined) continue;
+      const value = field === 'price' && changes.price !== null ? roundMoney(changes.price, currency) : changes[field];
+      if (String(value ?? '') === String(leg[column] ?? '')) continue;
+      sets.push(`${column} = ?`);
+      params.push(value);
+      notes.push(field);
+    }
+    if (changes.details !== undefined) {
+      sets.push('details = ?');
+      params.push(JSON.stringify(changes.details));
+      notes.push('details');
+    }
+    if (!sets.length) return { changed: [] };
+    sets.push("updated_at = datetime('now')");
+    await tx.run(`UPDATE shipment_legs SET ${sets.join(', ')} WHERE id = ? AND tenant_id = ?`, [...params, legId, tenantId]);
+    await recordLegEvent(tx, tenantId, legId, leg.status, leg.status, `Updated: ${notes.join(', ')}`, actorId);
+    await rollupShipment(tx, tenantId, leg.shipment_id, actorId, `Leg ${leg.sequence} updated`);
+    return { changed: notes };
+  });
+}
+
+// Moves a leg along (Planned > Booked > In Transit > Delivered). A leg cannot start or finish before the one
+// ahead of it is delivered. Delivering a leg records the handover to the next one.
+async function setLegStatus(tenantId, legId, status, { note = null, handover = null } = {}, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const leg = await tx.get('SELECT * FROM shipment_legs WHERE id = ? AND tenant_id = ?', [legId, tenantId]);
+    if (!leg) throw httpError(404, 'Leg not found.');
+    if (!(legsLib.LEG_TRANSITIONS[leg.status] || []).includes(status)) throw httpError(409, `Cannot move a leg from ${leg.status} to ${status}.`);
+    const legs = await tx.all('SELECT id, sequence, mode, status FROM shipment_legs WHERE shipment_id = ? AND tenant_id = ? ORDER BY sequence', [leg.shipment_id, tenantId]);
+    const blocked = legsLib.blockedByEarlierLeg(legs, leg, status);
+    if (blocked) throw httpError(409, blocked);
+    if (status === 'Booked' && !leg.carrier_id && !leg.reference) throw httpError(409, 'Add a carrier or a booking reference before booking this leg.');
+    const updated = await tx.run("UPDATE shipment_legs SET status = ?, updated_at = datetime('now') WHERE id = ? AND status = ?", [status, legId, leg.status]);
+    if (updated.changes !== 1) throw httpError(409, 'The leg changed before the update could be applied.');
+    await recordLegEvent(tx, tenantId, legId, leg.status, status, note, actorId);
+    let handoverTo = null;
+    if (status === 'Delivered') {
+      const next = legs.find((other) => other.sequence > leg.sequence && other.status !== 'Cancelled');
+      if (next) {
+        handoverTo = next.id;
+        await tx.run(
+          'INSERT INTO leg_handovers (tenant_id, shipment_id, from_leg_id, to_leg_id, location, received_by, note, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          [tenantId, leg.shipment_id, legId, next.id, handover?.location || leg.destination, handover?.receivedBy || null, handover?.note || null, actorId || null]
+        );
+      }
+    }
+    const shipmentStatus = await rollupShipment(tx, tenantId, leg.shipment_id, actorId, `Leg ${leg.sequence} (${leg.mode}): ${status}`);
+    return { id: legId, shipmentId: leg.shipment_id, status, shipmentStatus, handoverTo };
+  });
+}
+
+// A position or ETA for one leg (kept on the leg and on the load so lists can show it).
+async function addLegTracking(tenantId, legId, { location, eta, note }, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const leg = await tx.get('SELECT id, shipment_id, sequence, status FROM shipment_legs WHERE id = ? AND tenant_id = ?', [legId, tenantId]);
+    if (!leg) throw httpError(404, 'Leg not found.');
+    if (!legsLib.TRACKABLE_LEG_STATUSES.includes(leg.status)) throw httpError(409, `Location updates are only possible while a leg is ${legsLib.TRACKABLE_LEG_STATUSES.join(', ')}.`);
+    const result = await tx.run(
+      "INSERT INTO tracking_updates (shipment_id, leg_id, actor_id, location, eta, note, source) VALUES (?, ?, ?, ?, ?, ?, 'manual')",
+      [leg.shipment_id, legId, actorId || null, location, eta || null, note || null]
+    );
+    const created = await tx.get('SELECT created_at FROM tracking_updates WHERE id = ?', [result.id]);
+    await tx.run('UPDATE shipment_legs SET last_location = ?, eta = COALESCE(?, eta), last_tracked_at = ? WHERE id = ?', [location, eta || null, created.created_at, legId]);
+    await tx.run('UPDATE shipments SET last_location = ?, eta = COALESCE(?, eta), last_tracked_at = ? WHERE id = ?', [location, eta || null, created.created_at, leg.shipment_id]);
+    return { id: result.id, legId, shipmentId: leg.shipment_id, location, eta: eta || null, note: note || null, source: 'manual', createdAt: created.created_at };
+  });
+}
+
+// Files a document under one leg of its own load (or back under the load, with legId null).
+async function setDocumentLeg(tenantId, documentId, legId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const document = await tx.get('SELECT id, shipment_id FROM documents WHERE id = ? AND tenant_id = ?', [documentId, tenantId]);
+    if (!document) throw httpError(404, 'Document not found.');
+    if (legId !== null) {
+      const leg = await tx.get('SELECT id FROM shipment_legs WHERE id = ? AND tenant_id = ? AND shipment_id = ?', [legId, tenantId, document.shipment_id]);
+      if (!leg) throw httpError(404, "That leg does not belong to the document's load.");
+    }
+    await tx.run('UPDATE documents SET leg_id = ? WHERE id = ? AND tenant_id = ?', [legId, documentId, tenantId]);
+    return { id: documentId, legId };
+  });
+}
+
+async function listLegDocuments(tenantId, legId) {
+  assertTenant(tenantId);
+  return all(
+    'SELECT id, shipment_id AS shipmentId, doc_type AS docType, filename, mime, size, created_at AS createdAt FROM documents WHERE tenant_id = ? AND leg_id = ? ORDER BY id',
+    [tenantId, legId]
+  );
+}
+
 /* ---------- durable background jobs (lib/job-queue.js runs them) ---------- */
 // A job is one unit of background work. It is saved before it runs, retried with growing delays when it
 // fails, never added twice under the same idempotency key, and kept as a "dead" row when it gives up.
@@ -3070,6 +3413,15 @@ async function retryJob(tenantId, id) {
 
 module.exports = {
   isPostgres,
+  getShipmentLegs,
+  getLeg,
+  createShipmentWithLegs,
+  addLeg,
+  updateLeg,
+  setLegStatus,
+  addLegTracking,
+  setDocumentLeg,
+  listLegDocuments,
   enqueueJob,
   claimJob,
   completeJob,
