@@ -10,11 +10,11 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 | 1.0 | PostgreSQL support behind `DATABASE_URL`, full suite on both databases in CI | Done |
 | 1.1 | Versioned migrations (`schema_migrations`, `npm run migrate`, up/down, lock) | Done |
 | 1.2 | SQLite → PostgreSQL copy with row counts and checksums, before switching traffic | Done |
-| 1.3 | Tenant-scoped transactions and PostgreSQL Row Level Security | Next |
-| 1.4 | Money as exact decimals with an ISO currency per amount | Planned |
+| 1.3 | Tenant-scoped transactions and PostgreSQL Row Level Security | Done |
+| 1.4 | Money as exact decimals with an ISO currency per amount | Next |
 | 1.5 | Durable background jobs (retries, idempotency keys) for AI, tracking, OCR, notifications | Planned |
 | 1.6 | Timezone and locale per company; UTC everywhere in storage | Planned |
-| 1.7 | Documents in encrypted object storage; metadata and checksums in PostgreSQL | Needs a storage provider decision |
+| 1.7 | Documents in encrypted object storage; metadata and checksums in PostgreSQL | Storage chosen: Cloudflare R2 |
 
 ## Phase 2 — Universal shipment and legs
 Shipment as the customer order; `shipment_legs` with mode, sequence, carrier, price, schedule, documents and tracking per leg; handovers between legs; status history per shipment and per leg; `/api/v2` for the new model while `/api/*` keeps today's behaviour (a current FTL load = a shipment with one ROAD leg).

@@ -3,6 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { httpError, normalizePlate } = require('./lib/validation');
 const { createRunner } = require('./lib/migrations');
+const { current: currentContext, runAsSystem, settingsFor } = require('./lib/tenant-context');
 const secrets = require('./lib/secrets');
 
 const DB_PATH = process.env.DATABASE_PATH
@@ -72,20 +73,32 @@ function enqueueQuery(query) {
   return operation;
 }
 
+// Row level security (PostgreSQL): each statement runs for the company that started the request.
+// The context is captured when the call is made, then applied in query order on the one connection.
+async function applyContext(context) {
+  if (typeof db.useContext !== 'function') return;
+  await db.useContext(settingsFor(context));
+}
+
 function run(sql, params = []) {
-  return enqueueQuery(() => runRaw(sql, params));
+  const context = currentContext();
+  return enqueueQuery(async () => { await applyContext(context); return runRaw(sql, params); });
 }
 
 function get(sql, params = []) {
-  return enqueueQuery(() => getRaw(sql, params));
+  const context = currentContext();
+  return enqueueQuery(async () => { await applyContext(context); return getRaw(sql, params); });
 }
 
 function all(sql, params = []) {
-  return enqueueQuery(() => allRaw(sql, params));
+  const context = currentContext();
+  return enqueueQuery(async () => { await applyContext(context); return allRaw(sql, params); });
 }
 
 function withTransaction(work) {
+  const context = currentContext();
   const transaction = connectionQueue.then(async () => {
+    await applyContext(context);
     await runRaw('BEGIN IMMEDIATE');
     try {
       const result = await work({ run: runRaw, get: getRaw, all: allRaw });
@@ -569,6 +582,87 @@ async function createBaselineSchema() {
   for (const statement of indexes) await run(statement);
 }
 
+/* ---------- row level security (PostgreSQL only) ---------- */
+const RLS_ROLE = 'veyra_app';
+// Tables whose rows belong to a company through their shipment rather than a tenant_id column of their own.
+const RLS_VIA_SHIPMENT = ['shipment_events', 'tracking_updates'];
+const RLS_SYSTEM = "current_setting('veyra.system', true) = 'on'";
+const RLS_TENANT = "nullif(current_setting('veyra.tenant_id', true), '')::bigint";
+
+async function rlsTables(tx) {
+  const rows = await tx.all(
+    "SELECT DISTINCT table_name FROM information_schema.columns WHERE table_schema = current_schema() AND column_name = 'tenant_id' ORDER BY table_name"
+  );
+  return rows.map((row) => row.table_name);
+}
+
+async function enableRowLevelSecurity(tx) {
+  // The role the app switches to. It cannot log in, owns nothing and bypasses nothing, so policies bind it.
+  await tx.run(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${RLS_ROLE}') THEN
+      BEGIN CREATE ROLE ${RLS_ROLE} NOLOGIN NOSUPERUSER NOBYPASSRLS;
+      EXCEPTION WHEN duplicate_object THEN NULL; WHEN insufficient_privilege THEN RAISE NOTICE 'cannot create role ${RLS_ROLE}';
+      END;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${RLS_ROLE}') THEN
+      BEGIN EXECUTE 'GRANT ${RLS_ROLE} TO CURRENT_USER'; EXCEPTION WHEN OTHERS THEN NULL; END;
+    END IF;
+  END $$`);
+  const tenantTables = await rlsTables(tx);
+  for (const table of tenantTables) {
+    const own = table === 'tenants' ? 'id' : 'tenant_id';
+    await tx.run(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
+    await tx.run(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
+    await tx.run(`DROP POLICY IF EXISTS tenant_isolation ON ${table}`);
+    await tx.run(`CREATE POLICY tenant_isolation ON ${table} USING (${RLS_SYSTEM} OR ${own} = ${RLS_TENANT}) WITH CHECK (${RLS_SYSTEM} OR ${own} = ${RLS_TENANT})`);
+  }
+  // The tenants table is keyed by id, not tenant_id.
+  await tx.run('ALTER TABLE tenants ENABLE ROW LEVEL SECURITY');
+  await tx.run('ALTER TABLE tenants FORCE ROW LEVEL SECURITY');
+  await tx.run('DROP POLICY IF EXISTS tenant_isolation ON tenants');
+  await tx.run(`CREATE POLICY tenant_isolation ON tenants USING (${RLS_SYSTEM} OR id = ${RLS_TENANT}) WITH CHECK (${RLS_SYSTEM} OR id = ${RLS_TENANT})`);
+  for (const table of RLS_VIA_SHIPMENT) {
+    const visible = `${RLS_SYSTEM} OR EXISTS (SELECT 1 FROM shipments s WHERE s.id = ${table}.shipment_id AND s.tenant_id = ${RLS_TENANT})`;
+    await tx.run(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
+    await tx.run(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
+    await tx.run(`DROP POLICY IF EXISTS tenant_isolation ON ${table}`);
+    await tx.run(`CREATE POLICY tenant_isolation ON ${table} USING (${visible}) WITH CHECK (${visible})`);
+  }
+  await tx.run(`DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${RLS_ROLE}') THEN
+      EXECUTE format('GRANT USAGE ON SCHEMA %I TO ${RLS_ROLE}', current_schema());
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO ${RLS_ROLE}', current_schema());
+      EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO ${RLS_ROLE}', current_schema());
+      EXECUTE format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO ${RLS_ROLE}', current_schema());
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${RLS_ROLE}', current_schema());
+      EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT USAGE, SELECT ON SEQUENCES TO ${RLS_ROLE}', current_schema());
+    END IF;
+  END $$`);
+}
+
+async function disableRowLevelSecurity(tx) {
+  for (const table of [...(await rlsTables(tx)), 'tenants', ...RLS_VIA_SHIPMENT]) {
+    await tx.run(`DROP POLICY IF EXISTS tenant_isolation ON ${table}`);
+    await tx.run(`ALTER TABLE ${table} NO FORCE ROW LEVEL SECURITY`);
+    await tx.run(`ALTER TABLE ${table} DISABLE ROW LEVEL SECURITY`);
+  }
+}
+
+// After migrating, the app connection drops to the restricted role so the policies apply.
+// DB_RLS=off keeps the owner role (development and tests that read across companies).
+let rlsEnforced = false;
+async function enforceRowLevelSecurity() {
+  if (!isPostgres || process.env.DB_RLS === 'off') return false;
+  const role = await get('SELECT 1 AS ok FROM pg_roles WHERE rolname = ?', [RLS_ROLE]);
+  if (!role) {
+    console.warn(`[db] row level security is NOT enforced: the ${RLS_ROLE} role could not be created (the database user needs CREATEROLE).`);
+    return false;
+  }
+  await db.enforceRole(RLS_ROLE);
+  rlsEnforced = true;
+  return true;
+}
+
 /* ---------- versioned migrations (lib/migrations.js) ---------- */
 // Add new schema changes as new entries at the end, never by editing an applied one.
 const MIGRATIONS = [
@@ -580,6 +674,12 @@ const MIGRATIONS = [
     down: () => {
       throw new Error('0001_baseline cannot be reversed. Recovery: restore the database backup taken before the upgrade.');
     }
+  },
+  {
+    id: '0002_row_level_security',
+    name: 'PostgreSQL row level security: a company can only reach its own rows',
+    up: (tx) => (isPostgres ? enableRowLevelSecurity(tx) : undefined),
+    down: (tx) => (isPostgres ? disableRowLevelSecurity(tx) : undefined)
   }
 ];
 
@@ -604,6 +704,12 @@ async function migrate(options) {
 async function initialize() {
   const isProduction = process.env.NODE_ENV !== 'development';
   await migrate();
+  await enforceRowLevelSecurity();
+  // Seeding and repair work belong to the server, not to one company.
+  return runAsSystem(() => seedAndVerify(isProduction));
+}
+
+async function seedAndVerify(isProduction) {
   // Installs upgraded from very old versions still carry a legacy status column on events.
   hasLegacyEventStatusColumn = (await all('PRAGMA table_info(shipment_events)')).some((column) => column.name === 'status');
 
@@ -2731,9 +2837,12 @@ module.exports = {
   isPostgres,
   pgSchema,
   MIGRATIONS,
+  enforceRowLevelSecurity,
+  isRowLevelSecurityEnforced: () => rlsEnforced,
   migrate,
   migrationRunner,
   db,
+  sql: { run, get, all }, // context-aware statements, for scripts and tests
   DB_PATH,
   getUserPasswordHash,
   setUserPassword,
