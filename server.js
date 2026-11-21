@@ -155,6 +155,7 @@ const studio = require('./agents/studio');
 const { isPostgres: databaseIsPostgres } = require('./database');
 const { runAsSystem, runAsTenant } = require('./lib/tenant-context');
 const { addMoney } = require('./lib/money');
+const timeLib = require('./lib/time');
 const jobQueue = require('./lib/job-queue');
 const plans = require('./lib/plans');
 const paddle = require('./integrations/paddle');
@@ -393,20 +394,29 @@ const moneyIn = (currency) => (value) => formatMoney(value, currency);
 // Common trading currencies; any other valid ISO code can be set by the server default.
 const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'PLN', 'CZK', 'RON', 'TRY', 'AED', 'SAR', 'INR', 'CNY', 'JPY', 'KRW', 'SGD', 'MXN', 'BRL', 'ZAR', 'KZT', 'UZS', 'RUB', 'UAH', 'GEL', 'AZN', 'KGS', 'TJS', 'NGN', 'KES', 'EGP'];
 const WEIGHT_UNITS = ['kg', 'lb'];
-const regionFrom = (currency, weightUnit) => ({
+// Where times and numbers are shown: the server default (TIMEZONE / LOCALE, else UTC and en-US) unless the company chose.
+const TIMEZONE = timeLib.timeZoneOr(process.env.TIMEZONE);
+const LOCALE = timeLib.localeOr(process.env.LOCALE);
+const regionFrom = (currency, weightUnit, timeZone, locale) => ({
   currency: /^[A-Z]{3}$/.test(String(currency || '')) ? currency : CURRENCY,
-  weightUnit: WEIGHT_UNITS.includes(weightUnit) ? weightUnit : WEIGHT_UNIT
+  weightUnit: WEIGHT_UNITS.includes(weightUnit) ? weightUnit : WEIGHT_UNIT,
+  timeZone: timeLib.timeZoneOr(timeZone, TIMEZONE),
+  locale: timeLib.localeOr(locale, LOCALE)
 });
 async function regionOf(tenantId) {
   const tenant = await getTenant(tenantId);
-  return regionFrom(tenant?.currency, tenant?.weightUnit);
+  return regionFrom(tenant?.currency, tenant?.weightUnit, tenant?.timeZone, tenant?.locale);
 }
 function readRegion(body, { required = false } = {}) {
   const currency = body?.currency === undefined || body?.currency === '' ? null : String(body.currency).toUpperCase();
   const weightUnit = body?.weightUnit === undefined || body?.weightUnit === '' ? null : String(body.weightUnit).toLowerCase();
   if ((required || currency !== null) && !CURRENCIES.includes(currency)) throw httpError(400, `Choose a currency: ${CURRENCIES.join(', ')}.`);
   if ((required || weightUnit !== null) && !WEIGHT_UNITS.includes(weightUnit)) throw httpError(400, 'Choose a weight unit: kg or lb.');
-  return { currency, weightUnit };
+  const timeZone = body?.timeZone === undefined || body?.timeZone === '' ? null : String(body.timeZone);
+  const locale = body?.locale === undefined || body?.locale === '' ? null : String(body.locale);
+  if (timeZone !== null && !timeLib.isValidTimeZone(timeZone)) throw httpError(400, 'Choose a valid time zone, for example Asia/Tashkent or Europe/Berlin.');
+  if (locale !== null && !timeLib.isValidLocale(locale)) throw httpError(400, `Choose a language and number format: ${timeLib.LOCALES.join(', ')}.`);
+  return { currency, weightUnit, timeZone, locale };
 }
 
 function serializeShipment(shipment) {
@@ -704,7 +714,7 @@ async function authMiddleware(req, res, next) {
       tenantId: user.tenantId,
       tenantName: user.tenantName,
       isPlatformAdmin: Boolean(user.isPlatformAdmin),
-      region: regionFrom(user.tenantCurrency, user.tenantWeightUnit)
+      region: regionFrom(user.tenantCurrency, user.tenantWeightUnit, user.tenantTimeZone, user.tenantLocale)
     };
     // Platform admins manage every company; everyone else only ever reaches their own company's rows.
     return req.user.isPlatformAdmin ? runAsSystem(next) : runAsTenant(req.user.tenantId, next);
@@ -856,6 +866,8 @@ app.get('/api/config', (req, res) => {
   res.json({
     weightUnit: WEIGHT_UNIT,
     currency: CURRENCY,
+    timeZone: TIMEZONE,
+    locale: LOCALE,
     equipment: EQUIPMENT,
     registration: REGISTRATION_MODE,
     maxRate: MAX_RATE,
@@ -1871,7 +1883,10 @@ app.get('/api/public/track/:token', publicTrackLimiter, async (req, res) => {
       lastLocation: shipment.lastLocation || null,
       lastTrackedAt: shipment.lastTrackedAt || null,
       eta: shipment.eta || null,
-      truckPlate: shipment.truckPlate || null
+      truckPlate: shipment.truckPlate || null,
+      // How this company shows times (the stored values are UTC).
+      timeZone: timeLib.timeZoneOr(shipment.timeZone, TIMEZONE),
+      locale: timeLib.localeOr(shipment.locale, LOCALE)
     });
   } catch (error) {
     return sendError(res, error, 'Tracking unavailable.', 'public track');
@@ -3322,7 +3337,7 @@ app.post('/api/jobs/:id/retry', authMiddleware, requirePermission('settings:writ
 });
 
 app.get('/api/company/settings', authMiddleware, (req, res) => {
-  res.json({ success: true, region: req.user.region, currencies: CURRENCIES, weightUnits: WEIGHT_UNITS, canChange: hasPermission(req.user, 'settings:write') });
+  res.json({ success: true, region: req.user.region, currencies: CURRENCIES, weightUnits: WEIGHT_UNITS, timeZones: timeLib.TIMEZONES, locales: timeLib.LOCALES, canChange: hasPermission(req.user, 'settings:write') });
 });
 
 // New loads, quotes and prices use the new currency and unit; amounts already saved are not converted.
@@ -3330,8 +3345,8 @@ app.put('/api/company/settings', authMiddleware, requirePermission('settings:wri
   try {
     const region = readRegion(req.body, { required: true });
     await setTenantRegion(req.user.tenantId, region);
-    audit(req, 'company.region', `${region.currency}, ${region.weightUnit}`);
-    return res.json({ success: true, region });
+    audit(req, 'company.region', `${region.currency}, ${region.weightUnit}, ${region.timeZone || 'zone unchanged'}, ${region.locale || 'format unchanged'}`);
+    return res.json({ success: true, region: await regionOf(req.user.tenantId) });
   } catch (error) {
     return sendError(res, error, 'Settings could not be saved.', 'company settings');
   }

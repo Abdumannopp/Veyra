@@ -33,7 +33,7 @@ let dashboardDays = 7;
 
 /* ---------- region settings (units, currency, equipment, sign-up) ---------- */
 const DEFAULT_EQUIPMENT = ['Dry Van', 'Tent / Curtainsider', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
-window.VeyraConfig = { weightUnit: 'kg', currency: 'USD', equipment: DEFAULT_EQUIPMENT, registration: 'open' };
+window.VeyraConfig = { weightUnit: 'kg', currency: 'USD', timeZone: 'UTC', locale: 'en-US', equipment: DEFAULT_EQUIPMENT, registration: 'open' };
 
 async function loadConfig() {
   try {
@@ -61,9 +61,9 @@ function applyConfig() {
 function formatMoney(value, digits = 2) {
   if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) return '—';
   try {
-    return Number(value).toLocaleString('en-US', { style: 'currency', currency: window.VeyraConfig.currency, maximumFractionDigits: digits, minimumFractionDigits: digits });
+    return Number(value).toLocaleString(window.VeyraConfig.locale || 'en-US', { style: 'currency', currency: window.VeyraConfig.currency, maximumFractionDigits: digits, minimumFractionDigits: digits });
   } catch (_) {
-    return `${Number(value).toLocaleString('en-US', { maximumFractionDigits: digits })} ${window.VeyraConfig.currency}`;
+    return `${Number(value).toLocaleString(window.VeyraConfig.locale || 'en-US', { maximumFractionDigits: digits })} ${window.VeyraConfig.currency}`;
   }
 }
 
@@ -73,11 +73,12 @@ function formatEta(value) {
   return `${formatDay(day)}${time ? ` ${time}` : ''}`;
 }
 
-// SQLite CURRENT_TIMESTAMP is UTC "YYYY-MM-DD HH:MM:SS"; show it in the viewer's local time.
+// Stored times are UTC "YYYY-MM-DD HH:MM:SS"; show them in the company's time zone and number format.
 function formatTimestamp(value) {
   if (!value) return '';
   const date = new Date(`${String(value).replace(' ', 'T')}Z`);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(window.VeyraConfig.locale || 'en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: window.VeyraConfig.timeZone || 'UTC' }).format(date);
 }
 
 function hasPermission(permission) {
@@ -101,7 +102,7 @@ function isSignedIn() {
 function formatDay(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
   if (!match) return value || '—';
-  return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toLocaleDateString(window.VeyraConfig.locale || 'en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
 // Which channels (SMS / WhatsApp) this company can send with. Needs a signed-in user.
@@ -185,7 +186,7 @@ function applyUserChrome(user) {
   const hour = new Date().getHours();
   const part = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
   set('dashboardGreeting', user ? `${part}, ${String(user.name || '').split(' ')[0]}` : 'Dashboard');
-  set('dashboardDate', new Date().toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }));
+  set('dashboardDate', new Date().toLocaleDateString(window.VeyraConfig.locale || 'en-US', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: window.VeyraConfig.timeZone || 'UTC' }));
   document.body.classList.toggle('signed-in', Boolean(user));
   const permissions = user?.permissions || [];
   const allowed = (permission) => permissions.includes('*') || permissions.includes(permission);
@@ -1276,6 +1277,17 @@ async function loadCompanySettings() {
     }));
     select.value = data.region.currency;
     form.elements.weightUnit.value = data.region.weightUnit;
+    const fill = (field, values, current) => {
+      const list = values.includes(current) ? values : [current, ...values];
+      field.replaceChildren(...list.map((value) => {
+        const option = createTextElement('option', '', value);
+        option.value = value;
+        return option;
+      }));
+      field.value = current;
+    };
+    fill(form.elements.timeZone, data.timeZones, data.region.timeZone);
+    fill(form.elements.locale, data.locales, data.region.locale);
     box.classList.remove('hidden');
   } catch (_) {
     box.classList.add('hidden');
@@ -1296,13 +1308,13 @@ function bindCompanySettings() {
       const response = await fetch('/api/company/settings', {
         method: 'PUT',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ currency: form.elements.currency.value, weightUnit: form.elements.weightUnit.value })
+        body: JSON.stringify({ currency: form.elements.currency.value, weightUnit: form.elements.weightUnit.value, timeZone: form.elements.timeZone.value, locale: form.elements.locale.value })
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Could not save');
       Object.assign(window.VeyraConfig, result.region);
       applyConfig();
-      notify(`Saved: ${result.region.currency}, ${result.region.weightUnit}. Amounts already saved are not converted.`, 'ok');
+      notify(`Saved: ${result.region.currency}, ${result.region.weightUnit}, ${result.region.timeZone}. Amounts already saved are not converted.`, 'ok');
     } catch (error) {
       message.textContent = error.message;
     }
@@ -2470,7 +2482,7 @@ async function loadBackupPanel() {
       const row = createTextElement('div', 'audit-row backup-row');
       const link = Object.assign(createTextElement('a', 'btn btn-ghost small', 'Download'), { href: `/api/platform/backups/${encodeURIComponent(backup.name)}/file` });
       const text = document.createElement('div');
-      text.append(createTextElement('strong', '', new Date(backup.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })), createTextElement('small', '', `${formatSize(backup.size)} · ${backup.name}`));
+      text.append(createTextElement('strong', '', new Date(backup.createdAt).toLocaleString(window.VeyraConfig.locale || 'en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: window.VeyraConfig.timeZone || 'UTC' })), createTextElement('small', '', `${formatSize(backup.size)} · ${backup.name}`));
       row.append(text, link);
       return row;
     });

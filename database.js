@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { httpError, normalizePlate } = require('./lib/validation');
 const { createRunner } = require('./lib/migrations');
 const { normalizeCurrency, roundMoney, addMoney } = require('./lib/money');
+const timeLib = require('./lib/time');
 const { current: currentContext, runAsSystem, settingsFor } = require('./lib/tenant-context');
 const secrets = require('./lib/secrets');
 
@@ -124,6 +125,12 @@ function withTransaction(work) {
 async function currencyOf(tenantId, reader = get) {
   const row = await reader('SELECT currency FROM tenants WHERE id = ?', [tenantId]);
   return normalizeCurrency(row?.currency, DEFAULT_CURRENCY);
+}
+
+// The time zone people in this company see times and days in (storage is always UTC).
+async function timeZoneOf(tenantId, reader = get) {
+  const row = await reader('SELECT timezone FROM tenants WHERE id = ?', [tenantId]);
+  return timeLib.timeZoneOr(row?.timezone, timeLib.timeZoneOr(process.env.TIMEZONE));
 }
 
 // Every data function is scoped to one company. A missing tenant is a programming error,
@@ -755,6 +762,15 @@ const MIGRATIONS = [
       if (isPostgres) await protectTenantTable(tx, 'jobs');
     },
     down: (tx) => tx.run('DROP TABLE IF EXISTS jobs')
+  },
+  {
+    id: '0005_company_time_zone_locale',
+    name: 'Each company chooses a time zone and a locale for how dates and numbers are shown (storage stays UTC)',
+    transactional: false,
+    up: () => ensureColumns('tenants', [['timezone', 'TEXT'], ['locale', 'TEXT']]),
+    down: (tx) => {
+      throw new Error('0005_company_time_zone_locale cannot be reversed. Recovery: restore the database backup taken before the upgrade (the new columns are harmless if left).');
+    }
   }
 ];
 
@@ -883,7 +899,7 @@ async function getTenant(tenantId) {
        imap_config AS imapConfig, imap_state AS imapState, automation_settings AS automationSettingsJson, created_at AS createdAt,
        plan, plan_status AS planStatus, trial_ends_at AS trialEndsAt, user_limit AS userLimit, shipment_limit AS shipmentLimit,
        billing_period AS billingPeriod, paddle_customer_id AS paddleCustomerId, paddle_subscription_id AS paddleSubscriptionId,
-       currency, weight_unit AS weightUnit, terms_version AS termsVersion, terms_accepted_at AS termsAcceptedAt
+       currency, weight_unit AS weightUnit, timezone AS timeZone, locale, terms_version AS termsVersion, terms_accepted_at AS termsAcceptedAt
      FROM tenants WHERE id = ?`,
     [assertTenant(tenantId)]
   );
@@ -1006,11 +1022,15 @@ async function getCommandCenterStats(tenantId, days = 30) {
     `SELECT kind, COUNT(*) AS total FROM nexus_tasks WHERE tenant_id = ? AND created_at >= datetime('now', ?) GROUP BY kind`,
     [tenantId, since]
   );
-  const daily = await all(
-    `SELECT date(created_at) AS day, COUNT(*) AS total FROM nexus_tasks
-     WHERE tenant_id = ? AND created_at >= datetime('now', ?) GROUP BY date(created_at) ORDER BY day`,
-    [tenantId, since]
-  );
+  // Per calendar day of the company's own time zone.
+  const zone = await timeZoneOf(tenantId);
+  const taskTimes = await all("SELECT created_at AS createdAt FROM nexus_tasks WHERE tenant_id = ? AND created_at >= datetime('now', ?)", [tenantId, since]);
+  const perDay = new Map();
+  for (const row of taskTimes) {
+    const day = timeLib.localDate(zone, row.createdAt);
+    perDay.set(day, (perDay.get(day) || 0) + 1);
+  }
+  const daily = [...perDay].sort(([a], [b]) => (a < b ? -1 : 1)).map(([day, total]) => ({ day, total }));
   const live = await get(
     `SELECT SUM(CASE WHEN status IN ('Dispatched', 'In Transit') THEN 1 ELSE 0 END) AS onRoad,
        SUM(CASE WHEN status IN ('New', 'Sourcing', 'Pending Approval') THEN 1 ELSE 0 END) AS waiting,
@@ -1149,7 +1169,8 @@ async function findUserById(id) {
   return get(
     `SELECT users.id, users.name, users.email, users.role, users.disabled_at AS disabledAt, users.tenant_id AS tenantId,
        users.is_platform_admin AS isPlatformAdmin, tenants.name AS tenantName,
-       tenants.currency AS tenantCurrency, tenants.weight_unit AS tenantWeightUnit
+       tenants.currency AS tenantCurrency, tenants.weight_unit AS tenantWeightUnit,
+       tenants.timezone AS tenantTimeZone, tenants.locale AS tenantLocale
      FROM users JOIN tenants ON tenants.id = users.tenant_id WHERE users.id = ?`,
     [Number(id)]
   );
@@ -1544,7 +1565,7 @@ async function findSharedShipment(tokenHash) {
   return get(
     `SELECT shipments.id, shipments.reference, shipments.origin, shipments.destination, shipments.pickup, shipments.delivery, shipments.status,
        shipments.last_location AS lastLocation, shipments.eta, shipments.last_tracked_at AS lastTrackedAt, shipments.truck_plate AS truckPlate,
-       tenants.name AS company
+       tenants.name AS company, tenants.timezone AS timeZone, tenants.locale AS locale
      FROM shipments JOIN tenants ON tenants.id = shipments.tenant_id WHERE shipments.share_token_hash = ?`,
     [tokenHash]
   );
@@ -1899,9 +1920,13 @@ const ANALYTICS_RANGES = [7, 30, 90];
 async function getAnalyticsPayload(tenantId, { days = 7 } = {}) {
   assertTenant(tenantId);
   const rangeDays = ANALYTICS_RANGES.includes(Number(days)) ? Number(days) : 7;
-  const [statusRows, dailyRows, shipmentTotals, carriers] = await Promise.all([
+  // Days are the company's own calendar days, not UTC days.
+  const zone = await timeZoneOf(tenantId);
+  const today = timeLib.localDate(zone);
+  const firstDay = timeLib.addDays(today, -(rangeDays - 1));
+  const [statusRows, createdRows, shipmentTotals, carriers] = await Promise.all([
     all('SELECT status, COUNT(*) AS total FROM shipments WHERE tenant_id = ? GROUP BY status', [tenantId]),
-    all("SELECT date(created_at) AS day, COUNT(*) AS total FROM shipments WHERE tenant_id = ? AND date(created_at) >= date('now', ?) GROUP BY date(created_at)", [tenantId, `-${rangeDays - 1} days`]),
+    all('SELECT created_at AS createdAt FROM shipments WHERE tenant_id = ? AND created_at >= ?', [tenantId, timeLib.utcText(timeLib.localDayStart(zone, firstDay))]),
     get(`SELECT
       COUNT(*) AS total,
       SUM(CASE WHEN status NOT IN ('Delivered', 'Cancelled') THEN 1 ELSE 0 END) AS active,
@@ -1927,11 +1952,13 @@ async function getAnalyticsPayload(tenantId, { days = 7 } = {}) {
     if (Object.hasOwn(statuses, row.status)) statuses[row.status] = Number(row.total);
   });
 
-  const dailyTotals = new Map(dailyRows.map((row) => [row.day, Number(row.total)]));
+  const dailyTotals = new Map();
+  for (const row of createdRows) {
+    const day = timeLib.localDate(zone, row.createdAt);
+    dailyTotals.set(day, (dailyTotals.get(day) || 0) + 1);
+  }
   const weeklyVolume = Array.from({ length: rangeDays }, (_, index) => {
-    const date = new Date();
-    date.setUTCDate(date.getUTCDate() - (rangeDays - 1 - index));
-    const day = date.toISOString().slice(0, 10);
+    const day = timeLib.addDays(firstDay, index);
     return {
       day,
       label: new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${day}T00:00:00Z`)),
@@ -2401,8 +2428,7 @@ const QUOTE_FIELDS = {
 const quoteValue = (key, value, currency) => (['price', 'carrierCost'].includes(key) && value !== null && value !== undefined ? roundMoney(value, currency) : value);
 
 // A sent quote whose date has passed shows as expired (nothing is stored for that).
-function mapQuote(row) {
-  const today = new Date().toISOString().slice(0, 10);
+function mapQuote(row, today = new Date().toISOString().slice(0, 10)) {
   const expired = ['draft', 'sent'].includes(row.status) && row.valid_until < today;
   return {
     id: row.id,
@@ -2444,12 +2470,13 @@ async function createQuote(tenantId, fields, actorId) {
 
 async function getQuote(tenantId, id) {
   const row = await get(`${QUOTE_SELECT} WHERE quotes.id = ? AND quotes.tenant_id = ?`, [id, assertTenant(tenantId)]);
-  return row ? mapQuote(row) : null;
+  return row ? mapQuote(row, timeLib.localDate(await timeZoneOf(tenantId))) : null;
 }
 
 async function listQuotes(tenantId, { limit = 200 } = {}) {
   const rows = await all(`${QUOTE_SELECT} WHERE quotes.tenant_id = ? ORDER BY quotes.id DESC LIMIT ?`, [assertTenant(tenantId), limit]);
-  return rows.map(mapQuote);
+  const today = timeLib.localDate(await timeZoneOf(tenantId));
+  return rows.map((row) => mapQuote(row, today));
 }
 
 // Changes fields and/or status. An accepted quote that became a load, or a declined one, is not edited.
@@ -2911,8 +2938,12 @@ async function applyPaddleSubscription(tenantId, { plan, period, status, custome
 }
 
 /* ---------- region and data export ---------- */
-async function setTenantRegion(tenantId, { currency, weightUnit }) {
-  await run('UPDATE tenants SET currency = ?, weight_unit = ? WHERE id = ?', [currency, weightUnit, assertTenant(tenantId)]);
+async function setTenantRegion(tenantId, { currency, weightUnit, timeZone = null, locale = null }) {
+  if (timeZone !== null && !timeLib.isValidTimeZone(timeZone)) throw httpError(400, 'Choose a valid time zone.');
+  if (locale !== null && !timeLib.isValidLocale(locale)) throw httpError(400, 'Choose a supported language and number format.');
+  // Time zone and locale are only changed when given.
+  await run('UPDATE tenants SET currency = ?, weight_unit = ?, timezone = COALESCE(?, timezone), locale = COALESCE(?, locale) WHERE id = ?',
+    [currency, weightUnit, timeZone, locale, assertTenant(tenantId)]);
   return getTenant(tenantId);
 }
 

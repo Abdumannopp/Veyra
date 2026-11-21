@@ -196,6 +196,14 @@ Automatic reactions (reading order emails with AI, reading CMR/POD documents, dr
 - Optional settings: `JOBS_CONCURRENCY` (4), `JOBS_POLL_MS` (2000), `JOBS_RETRY_BASE_SECONDS` (30), `JOBS_VISIBILITY_SECONDS` (600). Finished jobs are deleted after 7 days.
 - Still timer-based (they only re-check state and are safe to repeat): the NEXUS sweeps, mailbox polling and daily backups.
 
+## Time zones and number formats
+
+- Everything is **stored in UTC** (the database clock). A company's time zone and locale only change how people see times, dates and numbers, and what "today" means for that company; they never change what is saved.
+- Each company picks a time zone (IANA name, for example `Asia/Tashkent`) and a language/number format (for example `de-DE`) in Settings → Company. The server default is `TIMEZONE` and `LOCALE` (otherwise `UTC` and `en-US`).
+- The company's own calendar day is used for the daily charts (shipments per day, AI Command Center) and for quote expiry. Clock changes (daylight saving) are handled.
+- Load pickup and delivery dates (`YYYY-MM-DD`) are calendar dates and are not shifted. The public tracking page shows times in the shipping company's zone.
+- Not yet localised: the text language of the interface and of drafted messages (English), and AI daily caps (a rolling 24 hours).
+
 ## Money and currencies
 
 - Every priced record (loads, quotes, market rates) stores its own ISO currency next to the amount. Existing amounts were labelled with the company's currency when migration `0003_money_currency` ran.

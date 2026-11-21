@@ -8,10 +8,12 @@
     if (text !== undefined && text !== null) element.textContent = String(text);
     return element;
   };
+  // Times are stored in UTC; the customer sees them in the shipping company's time zone and format.
+  let region = { timeZone: undefined, locale: undefined };
   const when = (value) => {
     if (!value) return '';
     const date = new Date(/T|Z/.test(value) ? value : `${String(value).replace(' ', 'T')}Z`);
-    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(region.locale || [], { dateStyle: 'medium', timeStyle: 'short', timeZone: region.timeZone });
   };
   const STEPS = ['Booked', 'On the way', 'Delivered'];
   const stepOf = { Dispatched: 0, 'In Transit': 1, Exception: 1, Delivered: 2 };
@@ -21,6 +23,7 @@
   };
 
   function show(data) {
+    region = { timeZone: data.timeZone, locale: data.locale };
     const fact = (label, value) => {
       const row = node('div', 'fact');
       row.append(node('span', '', label), node('strong', '', value || '—'));
