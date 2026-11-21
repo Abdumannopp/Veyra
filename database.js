@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const crypto = require('crypto');
 const { httpError, normalizePlate } = require('./lib/validation');
+const { createRunner } = require('./lib/migrations');
 const secrets = require('./lib/secrets');
 
 const DB_PATH = process.env.DATABASE_PATH
@@ -121,9 +122,9 @@ async function ensureColumns(table, columns) {
   }
 }
 
-async function initialize() {
-  const isProduction = process.env.NODE_ENV !== 'development';
-
+// The whole schema as it was before versioned migrations. Idempotent: on an existing database it only
+// adds what is missing, so it is safe as migration 0001 for old and new installs alike.
+async function createBaselineSchema() {
   await run(`
     CREATE TABLE IF NOT EXISTS tenants (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,6 +545,68 @@ async function initialize() {
     )
   `);
 
+  // Indexes for the columns the app filters, joins and sorts on.
+  const indexes = [
+    'CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments (status)',
+    'CREATE INDEX IF NOT EXISTS idx_shipments_carrier ON shipments (carrier_id)',
+    'CREATE INDEX IF NOT EXISTS idx_shipments_created ON shipments (created_at, id)',
+    'CREATE INDEX IF NOT EXISTS idx_shipments_tenant ON shipments (tenant_id, id)',
+    'CREATE INDEX IF NOT EXISTS idx_shipments_tenant_status ON shipments (tenant_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_shipment_events_shipment ON shipment_events (shipment_id, id)',
+    'CREATE INDEX IF NOT EXISTS idx_carriers_status ON carriers (status)',
+    'CREATE INDEX IF NOT EXISTS idx_carriers_tenant ON carriers (tenant_id, status)',
+    'CREATE INDEX IF NOT EXISTS idx_users_tenant ON users (tenant_id)',
+    'CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions (expires_at)',
+    'CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (user_id)',
+    'CREATE INDEX IF NOT EXISTS idx_tracking_updates_shipment ON tracking_updates (shipment_id, id)',
+    'CREATE INDEX IF NOT EXISTS idx_messages_shipment ON messages (shipment_id, id)',
+    'CREATE INDEX IF NOT EXISTS idx_agent_tasks_tenant ON agent_tasks (tenant_id, id)',
+    'CREATE INDEX IF NOT EXISTS idx_inbox_tenant ON inbox_items (tenant_id, id)',
+    'CREATE INDEX IF NOT EXISTS idx_nexus_tasks_open ON nexus_tasks (tenant_id, status, id)',
+    'CREATE INDEX IF NOT EXISTS idx_nexus_tasks_shipment ON nexus_tasks (shipment_id)',
+    'CREATE INDEX IF NOT EXISTS idx_documents_shipment ON documents (shipment_id, id)'
+  ];
+  for (const statement of indexes) await run(statement);
+}
+
+/* ---------- versioned migrations (lib/migrations.js) ---------- */
+// Add new schema changes as new entries at the end, never by editing an applied one.
+const MIGRATIONS = [
+  {
+    id: '0001_baseline',
+    name: 'Schema as of the first versioned release',
+    transactional: false,
+    up: () => createBaselineSchema(),
+    down: () => {
+      throw new Error('0001_baseline cannot be reversed. Recovery: restore the database backup taken before the upgrade.');
+    }
+  }
+];
+
+// Only one server process may migrate at a time (PostgreSQL advisory lock; SQLite has one writer anyway).
+const migrationRunner = createRunner({
+  run, get, all, withTransaction,
+  lock: async (work) => {
+    if (!isPostgres) return work();
+    await run('SELECT pg_advisory_lock(472019)');
+    try {
+      return await work();
+    } finally {
+      await run('SELECT pg_advisory_unlock(472019)');
+    }
+  }
+});
+
+async function migrate(options) {
+  return migrationRunner.up(MIGRATIONS, options);
+}
+
+async function initialize() {
+  const isProduction = process.env.NODE_ENV !== 'development';
+  await migrate();
+  // Installs upgraded from very old versions still carry a legacy status column on events.
+  hasLegacyEventStatusColumn = (await all('PRAGMA table_info(shipment_events)')).some((column) => column.name === 'status');
+
   const seedUsers = [
     { name: 'Alex Carter', email: 'admin@veyra.ai', password: 'admin123', role: 'admin', platform: 1 },
     { name: 'Emma Wilson', email: 'ops@veyra.ai', password: 'ops123', role: 'operations', platform: 0 },
@@ -613,28 +676,6 @@ async function initialize() {
        WHERE NOT EXISTS (SELECT 1 FROM shipment_events WHERE shipment_events.shipment_id = shipments.id)`;
   await run(eventBackfill);
 
-  // Indexes for the columns the app filters, joins and sorts on.
-  const indexes = [
-    'CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments (status)',
-    'CREATE INDEX IF NOT EXISTS idx_shipments_carrier ON shipments (carrier_id)',
-    'CREATE INDEX IF NOT EXISTS idx_shipments_created ON shipments (created_at, id)',
-    'CREATE INDEX IF NOT EXISTS idx_shipments_tenant ON shipments (tenant_id, id)',
-    'CREATE INDEX IF NOT EXISTS idx_shipments_tenant_status ON shipments (tenant_id, status)',
-    'CREATE INDEX IF NOT EXISTS idx_shipment_events_shipment ON shipment_events (shipment_id, id)',
-    'CREATE INDEX IF NOT EXISTS idx_carriers_status ON carriers (status)',
-    'CREATE INDEX IF NOT EXISTS idx_carriers_tenant ON carriers (tenant_id, status)',
-    'CREATE INDEX IF NOT EXISTS idx_users_tenant ON users (tenant_id)',
-    'CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions (expires_at)',
-    'CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (user_id)',
-    'CREATE INDEX IF NOT EXISTS idx_tracking_updates_shipment ON tracking_updates (shipment_id, id)',
-    'CREATE INDEX IF NOT EXISTS idx_messages_shipment ON messages (shipment_id, id)',
-    'CREATE INDEX IF NOT EXISTS idx_agent_tasks_tenant ON agent_tasks (tenant_id, id)',
-    'CREATE INDEX IF NOT EXISTS idx_inbox_tenant ON inbox_items (tenant_id, id)',
-    'CREATE INDEX IF NOT EXISTS idx_nexus_tasks_open ON nexus_tasks (tenant_id, status, id)',
-    'CREATE INDEX IF NOT EXISTS idx_nexus_tasks_shipment ON nexus_tasks (shipment_id)',
-    'CREATE INDEX IF NOT EXISTS idx_documents_shipment ON documents (shipment_id, id)'
-  ];
-  for (const statement of indexes) await run(statement);
 
   const health = await checkIntegrity();
   if (!health.ok) {
@@ -2688,6 +2729,9 @@ async function exportTenantData(tenantId) {
 
 module.exports = {
   isPostgres,
+  MIGRATIONS,
+  migrate,
+  migrationRunner,
   db,
   DB_PATH,
   getUserPasswordHash,
