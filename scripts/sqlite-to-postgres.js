@@ -18,6 +18,7 @@ const dryRun = process.argv.includes('--dry-run');
 const SQLITE_PATH = path.resolve(process.env.SQLITE_PATH || process.env.DATABASE_PATH || './data/veyra.db');
 const DATABASE_URL = String(process.env.DATABASE_URL || '');
 const BATCH = 300;
+const MONEY_COLUMNS = { shipments: ['rate', 'customer_rate'], quotes: ['price', 'carrier_cost'], market_rates: ['rate'] };
 
 function fail(message) {
   console.error(`Copy stopped: ${message}`);
@@ -116,6 +117,10 @@ function dependencyOrder(tables, edges) {
       for (const c of sourceColumns.filter((c) => !targetColumns.includes(c))) skipped.push(`${table}.${c}`);
 
       const rows = source.prepare(`SELECT ${columns.map((c) => `"${c}"`).join(', ')} FROM ${table}`).all();
+      // Money was stored as floating point; PostgreSQL keeps it as NUMERIC(18,4). Round to that first so both sides compare exactly.
+      for (const column of MONEY_COLUMNS[table] || []) {
+        for (const row of rows) if (typeof row[column] === 'number') row[column] = Math.round((row[column] + Number.EPSILON) * 1e4) / 1e4;
+      }
       for (let i = 0; i < rows.length; i += BATCH) {
         const chunk = rows.slice(i, i + BATCH);
         const values = [];

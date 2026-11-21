@@ -185,6 +185,14 @@ Do this once, when a running SQLite install moves to PostgreSQL. The SQLite file
 5. Only after it prints `Done: ... copied and verified`, set `DATABASE_URL` on the app and start it.
 6. Keep the SQLite backup until you have checked the app on PostgreSQL.
 
+## Money and currencies
+
+- Every priced record (loads, quotes, market rates) stores its own ISO currency next to the amount. Existing amounts were labelled with the company's currency when migration `0003_money_currency` ran.
+- Amounts are rounded to the currency's minor unit when saved (2 decimals; 0 for JPY, KRW, VND and similar; 3 for KWD, BHD and similar). Totals add exact cents.
+- PostgreSQL stores money as `NUMERIC(18,4)`. SQLite keeps floating point, rounded on write and in totals, so SQLite is for development and small single-company installs.
+- If a company changes its currency, old amounts keep their own currency. The Finance summary adds only amounts in the current currency and lists other currencies under `otherCurrencies`; analytics averages and revenue are not yet split by currency.
+- Migration `0003` cannot be reversed; take a database backup before upgrading.
+
 ## Company isolation in the database (PostgreSQL)
 
 On PostgreSQL, every company's rows are also protected by the database itself (row level security), not only by the app's own filters.

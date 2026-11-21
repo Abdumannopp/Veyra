@@ -42,11 +42,11 @@ after(async () => {
 
 test('a fresh database records the baseline once; starting again applies nothing', async () => {
   const status = await migrationRunner.status(MIGRATIONS);
-  assert.deepEqual(status.map((row) => [row.id, row.applied]), [['0001_baseline', true], ['0002_row_level_security', true]]);
+  assert.deepEqual(status.map((row) => [row.id, row.applied]), MIGRATIONS.map((m) => [m.id, true]));
   assert.ok(status[0].appliedAt);
   assert.deepEqual(await migrate(), []);
   await initialize();
-  assert.equal((await migrationRunner.applied()).length, 2);
+  assert.equal((await migrationRunner.applied()).length, MIGRATIONS.length);
 });
 
 test('new migrations apply in order; a failing one is rolled back and not recorded', async () => {
@@ -54,15 +54,15 @@ test('new migrations apply in order; a failing one is rolled back and not record
   assert.equal(await tableExists('test_widgets'), true);
   assert.equal(await tableExists('test_half_done'), false, 'the failed migration left nothing behind');
   const ids = (await migrationRunner.applied()).map((row) => row.id);
-  assert.deepEqual(ids, ['0001_baseline', '0002_row_level_security', '0900_test_widgets']);
+  assert.deepEqual(ids, [...MIGRATIONS.map((m) => m.id), '0900_test_widgets']);
 });
 
 test('down reverses the newest migration; the baseline refuses with a recovery note', async () => {
   assert.deepEqual(await migrationRunner.down(extra, { steps: 1 }), ['0900_test_widgets']);
   assert.equal(await tableExists('test_widgets'), false);
-  // Two more steps: 0002 reverses, then the baseline refuses and stays applied.
-  await assert.rejects(migrationRunner.down(extra, { steps: 2 }), /cannot be reversed.*restore the database backup/);
-  assert.deepEqual((await migrationRunner.applied()).map((row) => row.id), ['0001_baseline']);
+  // The newest real migration (money currency) cannot be reversed: it refuses and stays applied.
+  await assert.rejects(migrationRunner.down(extra, { steps: 1 }), /cannot be reversed.*restore the database backup/);
+  assert.deepEqual((await migrationRunner.applied()).map((row) => row.id), MIGRATIONS.map((m) => m.id));
 });
 
 test('bad migration lists are refused before anything runs', async () => {
