@@ -10,6 +10,7 @@
 // Every reaction is idempotent (tasks carry a dedupe key), runs after the web request has
 // finished, and failures are logged, never thrown at the person who triggered the event.
 const db = require('../database');
+const { runAsSystem } = require('../lib/tenant-context');
 const studio = require('./studio');
 const plans = require('../lib/plans');
 const aiGateway = require('../ai/gateway');
@@ -373,6 +374,10 @@ async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = f
 // Looks at every company's booked trucks. One task per truck per "silence": a new task appears only
 // after the truck has reported again and then gone quiet again.
 async function sweep() {
+  return runAsSystem(sweepAllCompanies);
+}
+
+async function sweepAllCompanies() {
   const stale = await db.listStaleLoadsAllTenants(settings.staleHours);
   let created = 0;
   for (const row of stale) {
@@ -402,6 +407,10 @@ async function sweep() {
 // One task per load per kind of risk. When the risk is gone (a truck was booked, the load moved on),
 // its task closes by itself. A task a person dismissed does not come back.
 async function sentinelSweep(now = Date.now()) {
+  return runAsSystem(() => sentinelSweepAllCompanies(now));
+}
+
+async function sentinelSweepAllCompanies(now) {
   const loads = await geo.annotateOffRoute(await db.listSentinelLoads(null), { fetchMissing: true, now });
   const tenantOf = new Map(loads.map((load) => [load.id, load.tenantId]));
   const active = new Set();

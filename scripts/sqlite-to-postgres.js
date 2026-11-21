@@ -73,6 +73,7 @@ function dependencyOrder(tables, edges) {
   await target.connect();
   await target.query("SET TIME ZONE 'UTC'");
   await target.query(`SET search_path TO ${database.pgSchema}`);
+  await target.query("SELECT set_config('veyra.system', 'on', false)"); // the copy spans every company
 
   try {
     const targetTables = (await target.query(

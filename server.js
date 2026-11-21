@@ -150,6 +150,7 @@ const pulseAgent = require('./agents/pulse');
 const sentinelAgent = require('./agents/sentinel');
 const studio = require('./agents/studio');
 const { isPostgres: databaseIsPostgres } = require('./database');
+const { runAsSystem, runAsTenant } = require('./lib/tenant-context');
 const plans = require('./lib/plans');
 const paddle = require('./integrations/paddle');
 const legal = require('./lib/legal');
@@ -289,6 +290,9 @@ nexus.configure({
   }
 });
 
+// Database work starts as server work (login lookups, webhooks, public tracking); authMiddleware narrows it to
+// the signed-in company, so PostgreSQL row level security fences every authenticated request.
+app.use((req, res, next) => runAsSystem(next));
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use((req, res, next) => {
@@ -696,7 +700,8 @@ async function authMiddleware(req, res, next) {
       isPlatformAdmin: Boolean(user.isPlatformAdmin),
       region: regionFrom(user.tenantCurrency, user.tenantWeightUnit)
     };
-    return next();
+    // Platform admins manage every company; everyone else only ever reaches their own company's rows.
+    return req.user.isPlatformAdmin ? runAsSystem(next) : runAsTenant(req.user.tenantId, next);
   } catch (error) {
     return res.status(401).json({
       success: false,
@@ -3526,9 +3531,11 @@ function startServer() {
     .then(() => new Promise((resolve) => {
       const server = app.listen(PORT, HOST, () => {
         console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'})`);
-        nexus.startSweeper();
-        startMailboxPoller();
-        startBackups();
+        runAsSystem(() => {
+          nexus.startSweeper();
+          startMailboxPoller();
+          startBackups();
+        });
         if (!isProduction) {
           console.warn('[VEYRA] Development mode: demo accounts with public passwords exist. Never expose this server to the internet.');
         }

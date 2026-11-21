@@ -185,6 +185,16 @@ Do this once, when a running SQLite install moves to PostgreSQL. The SQLite file
 5. Only after it prints `Done: ... copied and verified`, set `DATABASE_URL` on the app and start it.
 6. Keep the SQLite backup until you have checked the app on PostgreSQL.
 
+## Company isolation in the database (PostgreSQL)
+
+On PostgreSQL, every company's rows are also protected by the database itself (row level security), not only by the app's own filters.
+- Migration `0002_row_level_security` creates a login-less role `veyra_app` and policies on every company table. The app switches to that role after migrating, so policies bind it.
+- A signed-in request can only read or write its own company's rows. Server work (login lookup, webhooks, background jobs, platform admins) runs as "system" and is explicit in the code.
+- Anything with no company context sees no rows (fail closed).
+- The database user from `DATABASE_URL` needs permission to create roles (Railway's default `postgres` user has it). If it cannot, the app starts and logs `row level security is NOT enforced`.
+- Set `DB_RLS=off` only for local debugging with one-off scripts that read across companies.
+- SQLite installs keep the app-level company filters only.
+
 ## Database migrations
 
 Schema changes are versioned migrations (`database.js` → `MIGRATIONS`, runner in `lib/migrations.js`). Applied ids are kept in `schema_migrations`; the server applies missing ones at start, one process at a time.

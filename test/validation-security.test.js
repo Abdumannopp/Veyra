@@ -6,6 +6,7 @@ const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-validation-'));
 process.env.NODE_ENV = 'development';
+process.env.DB_RLS = 'off'; // these tests call data functions directly, outside any company; isolation is covered by rls.test.js
 process.env.DATABASE_PATH = path.join(dir, 'v.db');
 process.env.PORT = '0';
 // This file fires many requests on purpose; raise the limiters so validation (not 429) is what's tested.

@@ -7,6 +7,7 @@ const { after, before, test } = require('node:test');
 const testDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-transactions-'));
 process.env.DATABASE_PATH = path.join(testDirectory, 'shipments.db');
 process.env.NODE_ENV = 'development';
+process.env.DB_RLS = 'off'; // these tests call data functions directly, outside any company; isolation is covered by rls.test.js
 
 const {
   db,

@@ -7,7 +7,7 @@ const path = require('node:path');
 const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-migrate-'));
-Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'm.db'), BCRYPT_COST: '10', NEXUS_ENABLED: 'false' });
+Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'm.db'), BCRYPT_COST: '10', NEXUS_ENABLED: 'false', DB_RLS: 'off' });
 const { db, initialize, MIGRATIONS, migrate, migrationRunner, isPostgres } = require('../database');
 
 const query = (method, sql, params = []) => new Promise((resolve, reject) => db[method](sql, params, (error, result) => (error ? reject(error) : resolve(result))));
@@ -42,11 +42,11 @@ after(async () => {
 
 test('a fresh database records the baseline once; starting again applies nothing', async () => {
   const status = await migrationRunner.status(MIGRATIONS);
-  assert.deepEqual(status.map((row) => [row.id, row.applied]), [['0001_baseline', true]]);
+  assert.deepEqual(status.map((row) => [row.id, row.applied]), [['0001_baseline', true], ['0002_row_level_security', true]]);
   assert.ok(status[0].appliedAt);
   assert.deepEqual(await migrate(), []);
   await initialize();
-  assert.equal((await migrationRunner.applied()).length, 1);
+  assert.equal((await migrationRunner.applied()).length, 2);
 });
 
 test('new migrations apply in order; a failing one is rolled back and not recorded', async () => {
@@ -54,13 +54,14 @@ test('new migrations apply in order; a failing one is rolled back and not record
   assert.equal(await tableExists('test_widgets'), true);
   assert.equal(await tableExists('test_half_done'), false, 'the failed migration left nothing behind');
   const ids = (await migrationRunner.applied()).map((row) => row.id);
-  assert.deepEqual(ids, ['0001_baseline', '0900_test_widgets']);
+  assert.deepEqual(ids, ['0001_baseline', '0002_row_level_security', '0900_test_widgets']);
 });
 
 test('down reverses the newest migration; the baseline refuses with a recovery note', async () => {
   assert.deepEqual(await migrationRunner.down(extra, { steps: 1 }), ['0900_test_widgets']);
   assert.equal(await tableExists('test_widgets'), false);
-  await assert.rejects(migrationRunner.down(extra, { steps: 1 }), /cannot be reversed.*restore the database backup/);
+  // Two more steps: 0002 reverses, then the baseline refuses and stays applied.
+  await assert.rejects(migrationRunner.down(extra, { steps: 2 }), /cannot be reversed.*restore the database backup/);
   assert.deepEqual((await migrationRunner.applied()).map((row) => row.id), ['0001_baseline']);
 });
 
