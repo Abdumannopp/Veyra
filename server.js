@@ -138,7 +138,10 @@ const {
   updateCarrierStatus,
   getAnalyticsReport,
   getDashboardPayload,
-  getAlerts
+  getAlerts,
+  listJobs,
+  jobStats,
+  retryJob
 } = require('./database');
 const aiGateway = require('./ai/gateway');
 const flowAgent = require('./agents/flow');
@@ -152,6 +155,7 @@ const studio = require('./agents/studio');
 const { isPostgres: databaseIsPostgres } = require('./database');
 const { runAsSystem, runAsTenant } = require('./lib/tenant-context');
 const { addMoney } = require('./lib/money');
+const jobQueue = require('./lib/job-queue');
 const plans = require('./lib/plans');
 const paddle = require('./integrations/paddle');
 const legal = require('./lib/legal');
@@ -2279,11 +2283,11 @@ async function ingestEmail(tenant, message) {
     const moved = await attachEmailFilesToShipment(tenant.id, item.id, shipment, { context: `${message.subject} ${message.text}` });
     if (moved.documentIds.length || !moved.skipped) {
       await updateInboxItem(tenant.id, item.id, { status: 'attached', shipmentId });
-      nexus.emit('inbox.attached', { tenantId: tenant.id, inboxId: item.id, shipmentId, documentIds: moved.documentIds, skipped: moved.skipped, from: message.from });
+      nexus.emit('inbox.attached', { tenantId: tenant.id, inboxId: item.id, shipmentId, documentIds: moved.documentIds, skipped: moved.skipped, from: message.from }, { idempotencyKey: `inbox-attached:${item.id}` });
       return { status: 201, body: { success: true, id: item.id, accepted: true, attachedTo: `SHP-${shipmentId}`, documents: moved.documentIds.length, filesSkipped } };
     }
   }
-  nexus.emit('inbox.received', { tenantId: tenant.id, inboxId: item.id });
+  nexus.emit('inbox.received', { tenantId: tenant.id, inboxId: item.id }, { idempotencyKey: `inbox:${item.id}` });
   return { status: 201, body: { success: true, id: item.id, accepted: true, files: files.length, filesSkipped } };
 }
 
@@ -3292,6 +3296,31 @@ app.get('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (re
 });
 
 /* ---------- company settings: region and data export ---------- */
+// Background work saved for this company: counts, the latest jobs, and the ones that gave up ("dead").
+app.get('/api/jobs', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const status = ['queued', 'running', 'done', 'dead'].includes(req.query.status) ? req.query.status : null;
+    const [counts, jobs] = await Promise.all([jobStats(req.user.tenantId), listJobs(req.user.tenantId, { status, limit: 50 })]);
+    return res.json({ success: true, counts, jobs });
+  } catch (error) {
+    return sendError(res, error, 'Background jobs could not be loaded.', 'jobs');
+  }
+});
+
+// Gives a dead job a fresh set of attempts.
+app.post('/api/jobs/:id/retry', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, message: 'A valid job is required.' });
+    if (!(await retryJob(req.user.tenantId, id))) return res.status(404).json({ success: false, message: 'No failed job with that number.' });
+    audit(req, 'job.retry', `#${id}`);
+    jobQueue.kick();
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'The job could not be retried.', 'jobs');
+  }
+});
+
 app.get('/api/company/settings', authMiddleware, (req, res) => {
   res.json({ success: true, region: req.user.region, currencies: CURRENCIES, weightUnits: WEIGHT_UNITS, canChange: hasPermission(req.user, 'settings:write') });
 });
@@ -3534,6 +3563,7 @@ function startServer() {
       const server = app.listen(PORT, HOST, () => {
         console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'})`);
         runAsSystem(() => {
+          jobQueue.start();
           nexus.startSweeper();
           startMailboxPoller();
           startBackups();

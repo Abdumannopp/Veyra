@@ -605,6 +605,20 @@ async function rlsTables(tx) {
   return rows.map((row) => row.table_name);
 }
 
+// One company table: forced RLS and a policy that shows a company only its own rows.
+async function protectTenantTable(tx, table) {
+  await tx.run(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
+  await tx.run(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
+  await tx.run(`DROP POLICY IF EXISTS tenant_isolation ON ${table}`);
+  await tx.run(`CREATE POLICY tenant_isolation ON ${table} USING (${RLS_SYSTEM} OR tenant_id = ${RLS_TENANT}) WITH CHECK (${RLS_SYSTEM} OR tenant_id = ${RLS_TENANT})`);
+  await tx.run(`DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${RLS_ROLE}') THEN
+      EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %I TO ${RLS_ROLE}', '${table}');
+      EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO ${RLS_ROLE}', current_schema());
+    END IF;
+  END $$`);
+}
+
 async function enableRowLevelSecurity(tx) {
   // The role the app switches to. It cannot log in, owns nothing and bypasses nothing, so policies bind it.
   await tx.run(`DO $$ BEGIN
@@ -617,14 +631,7 @@ async function enableRowLevelSecurity(tx) {
       BEGIN EXECUTE 'GRANT ${RLS_ROLE} TO CURRENT_USER'; EXCEPTION WHEN OTHERS THEN NULL; END;
     END IF;
   END $$`);
-  const tenantTables = await rlsTables(tx);
-  for (const table of tenantTables) {
-    const own = table === 'tenants' ? 'id' : 'tenant_id';
-    await tx.run(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
-    await tx.run(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
-    await tx.run(`DROP POLICY IF EXISTS tenant_isolation ON ${table}`);
-    await tx.run(`CREATE POLICY tenant_isolation ON ${table} USING (${RLS_SYSTEM} OR ${own} = ${RLS_TENANT}) WITH CHECK (${RLS_SYSTEM} OR ${own} = ${RLS_TENANT})`);
-  }
+  for (const table of await rlsTables(tx)) await protectTenantTable(tx, table);
   // The tenants table is keyed by id, not tenant_id.
   await tx.run('ALTER TABLE tenants ENABLE ROW LEVEL SECURITY');
   await tx.run('ALTER TABLE tenants FORCE ROW LEVEL SECURITY');
@@ -718,6 +725,36 @@ const MIGRATIONS = [
     down: () => {
       throw new Error('0003_money_currency cannot be reversed. Recovery: restore the database backup taken before the upgrade.');
     }
+  },
+  {
+    id: '0004_durable_jobs',
+    name: 'Durable background jobs: retries, backoff, idempotency keys, dead letters',
+    up: async (tx) => {
+      await tx.run(`
+        CREATE TABLE IF NOT EXISTS jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          kind TEXT NOT NULL,
+          lane TEXT NOT NULL DEFAULT 'default',
+          payload TEXT NOT NULL DEFAULT '{}',
+          idempotency_key TEXT,
+          status TEXT NOT NULL DEFAULT 'queued',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          max_attempts INTEGER NOT NULL DEFAULT 5,
+          run_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          locked_at TEXT,
+          locked_by TEXT,
+          last_error TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          finished_at TEXT
+        )`);
+      await tx.run('CREATE INDEX IF NOT EXISTS idx_jobs_due ON jobs (status, run_at, id)');
+      await tx.run('CREATE INDEX IF NOT EXISTS idx_jobs_lane ON jobs (tenant_id, lane, status, id)');
+      await tx.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency ON jobs (tenant_id, kind, idempotency_key) WHERE idempotency_key IS NOT NULL');
+      if (isPostgres) await protectTenantTable(tx, 'jobs');
+    },
+    down: (tx) => tx.run('DROP TABLE IF EXISTS jobs')
   }
 ];
 
@@ -2900,8 +2937,117 @@ async function exportTenantData(tenantId) {
   };
 }
 
+/* ---------- durable background jobs (lib/job-queue.js runs them) ---------- */
+// A job is one unit of background work. It is saved before it runs, retried with growing delays when it
+// fails, never added twice under the same idempotency key, and kept as a "dead" row when it gives up.
+// Jobs of one company and lane run strictly in the order they were added.
+const JOB_COLUMNS = 'id, tenant_id AS tenantId, kind, lane, payload, idempotency_key AS idempotencyKey, status, attempts, max_attempts AS maxAttempts, run_at AS runAt, last_error AS lastError, created_at AS createdAt, finished_at AS finishedAt';
+
+async function enqueueJob({ tenantId, kind, payload = {}, lane = 'default', idempotencyKey = null, delaySeconds = 0, maxAttempts = 5 }) {
+  assertTenant(tenantId);
+  if (!kind) throw new Error('A job needs a kind.');
+  const result = await run(
+    `INSERT OR IGNORE INTO jobs (tenant_id, kind, lane, payload, idempotency_key, max_attempts, run_at)
+     VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?))`,
+    [tenantId, kind, lane, JSON.stringify(payload ?? {}), idempotencyKey, maxAttempts, `+${Math.max(0, Math.floor(Number(delaySeconds) || 0))} seconds`]
+  );
+  return { created: result.changes === 1, id: result.changes === 1 ? result.id : null };
+}
+
+// Takes the oldest due job that has nothing earlier waiting in its company and lane. Safe with several servers:
+// only the one whose UPDATE still finds the job "queued" wins it.
+async function claimJob(workerId) {
+  const candidate = await get(`
+    SELECT id FROM jobs
+    WHERE status = 'queued' AND run_at <= datetime('now')
+      AND NOT EXISTS (
+        SELECT 1 FROM jobs earlier
+        WHERE earlier.tenant_id = jobs.tenant_id AND earlier.lane = jobs.lane
+          AND earlier.id < jobs.id AND earlier.status IN ('queued', 'running'))
+    ORDER BY run_at, id LIMIT 1`);
+  if (!candidate) return null;
+  const claimed = await run(
+    "UPDATE jobs SET status = 'running', locked_at = datetime('now'), locked_by = ?, attempts = attempts + 1, updated_at = datetime('now') WHERE id = ? AND status = 'queued'",
+    [workerId, candidate.id]
+  );
+  if (claimed.changes !== 1) return null;
+  return get(`SELECT ${JOB_COLUMNS} FROM jobs WHERE id = ?`, [candidate.id]);
+}
+
+async function completeJob(id) {
+  await run("UPDATE jobs SET status = 'done', locked_at = NULL, locked_by = NULL, last_error = NULL, finished_at = datetime('now'), updated_at = datetime('now') WHERE id = ?", [id]);
+}
+
+// Failed: try again after baseDelaySeconds * 2^(attempt-1) (at most 15 minutes), or give up as "dead".
+async function failJob(job, error, { baseDelaySeconds = 30, permanent = false } = {}) {
+  const message = String(error?.message || error || 'Failed').slice(0, 500);
+  if (permanent || job.attempts >= job.maxAttempts) {
+    await run("UPDATE jobs SET status = 'dead', locked_at = NULL, locked_by = NULL, last_error = ?, finished_at = datetime('now'), updated_at = datetime('now') WHERE id = ?", [message, job.id]);
+    return 'dead';
+  }
+  const delay = Math.min(900, baseDelaySeconds * 2 ** (job.attempts - 1));
+  await run(
+    "UPDATE jobs SET status = 'queued', locked_at = NULL, locked_by = NULL, last_error = ?, run_at = datetime('now', ?), updated_at = datetime('now') WHERE id = ?",
+    [message, `+${Math.round(delay)} seconds`, job.id]
+  );
+  return 'retry';
+}
+
+// A server that died mid-job leaves it "running"; after the visibility time it is queued again (or given up).
+async function recoverStuckJobs(visibilitySeconds = 600) {
+  const cutoff = `-${Math.max(1, Math.floor(visibilitySeconds))} seconds`;
+  const dead = await run(
+    "UPDATE jobs SET status = 'dead', locked_at = NULL, locked_by = NULL, last_error = COALESCE(last_error, 'The server stopped while running this job.'), finished_at = datetime('now') WHERE status = 'running' AND locked_at < datetime('now', ?) AND attempts >= max_attempts",
+    [cutoff]
+  );
+  const requeued = await run(
+    "UPDATE jobs SET status = 'queued', locked_at = NULL, locked_by = NULL, last_error = 'The server stopped while running this job.' WHERE status = 'running' AND locked_at < datetime('now', ?)",
+    [cutoff]
+  );
+  return { dead: dead.changes, requeued: requeued.changes };
+}
+
+async function pruneJobs(days = 7) {
+  const result = await run("DELETE FROM jobs WHERE status = 'done' AND finished_at < datetime('now', ?)", [`-${Math.max(1, Math.floor(days))} days`]);
+  return result.changes;
+}
+
+async function listJobs(tenantId, { status = null, limit = 50 } = {}) {
+  assertTenant(tenantId);
+  const rows = await all(
+    `SELECT ${JOB_COLUMNS} FROM jobs WHERE tenant_id = ? ${status ? 'AND status = ?' : ''} ORDER BY id DESC LIMIT ?`,
+    status ? [tenantId, status, limit] : [tenantId, limit]
+  );
+  return rows.map((row) => ({ ...row, payload: undefined }));
+}
+
+async function jobStats(tenantId) {
+  assertTenant(tenantId);
+  const counts = { queued: 0, running: 0, done: 0, dead: 0 };
+  for (const row of await all('SELECT status, COUNT(*) AS total FROM jobs WHERE tenant_id = ? GROUP BY status', [tenantId])) counts[row.status] = Number(row.total);
+  return counts;
+}
+
+// Gives a dead job a fresh set of attempts.
+async function retryJob(tenantId, id) {
+  const result = await run(
+    "UPDATE jobs SET status = 'queued', attempts = 0, run_at = datetime('now'), finished_at = NULL, updated_at = datetime('now') WHERE id = ? AND tenant_id = ? AND status = 'dead'",
+    [id, assertTenant(tenantId)]
+  );
+  return result.changes === 1;
+}
+
 module.exports = {
   isPostgres,
+  enqueueJob,
+  claimJob,
+  completeJob,
+  failJob,
+  recoverStuckJobs,
+  pruneJobs,
+  listJobs,
+  jobStats,
+  retryJob,
   pgSchema,
   MIGRATIONS,
   enforceRowLevelSecurity,
