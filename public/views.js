@@ -77,7 +77,7 @@
   const prettyDate = (value) => {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
     if (!match) return value || '—';
-    return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toLocaleDateString(window.VeyraConfig?.locale || 'en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
   };
 
   async function api(url, options = {}) {

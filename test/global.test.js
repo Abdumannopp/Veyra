@@ -55,7 +55,7 @@ test('sign-up needs consent and keeps the company\'s currency and weight unit', 
   assert.equal(res.status, 201);
   eu = res.headers.get('set-cookie').split(';')[0];
   const me = await json(eu, 'GET', '/api/me');
-  assert.deepEqual(me.region, { currency: 'EUR', weightUnit: 'lb' });
+  assert.deepEqual(me.region, { currency: 'EUR', weightUnit: 'lb', timeZone: 'UTC', locale: 'en-US' });
   const plans = await json(null, 'GET', '/api/plans');
   assert.ok(plans.regions.currencies.includes('EUR'));
 });
@@ -69,7 +69,7 @@ test('loads, invoices and finance use the company\'s own currency and unit; the 
   const invoice = await (await call(eu, 'GET', `/api/shipments/${id}/invoice`)).text();
   assert.match(invoice, /€1,800/);
 
-  assert.deepEqual((await json(owner, 'GET', '/api/me')).region, { currency: 'USD', weightUnit: 'kg' });
+  assert.deepEqual((await json(owner, 'GET', '/api/me')).region, { currency: 'USD', weightUnit: 'kg', timeZone: 'UTC', locale: 'en-US' });
 });
 
 test('administrators change the region; others cannot; amounts are not converted', async () => {
@@ -78,9 +78,9 @@ test('administrators change the region; others cannot; amounts are not converted
   assert.equal((await json(op, 'GET', '/api/company/settings')).canChange, false);
   assert.equal((await call(op, 'PUT', '/api/company/settings', { currency: 'GBP', weightUnit: 'kg' })).status, 403);
   assert.equal((await call(eu, 'PUT', '/api/company/settings', { currency: 'GBP' })).status, 400);
-  const saved = await json(eu, 'PUT', '/api/company/settings', { currency: 'GBP', weightUnit: 'kg' });
-  assert.deepEqual(saved.region, { currency: 'GBP', weightUnit: 'kg' });
-  assert.deepEqual((await json(op, 'GET', '/api/me')).region, { currency: 'GBP', weightUnit: 'kg' });
+  const saved = await json(eu, 'PUT', '/api/company/settings', { currency: 'GBP', weightUnit: 'kg', timeZone: 'UTC', locale: 'en-US' });
+  assert.deepEqual(saved.region, { currency: 'GBP', weightUnit: 'kg', timeZone: 'UTC', locale: 'en-US' });
+  assert.deepEqual((await json(op, 'GET', '/api/me')).region, { currency: 'GBP', weightUnit: 'kg', timeZone: 'UTC', locale: 'en-US' });
   // The earlier load keeps the weight it was entered with.
   assert.ok((await json(eu, 'GET', '/api/admin/shipments')).shipments.some((s) => s.weight === '22000 lb'));
   assert.equal((await call(op, 'GET', '/api/company/export')).status, 403);

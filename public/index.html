@@ -548,10 +548,12 @@
                 <div class="admin-list" id="backupList"></div>
               </div>
               <div class="admin-box hidden" id="companySettingsBox">
-                <div class="mini-head"><span><strong>Company</strong><small>Currency and weight unit for new loads, quotes and prices; your data to download</small></span></div>
+                <div class="mini-head"><span><strong>Company</strong><small>Currency and weight unit for new loads, quotes and prices; time zone and number format for what people see; your data to download</small></span></div>
                 <form class="add-user-form" id="companySettingsForm">
                   <label>Currency<select name="currency" aria-label="Currency"></select></label>
                   <label>Weight unit<select name="weightUnit" aria-label="Weight unit"><option value="kg">Kilograms (kg)</option><option value="lb">Pounds (lb)</option></select></label>
+                  <label>Time zone<select name="timeZone" aria-label="Time zone"></select></label>
+                  <label>Language and number format<select name="locale" aria-label="Language and number format"></select></label>
                   <div class="add-user-footer">
                     <p class="shipment-form-message" id="companySettingsMessage" role="status"></p>
                     <a class="btn btn-ghost small" id="companyExport" href="/api/company/export" download>Download company data</a>
