@@ -172,6 +172,19 @@ Veyra runs on PostgreSQL when `DATABASE_URL` is set, and on a single SQLite file
 
 **Moving existing SQLite data:** not automated yet. A fresh PostgreSQL database is created on first start; if you already have companies in a SQLite file, ask for a migration script before switching.
 
+## Moving existing data from SQLite to PostgreSQL
+
+Do this once, when a running SQLite install moves to PostgreSQL. The SQLite file is only read, never changed.
+
+1. Take a backup of the SQLite file (Admin → Backup, or copy the file from the Volume).
+2. Create an **empty** PostgreSQL database.
+3. Rehearse: `SQLITE_PATH=/data/veyra.db DATABASE_URL=postgres://... npm run migrate:postgres -- --dry-run`.
+   Every table is copied, checked (row count and content checksum), then undone.
+4. Stop the app (no new writes), then run the same command without `--dry-run`.
+   It refuses a database that already has data, and keeps nothing if any table differs.
+5. Only after it prints `Done: ... copied and verified`, set `DATABASE_URL` on the app and start it.
+6. Keep the SQLite backup until you have checked the app on PostgreSQL.
+
 ## Database migrations
 
 Schema changes are versioned migrations (`database.js` → `MIGRATIONS`, runner in `lib/migrations.js`). Applied ids are kept in `schema_migrations`; the server applies missing ones at start, one process at a time.
