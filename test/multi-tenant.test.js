@@ -127,3 +127,20 @@ test('a company admin adds users only to their own company', async () => {
   const opsB = await login('ops@bravo.example', 'BravoOps2026');
   assert.equal((await (await call(opsB, 'GET', '/api/me')).json()).user.tenantName, 'Bravo Logistics');
 });
+
+test('background jobs: only admins see them, and only their own company\'s', async () => {
+  const { sql } = require('../database');
+  const { runAsSystem } = require('../lib/tenant-context');
+  const queue = require('../lib/job-queue');
+  queue.register('test.http', () => { throw new Error('nope'); });
+  const { id } = await queue.enqueue({ tenantId: 1, kind: 'test.http', lane: 'http', maxAttempts: 1 });
+  await queue.idle();
+  assert.equal((await call(opsA, 'GET', '/api/jobs')).status, 403);
+  const list = await (await call(adminA, 'GET', '/api/jobs?status=dead')).json();
+  assert.equal(list.jobs.some((job) => job.id === id && job.lastError === 'nope'), true);
+  assert.ok(list.counts.dead >= 1);
+  assert.equal((await call(adminA, 'POST', '/api/jobs/999999/retry')).status, 404);
+  assert.equal((await call(adminA, 'POST', `/api/jobs/${id}/retry`)).status, 200);
+  await queue.idle();
+  await runAsSystem(() => sql.run('DELETE FROM jobs WHERE id = ?', [id]));
+});

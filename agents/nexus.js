@@ -11,6 +11,7 @@
 // finished, and failures are logged, never thrown at the person who triggered the event.
 const db = require('../database');
 const { runAsSystem } = require('../lib/tenant-context');
+const jobQueue = require('../lib/job-queue');
 const studio = require('./studio');
 const plans = require('../lib/plans');
 const aiGateway = require('../ai/gateway');
@@ -68,28 +69,30 @@ async function automationOn(tenantId, key) {
 }
 const pending = new Set();
 
-// Schedules the reaction to an event and returns at once. One company's events are handled one after
-// another, in the order they happened (a truck booked right after "Sourcing" must not leave a stale
-// "book a carrier" task behind); different companies do not wait for each other.
-const queues = new Map();
-function emit(event, context) {
+// Saves the reaction to an event as a durable job and returns at once. The job survives a restart and is
+// retried with growing delays if it fails. One company's events are handled one after another, in the
+// order they happened (a truck booked right after "Sourcing" must not leave a stale "book a carrier" task
+// behind); different companies do not wait for each other. `idempotencyKey` stops the same event being
+// saved twice (for example an email delivered again).
+function emit(event, context, { idempotencyKey = null } = {}) {
   if (!enabled()) return;
-  const key = context?.tenantId ?? 'system';
-  const previous = queues.get(key) || Promise.resolve();
-  const promise = previous
-    .then(() => handle(event, context))
-    .catch((error) => console.error(`[NEXUS] ${event} failed:`, error.message))
-    .finally(() => {
-      pending.delete(promise);
-      if (queues.get(key) === promise) queues.delete(key);
-    });
-  queues.set(key, promise);
-  pending.add(promise);
+  const tenantId = context?.tenantId;
+  if (!Number.isInteger(tenantId)) {
+    console.error(`[NEXUS] ${event} ignored: it has no company.`);
+    return;
+  }
+  const saved = jobQueue.enqueue({ tenantId, kind: 'nexus.event', lane: 'nexus', payload: { event, context }, idempotencyKey })
+    .catch((error) => console.error(`[NEXUS] could not save ${event}:`, error.message))
+    .finally(() => pending.delete(saved));
+  pending.add(saved);
 }
 
-// Resolves when every scheduled reaction has finished (used by tests and graceful shutdown).
+jobQueue.register('nexus.event', ({ event, context }) => handle(event, context));
+
+// Resolves when every saved reaction has finished (used by tests and graceful shutdown).
 async function idle() {
   while (pending.size) await Promise.allSettled([...pending]);
+  await jobQueue.idle();
 }
 
 const logger = (tenantId, shipmentId = null) => (task) => db.recordAgentTask(tenantId, { ...task, shipmentId, actorId: null })

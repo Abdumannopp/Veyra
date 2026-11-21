@@ -185,6 +185,17 @@ Do this once, when a running SQLite install moves to PostgreSQL. The SQLite file
 5. Only after it prints `Done: ... copied and verified`, set `DATABASE_URL` on the app and start it.
 6. Keep the SQLite backup until you have checked the app on PostgreSQL.
 
+## Background jobs
+
+Automatic reactions (reading order emails with AI, reading CMR/POD documents, drafting booking and delivery messages, price checks, workflow rules) are saved as jobs in the database before they run, so a restart or crash does not lose them.
+- A failing job is retried after 30 s, 1 min, 2 min ... (up to 15 min), 5 attempts by default, then kept as "dead" so nobody has to guess what failed.
+- The same event is never saved twice under one idempotency key (for example an email delivered again).
+- A job left "running" by a server that died is queued again after 10 minutes.
+- Jobs of one company run in the order they were added; companies do not wait for each other. Several servers can share one PostgreSQL database; each job is taken by only one.
+- Admins see counts and failed jobs at `GET /api/jobs` and can give a dead job new attempts with `POST /api/jobs/:id/retry`.
+- Optional settings: `JOBS_CONCURRENCY` (4), `JOBS_POLL_MS` (2000), `JOBS_RETRY_BASE_SECONDS` (30), `JOBS_VISIBILITY_SECONDS` (600). Finished jobs are deleted after 7 days.
+- Still timer-based (they only re-check state and are safe to repeat): the NEXUS sweeps, mailbox polling and daily backups.
+
 ## Money and currencies
 
 - Every priced record (loads, quotes, market rates) stores its own ISO currency next to the amount. Existing amounts were labelled with the company's currency when migration `0003_money_currency` ran.

@@ -60,9 +60,10 @@ test('new migrations apply in order; a failing one is rolled back and not record
 test('down reverses the newest migration; the baseline refuses with a recovery note', async () => {
   assert.deepEqual(await migrationRunner.down(extra, { steps: 1 }), ['0900_test_widgets']);
   assert.equal(await tableExists('test_widgets'), false);
-  // The newest real migration (money currency) cannot be reversed: it refuses and stays applied.
-  await assert.rejects(migrationRunner.down(extra, { steps: 1 }), /cannot be reversed.*restore the database backup/);
-  assert.deepEqual((await migrationRunner.applied()).map((row) => row.id), MIGRATIONS.map((m) => m.id));
+  // 0004 (jobs) reverses; 0003 (money currency) cannot be reversed: it refuses and stays applied.
+  await assert.rejects(migrationRunner.down(extra, { steps: 2 }), /cannot be reversed.*restore the database backup/);
+  assert.deepEqual((await migrationRunner.applied()).map((row) => row.id), MIGRATIONS.slice(0, -1).map((m) => m.id));
+  assert.equal(await tableExists('jobs'), false);
 });
 
 test('bad migration lists are refused before anything runs', async () => {
