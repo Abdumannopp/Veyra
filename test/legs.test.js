@@ -202,3 +202,11 @@ test('cancelling every leg cancels the load; a cancelled leg is skipped by the h
   for (const leg of second.body.legs) await json(admin, 'POST', `/api/v2/legs/${leg.id}/status`, { status: 'Cancelled' });
   assert.equal((await json(admin, 'GET', `/api/v2/shipments/${second.body.shipment.id}`)).body.shipment.status, 'Cancelled');
 });
+
+test('the screens for legs are served and wired into the page', async () => {
+  const page = await (await fetch(`${base}/`)).text();
+  for (const marker of ['id="legsSection"', 'id="legPlannerModal"', 'data-plan-legs', 'src="legs.js"', 'href="legs.css"']) assert.ok(page.includes(marker), marker);
+  for (const file of ['legs.js', 'legs.css']) assert.equal((await fetch(`${base}/${file}`)).status, 200, file);
+  const list = (await json(admin, 'GET', '/api/admin/shipments')).body.shipments;
+  assert.ok(list.every((shipment) => ['single', 'multi'].includes(shipment.legMode)), 'every load says how it moves');
+});

@@ -734,7 +734,7 @@ async function loadAdminConsole() {
           const statusClass = String(shipment.status || '').toLowerCase().replace(/\s+/g, '-');
           shipmentMeta.append(createTextElement('span', `status-badge ${statusClass}`, shipment.status));
 
-          const statusOptions = allowedShipmentStatuses(shipment.status);
+          const statusOptions = shipment.legMode === 'multi' ? [] : allowedShipmentStatuses(shipment.status);
           if (statusOptions.length) {
             const statusSelect = document.createElement('select');
             statusSelect.className = 'status-select';
@@ -2090,7 +2090,8 @@ async function openShipmentDetails(shipmentId) {
     };
 
     const trackingForm = document.getElementById('trackingForm');
-    const canTrack = hasPermission('shipments:track') && TRACKABLE_STATUSES.includes(shipment.status);
+    // A load with several legs is tracked per leg (see the legs section).
+    const canTrack = hasPermission('shipments:track') && TRACKABLE_STATUSES.includes(shipment.status) && shipment.legMode !== 'multi';
     trackingForm?.classList.toggle('hidden', !canTrack);
     const trackingMessage = document.getElementById('trackingFormMessage');
     if (trackingMessage) trackingMessage.textContent = '';
@@ -2162,6 +2163,7 @@ async function openShipmentDetails(shipmentId) {
     loadDocuments(shipment.id);
     loadShipmentAdvice(shipment);
     setupDetailTools(shipment);
+    window.VeyraLegs?.show(shipment);
     modal.classList.remove('hidden');
   } catch (error) {
     notify(error.message, 'error');

@@ -15,6 +15,7 @@
     <script src="theme.js"></script>
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="theme.css" />
+    <link rel="stylesheet" href="legs.css" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   </head>
   <body>
@@ -589,6 +590,7 @@
               </div>
               <div class="head-actions">
                 <button class="btn btn-ghost small" type="button" data-export-csv><svg class="ico sm"><use href="#i-doc" /></svg>Export CSV</button>
+                <button class="btn btn-ghost small" type="button" data-plan-legs>+ Multi-leg order</button>
                 <button class="btn btn-primary small" type="button" data-new-shipment>+ New Shipment</button>
               </div>
             </div>
@@ -732,6 +734,11 @@
           <div><dt>Tracking number</dt><dd data-detail="tracking">-</dd></div>
           <div class="span-2"><dt>Last location / ETA</dt><dd data-detail="location">-</dd></div>
         </dl>
+        <section class="legs-section hidden" id="legsSection" aria-label="Route legs">
+          <div class="detail-timeline-head"><strong>Route legs</strong><span id="legsCount"></span></div>
+          <div id="legsBody"></div>
+          <div class="detail-actions"><button class="btn btn-ghost small hidden" type="button" id="legAdd">Add a leg</button></div>
+        </section>
         <div class="detail-actions" id="detailActions">
           <button class="btn btn-ghost small hidden" type="button" id="editShipmentToggle" aria-expanded="false" aria-controls="editShipmentForm">Edit load</button>
           <button class="btn btn-ghost small hidden" type="button" id="shareCreate">Customer tracking link</button>
@@ -832,6 +839,35 @@
         <div class="shipment-form-footer">
           <p class="shipment-form-message" id="passwordMessage" role="status"></p>
           <button class="btn btn-primary" type="submit">Save password</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="shipment-modal hidden" id="legPlannerModal" aria-modal="true" role="dialog" aria-labelledby="legPlannerTitle">
+      <form class="modal-card shipment-form" id="legPlannerForm" autocomplete="off">
+        <button class="modal-close" id="closeLegPlanner" type="button" aria-label="Close">×</button>
+        <div class="shipment-form-heading">
+          <span class="eyebrow">MULTI-LEG ORDER</span>
+          <h2 id="legPlannerTitle">Plan an order in legs</h2>
+          <p>One customer order that moves by road, sea, air, rail, a warehouse or a last-mile delivery. You enter the prices and booking numbers; nothing is sent to carriers.</p>
+        </div>
+        <div class="shipment-form-grid">
+          <label>Customer<input name="customer" required maxlength="120" placeholder="Customer name" /></label>
+          <label>Customer reference<input name="orderReference" maxlength="80" placeholder="Optional" /></label>
+          <label>Order origin<input name="orderOrigin" required maxlength="160" placeholder="Where it starts" /></label>
+          <label>Order destination<input name="orderDestination" required maxlength="160" placeholder="Where it ends" /></label>
+          <label>Pickup date<input name="pickup" type="date" required /></label>
+          <label>Delivery date<input name="delivery" type="date" required /></label>
+          <label><span>Weight (<span data-weight-unit>kg</span>)</span><input name="weight" type="number" min="1" step="1" required placeholder="20000" /></label>
+          <label>Equipment<select name="equipment" required data-equipment-select><option>Dry Van</option><option>Tent / Curtainsider</option><option>Reefer</option><option>Flatbed</option><option>LTL</option><option>Expedited</option></select></label>
+          <label><span>Customer price (<span data-currency>USD</span>)</span><input name="customerRate" type="number" min="0.01" step="0.01" placeholder="Optional — what the customer pays" /></label>
+        </div>
+        <div class="detail-timeline-head"><strong>Legs, in order</strong><span>The next leg starts when the one before it is delivered</span></div>
+        <div id="plannerLegs"></div>
+        <div class="shipment-form-footer">
+          <button class="btn btn-ghost small" type="button" id="plannerAddLeg">+ Add a leg</button>
+          <span class="shipment-form-message" id="legPlannerMessage" role="status"></span>
+          <button class="btn btn-primary" type="submit">Create order</button>
         </div>
       </form>
     </div>
@@ -941,5 +977,6 @@
     <script src="script.js"></script>
     <script src="assistant.js"></script>
     <script src="views.js"></script>
+    <script src="legs.js"></script>
   </body>
 </html>
