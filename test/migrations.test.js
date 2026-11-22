@@ -60,8 +60,15 @@ test('new migrations apply in order; a failing one is rolled back and not record
 test('down reverses the newest migration; the baseline refuses with a recovery note', async () => {
   assert.deepEqual(await migrationRunner.down(extra, { steps: 1 }), ['0900_test_widgets']);
   assert.equal(await tableExists('test_widgets'), false);
-  // The newest real migration (time zone and locale) cannot be reversed: it refuses and stays applied.
-  await assert.rejects(migrationRunner.down(extra, { steps: 1 }), /cannot be reversed.*restore the database backup/);
+  // 0009 (document storage key) is reversed while no document is in object storage, then applied again.
+  const hasStorageKey = async () => (await query('all', 'PRAGMA table_info(documents)')).some((column) => column.name === 'storage_key');
+  assert.deepEqual(await migrationRunner.down(extra, { steps: 1 }), ['0009_document_storage_key']);
+  assert.equal(await hasStorageKey(), false);
+  await migrate();
+  assert.equal(await hasStorageKey(), true);
+  // 0008 (trips) and older cannot be reversed: they refuse with a recovery note and stay applied.
+  await assert.rejects(migrationRunner.down(MIGRATIONS, { steps: 2 }), /0008_trips cannot be reversed.*restore the database backup/);
+  await migrate();
   assert.deepEqual((await migrationRunner.applied()).map((row) => row.id), MIGRATIONS.map((m) => m.id));
 });
 

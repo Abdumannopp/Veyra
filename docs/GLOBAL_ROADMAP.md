@@ -14,7 +14,7 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 | 1.4 | Money as exact decimals with an ISO currency per amount | Done |
 | 1.5 | Durable background jobs (retries, idempotency keys) for AI, tracking, OCR, notifications | Done |
 | 1.6 | Timezone and locale per company; UTC everywhere in storage | Done |
-| 1.7 | Documents in encrypted object storage; metadata and checksums in PostgreSQL | Storage chosen: Cloudflare R2 |
+| 1.7 | Documents in encrypted object storage (Cloudflare R2, AES-256-GCM before upload); metadata and checksums in the database; a script moves old files | Done (switched on by settings) |
 
 ## Phase 2 — Universal shipment and legs
 | Step | What | Status |

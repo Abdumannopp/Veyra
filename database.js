@@ -1,3 +1,4 @@
+const blobStore = require('./lib/blob-store');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 const crypto = require('crypto');
@@ -920,6 +921,21 @@ const MIGRATIONS = [
     },
     down: () => {
       throw new Error('0008_trips cannot be reversed. Recovery: restore the database backup taken before the upgrade.');
+    }
+  },
+  {
+    id: '0009_document_storage_key',
+    name: 'Documents may live in object storage (Cloudflare R2): the row keeps the storage key',
+    transactional: false,
+    up: async () => {
+      await ensureColumns('documents', [['storage_key', 'TEXT']]);
+    },
+    down: async () => {
+      const moved = await get('SELECT COUNT(*) AS total FROM documents WHERE storage_key IS NOT NULL');
+      if (Number(moved?.total) > 0) {
+        throw new Error('0009_document_storage_key cannot be reversed while documents are in object storage. Move them back first or restore the backup.');
+      }
+      await run('ALTER TABLE documents DROP COLUMN storage_key');
     }
   }
 ];
@@ -2358,7 +2374,7 @@ async function addInboxAttachment(tenantId, inboxId, { filename, mime, content }
     if (existing) return { id: existing.id, duplicate: true };
     const result = await transaction.run(
       'INSERT INTO inbox_attachments (tenant_id, inbox_id, filename, mime, size, sha256, content) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [tenantId, inboxId, filename, mime, content.length, sha256, content]
+      [tenantId, inboxId, filename, mime, content.length, sha256, blobStore.seal(content)]
     );
     return { id: result.id, duplicate: false };
   });
@@ -2372,10 +2388,31 @@ async function listInboxAttachments(tenantId, inboxId) {
 }
 
 async function getInboxAttachmentFile(tenantId, inboxId, id) {
-  return get(
+  const row = await get(
     'SELECT id, filename, mime, content FROM inbox_attachments WHERE id = ? AND inbox_id = ? AND tenant_id = ?',
     [id, inboxId, assertTenant(tenantId)]
   );
+  return row ? { ...row, content: blobStore.open(row.content) } : null;
+}
+
+// Encrypts the file (when a key is set) and puts it in object storage (when configured).
+// Returns what goes in the row: the bytes, or an empty value and the storage key.
+async function storeDocumentContent(tenantId, shipmentId, sha256, content) {
+  const sealed = blobStore.seal(content);
+  const store = blobStore.getStore();
+  if (!store) return { content: sealed, storageKey: null };
+  const storageKey = blobStore.documentKey(tenantId, shipmentId, sha256);
+  await store.put(storageKey, sealed);
+  return { content: Buffer.alloc(0), storageKey };
+}
+
+async function loadDocumentContent(row) {
+  if (!row.storage_key) return blobStore.open(row.content);
+  const store = blobStore.getStore();
+  if (!store) throw new Error('This document is in object storage, but DOCUMENT_STORAGE is not set to r2.');
+  const sealed = await store.get(row.storage_key);
+  if (!sealed) throw new Error('The document file is missing from object storage.');
+  return blobStore.open(sealed);
 }
 
 async function deleteInboxAttachments(tenantId, inboxId) {
@@ -2400,9 +2437,10 @@ async function moveInboxAttachmentsToShipment(tenantId, inboxId, shipmentId, { u
           skipped += 1;
           continue;
         }
+        const stored = await storeDocumentContent(tenantId, shipmentId, file.sha256, blobStore.open(file.content));
         const result = await transaction.run(
-          'INSERT INTO documents (tenant_id, shipment_id, doc_type, filename, mime, size, sha256, content, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [tenantId, shipmentId, typeFor(file.filename), file.filename, file.mime, file.size, file.sha256, file.content, uploadedBy]
+          'INSERT INTO documents (tenant_id, shipment_id, doc_type, filename, mime, size, sha256, content, storage_key, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [tenantId, shipmentId, typeFor(file.filename), file.filename, file.mime, file.size, file.sha256, stored.content, stored.storageKey, uploadedBy]
         );
         documentIds.push(result.id);
         count += 1;
@@ -2907,14 +2945,19 @@ async function addDocument(tenantId, shipmentId, { type, filename, mime, content
   assertTenant(tenantId);
   const crypto = require('crypto');
   const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+  const shipment = await get('SELECT id FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+  if (!shipment) throw httpError(404, 'Shipment not found.');
+  const known = await get('SELECT id FROM documents WHERE shipment_id = ? AND sha256 = ? AND tenant_id = ?', [shipmentId, sha256, tenantId]);
+  if (known) return { document: await getDocument(tenantId, shipmentId, known.id), duplicate: true };
+  // The file is stored before the row is written; its key depends only on the load and the content,
+  // so a retry overwrites the same object instead of leaving a second one.
+  const stored = await storeDocumentContent(tenantId, shipmentId, sha256, content);
   return withTransaction(async (transaction) => {
-    const shipment = await transaction.get('SELECT id FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
-    if (!shipment) throw httpError(404, 'Shipment not found.');
     const existing = await transaction.get('SELECT id FROM documents WHERE shipment_id = ? AND sha256 = ?', [shipmentId, sha256]);
     if (existing) return { id: existing.id, duplicate: true };
     const result = await transaction.run(
-      `INSERT INTO documents (tenant_id, shipment_id, doc_type, filename, mime, size, sha256, content, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [tenantId, shipmentId, type, filename, mime, content.length, sha256, content, uploadedBy || null]
+      `INSERT INTO documents (tenant_id, shipment_id, doc_type, filename, mime, size, sha256, content, storage_key, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [tenantId, shipmentId, type, filename, mime, content.length, sha256, stored.content, stored.storageKey, uploadedBy || null]
     );
     return { id: result.id, duplicate: false };
   }).then(async (result) => ({ document: await getDocument(tenantId, shipmentId, result.id), duplicate: result.duplicate }));
@@ -2940,10 +2983,13 @@ async function listDocuments(tenantId, shipmentId) {
 
 // The stored file itself (for download and for reading by VAULT).
 async function getDocumentFile(tenantId, shipmentId, id) {
-  return get(
-    'SELECT id, filename, mime, doc_type AS type, content FROM documents WHERE id = ? AND shipment_id = ? AND tenant_id = ?',
+  const row = await get(
+    'SELECT id, filename, mime, doc_type AS type, content, storage_key FROM documents WHERE id = ? AND shipment_id = ? AND tenant_id = ?',
     [id, shipmentId, assertTenant(tenantId)]
   );
+  if (!row) return null;
+  const { storage_key: _key, ...file } = row;
+  return { ...file, content: await loadDocumentContent(row) };
 }
 
 async function updateDocumentExtraction(tenantId, id, { status, extracted, comparison, error }) {
@@ -2962,8 +3008,38 @@ async function setDocumentType(tenantId, shipmentId, id, type) {
 
 async function deleteDocument(tenantId, shipmentId, id) {
   assertTenant(tenantId);
+  const row = await get('SELECT storage_key FROM documents WHERE id = ? AND shipment_id = ? AND tenant_id = ?', [id, shipmentId, tenantId]);
   const result = await run('DELETE FROM documents WHERE id = ? AND shipment_id = ? AND tenant_id = ?', [id, shipmentId, tenantId]);
+  if (result.changes === 1 && row?.storage_key) {
+    // The row is gone either way; a file left behind in the bucket is logged, not shown to the user.
+    const store = blobStore.getStore();
+    if (store) await store.remove(row.storage_key).catch((error) => console.error('[documents] could not delete stored file:', error.message));
+  }
   return result.changes === 1;
+}
+
+// Moves files kept in the database into object storage (and encrypts them when a key is set).
+// Used by scripts/move-documents-to-storage.js; runs as the server (system), in small batches.
+async function moveDocumentsToStorage({ batchSize = 20, limit = Infinity } = {}) {
+  const store = blobStore.getStore();
+  if (!store) throw new Error('Set DOCUMENT_STORAGE=r2 and the R2_* settings first.');
+  let moved = 0;
+  while (moved < limit) {
+    const rows = await all('SELECT id, tenant_id, shipment_id, sha256, content FROM documents WHERE storage_key IS NULL ORDER BY id LIMIT ?', [batchSize]);
+    if (!rows.length) break;
+    for (const row of rows) {
+      const storageKey = blobStore.documentKey(row.tenant_id, row.shipment_id, row.sha256);
+      const sealed = blobStore.seal(blobStore.open(row.content));
+      await store.put(storageKey, sealed);
+      // Read back before the database copy is dropped.
+      const check = await store.get(storageKey);
+      if (!check || !blobStore.open(check).equals(blobStore.open(row.content))) throw new Error(`Document ${row.id} did not store correctly; nothing was changed for it.`);
+      await run('UPDATE documents SET storage_key = ?, content = ? WHERE id = ? AND storage_key IS NULL', [storageKey, Buffer.alloc(0), row.id]);
+      moved += 1;
+      if (moved >= limit) break;
+    }
+  }
+  return moved;
 }
 
 /* ---------- Automation Studio ---------- */
@@ -4113,6 +4189,7 @@ module.exports = {
   getDocument,
   listDocuments,
   getDocumentFile,
+  moveDocumentsToStorage,
   updateDocumentExtraction,
   deleteDocument,
   findUserByEmail,

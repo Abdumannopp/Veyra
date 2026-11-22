@@ -196,6 +196,27 @@ Automatic reactions (reading order emails with AI, reading CMR/POD documents, dr
 - Optional settings: `JOBS_CONCURRENCY` (4), `JOBS_POLL_MS` (2000), `JOBS_RETRY_BASE_SECONDS` (30), `JOBS_VISIBILITY_SECONDS` (600). Finished jobs are deleted after 7 days.
 - Still timer-based (they only re-check state and are safe to repeat): the NEXUS sweeps, mailbox polling and daily backups.
 
+## Document storage (Cloudflare R2) and encryption
+
+By default document files are kept inside the database. For production, keep them in a Cloudflare R2 bucket, encrypted.
+Put these only in Railway → Variables (never in chat, email or the code):
+
+| Variable | Value |
+|---|---|
+| `DOCUMENT_STORAGE` | `r2` |
+| `R2_ACCOUNT_ID` | Cloudflare account ID (R2 page, right side) |
+| `R2_ACCESS_KEY_ID` | from R2 → Manage API tokens → Create token (Object Read & Write, this bucket only) |
+| `R2_SECRET_ACCESS_KEY` | shown once with the token |
+| `R2_BUCKET` | the bucket name, e.g. `veyra-documents` (keep it private: no public access) |
+| `DOCUMENT_ENCRYPTION_KEY` | 32 random bytes: run `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
+
+- Every new file is encrypted (AES-256-GCM) before it leaves the server, so R2 only sees scrambled bytes. The key also encrypts files kept in the database and email attachments waiting in the inbox.
+- **Keep a copy of `DOCUMENT_ENCRYPTION_KEY` in a safe place (a password manager). Without it the files cannot be opened. Never change it once files are saved.**
+- The server checks these settings at start-up and refuses to start if one is wrong. The start-up line says `documents: r2 encrypted`.
+- Migration 0009 adds one column (`storage_key`); it can be reversed while no file is in R2.
+- Old files stay readable from the database. To move them to R2 (and encrypt them), take a backup, then run once in the Railway shell: `npm run documents:move`. Each file is read back from R2 before the database copy is removed; running it again is safe.
+- Back up the bucket too (R2 does not keep old versions by default).
+
 ## Trips (LTL)
 
 One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migration `0008_trips` adds the trip tables (protected by row level security on PostgreSQL) and `shipments.trip_id`; it cannot be reversed, so take a backup before upgrading.
