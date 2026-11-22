@@ -17,7 +17,11 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 | 1.7 | Documents in encrypted object storage; metadata and checksums in PostgreSQL | Storage chosen: Cloudflare R2 |
 
 ## Phase 2 — Universal shipment and legs
-Shipment as the customer order; `shipment_legs` with mode, sequence, carrier, price, schedule, documents and tracking per leg; handovers between legs; status history per shipment and per leg; `/api/v2` for the new model while `/api/*` keeps today's behaviour (a current FTL load = a shipment with one ROAD leg).
+| Step | What | Status |
+|---|---|---|
+| 2.1 | `shipment_legs` (mode, sequence, carrier, price, schedule, reference, mode details, tracking), leg status history, handovers, documents per leg, load status and price rolled up from legs, `/api/v2` (see `docs/API_V2.md`); a classic load is one ROAD leg and `/api/*` is unchanged | Done |
+| 2.2 | Screens for legs (plan a multi-leg load, book and track each leg) | Planned |
+| 2.3 | NEXUS and the finance views understand multi-leg loads | Planned |
 
 ## Phase 3 — Road FTL and LTL
 Existing FTL moved onto legs without changing its screens; LTL consolidation and allocation of shipments to trucks.

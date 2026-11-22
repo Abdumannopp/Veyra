@@ -196,6 +196,15 @@ Automatic reactions (reading order emails with AI, reading CMR/POD documents, dr
 - Optional settings: `JOBS_CONCURRENCY` (4), `JOBS_POLL_MS` (2000), `JOBS_RETRY_BASE_SECONDS` (30), `JOBS_VISIBILITY_SECONDS` (600). Finished jobs are deleted after 7 days.
 - Still timer-based (they only re-check state and are safe to repeat): the NEXUS sweeps, mailbox polling and daily backups.
 
+## Shipment legs (API v2)
+
+One customer order can move in several legs (road, ocean, air, rail, warehouse, last mile). See `docs/API_V2.md`.
+- Migration `0006_shipment_legs` adds the leg, leg history and handover tables (protected by row level security on PostgreSQL) and cannot be reversed; take a backup before upgrading.
+- Existing loads and `/api/*` are unchanged: a classic load is shown as one ROAD leg and nothing is rewritten.
+- A multi-leg load rejects the classic status, dispatch and location actions (`409`); use its legs.
+- Prices and tracking are entered by people. There is no carrier, port or airline connection yet, and NEXUS does not react to multi-leg loads yet.
+- Price fields now keep up to 4 decimals on input and are rounded to the currency's minor unit when saved (before, input was cut to 2 decimals first, which was wrong for currencies like KWD).
+
 ## Time zones and number formats
 
 - Everything is **stored in UTC** (the database clock). A company's time zone and locale only change how people see times, dates and numbers, and what "today" means for that company; they never change what is saved.

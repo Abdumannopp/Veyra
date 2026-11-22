@@ -141,7 +141,16 @@ const {
   getAlerts,
   listJobs,
   jobStats,
-  retryJob
+  retryJob,
+  getShipmentLegs,
+  getLeg,
+  createShipmentWithLegs,
+  addLeg,
+  updateLeg,
+  setLegStatus,
+  addLegTracking,
+  setDocumentLeg,
+  listLegDocuments
 } = require('./database');
 const aiGateway = require('./ai/gateway');
 const flowAgent = require('./agents/flow');
@@ -156,6 +165,7 @@ const { isPostgres: databaseIsPostgres } = require('./database');
 const { runAsSystem, runAsTenant } = require('./lib/tenant-context');
 const { addMoney } = require('./lib/money');
 const timeLib = require('./lib/time');
+const legsLib = require('./lib/legs');
 const jobQueue = require('./lib/job-queue');
 const plans = require('./lib/plans');
 const paddle = require('./integrations/paddle');
@@ -431,6 +441,7 @@ function serializeShipment(shipment) {
     delivery: shipment.delivery || 'Next Day',
     status: shipment.status || 'Pending Approval',
     reference: shipment.reference,
+    legMode: shipment.leg_mode || 'single',
     carrier: shipment.carrier_id,
     carrierId: shipment.carrier_id,
     rate: shipment.rate,
@@ -3311,6 +3322,193 @@ app.get('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (re
 });
 
 /* ---------- company settings: region and data export ---------- */
+/* =========================================================
+   API v2: a shipment is the customer's order; it moves in legs (ROAD, OCEAN, AIR, RAIL, WAREHOUSE, LAST_MILE).
+   /api/* keeps working as before: a classic single-truck load is shown here as one ROAD leg.
+   Everything on a leg is entered by people (no carrier connection behind it); NEXUS does not react to multi-leg loads yet.
+   ========================================================= */
+const positiveId = (value) => {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+};
+const MAX_LEGS = 12;
+
+function legInput(res, body, options) {
+  try {
+    return legsLib.readLegInput(body, { parseMoney, ...options });
+  } catch (error) {
+    if (error instanceof legsLib.LegInputError) {
+      res.status(400).json({ success: false, message: error.message });
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function sendShipmentLegs(res, tenantId, shipmentId, status = 200, extra = {}) {
+  const data = await getShipmentLegs(tenantId, shipmentId);
+  if (!data) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+  const { shipmentId: id, ...rest } = data;
+  return res.status(status).json({ success: true, shipment: { id: `SHP-${id}`, status: data.status, currency: data.currency, multi: data.multi }, ...rest, ...extra });
+}
+
+app.get('/api/v2/shipments/:id', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+    return await sendShipmentLegs(res, req.user.tenantId, shipmentId);
+  } catch (error) {
+    return sendError(res, error, 'Shipment could not be loaded.', 'v2 shipment');
+  }
+});
+
+// A new order made of legs. The load's own status and price follow its legs.
+app.post('/api/v2/shipments', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
+  try {
+    const { customer, reference, origin, destination, pickup, delivery, weight, equipment } = req.body || {};
+    const pickupDate = parseIsoDate(pickup);
+    const deliveryDate = parseIsoDate(delivery);
+    const weightValue = parsePositiveNumber(weight, MAX_WEIGHT);
+    for (const [field, value] of Object.entries({ customer, origin, destination })) {
+      if (typeof value !== 'string' || !value.trim() || value.trim().length > MAX_LEN[field]) {
+        return res.status(400).json({ success: false, message: `${field} is required and must be at most ${MAX_LEN[field]} characters.` });
+      }
+    }
+    if (reference !== undefined && reference !== null && (typeof reference !== 'string' || reference.trim().length > MAX_LEN.reference)) {
+      return res.status(400).json({ success: false, message: `reference must be text of at most ${MAX_LEN.reference} characters.` });
+    }
+    if (weightValue === null || !EQUIPMENT.includes(equipment)) {
+      return res.status(400).json({ success: false, message: `A weight up to ${MAX_WEIGHT.toLocaleString('en-US')} ${req.user.region.weightUnit} and valid equipment are required.` });
+    }
+    if (!pickupDate || !deliveryDate || deliveryDate < pickupDate) {
+      return res.status(400).json({ success: false, message: 'Pickup and delivery must be valid dates (YYYY-MM-DD), delivery not before pickup.' });
+    }
+    const hasRate = req.body?.customerRate !== undefined && req.body?.customerRate !== null && req.body?.customerRate !== '';
+    const customerRate = hasRate ? parseMoney(req.body.customerRate) : null;
+    if (hasRate && customerRate === null) return res.status(400).json({ success: false, message: 'The customer price is not a valid amount.' });
+    const rawLegs = req.body?.legs;
+    if (!Array.isArray(rawLegs) || !rawLegs.length || rawLegs.length > MAX_LEGS) {
+      return res.status(400).json({ success: false, message: `Give 1 to ${MAX_LEGS} legs.` });
+    }
+    const legs = [];
+    for (const raw of rawLegs) {
+      const input = legInput(res, raw || {});
+      if (!input) return null;
+      legs.push(input);
+    }
+    await requireShipmentRoom(req.user.tenantId);
+    const created = await createShipmentWithLegs({
+      customer: customer.trim(), origin: origin.trim(), destination: destination.trim(), pickup, delivery,
+      weight: `${weightValue} ${req.user.region.weightUnit}`, equipment, reference: reference?.trim(), customerRate,
+      actorId: req.user.id, tenantId: req.user.tenantId, legs
+    });
+    audit(req, 'shipment.created', `${created.id}: ${legs.map((leg) => leg.mode).join(' > ')}`);
+    return await sendShipmentLegs(res, req.user.tenantId, created.shipmentId, 201);
+  } catch (error) {
+    return sendError(res, error, 'Shipment could not be created.', 'v2 create');
+  }
+});
+
+app.post('/api/v2/shipments/:id/legs', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+    const input = legInput(res, req.body || {});
+    if (!input) return null;
+    const leg = await addLeg(req.user.tenantId, shipmentId, input, req.user.id);
+    audit(req, 'leg.added', `SHP-${shipmentId} leg ${leg.sequence} ${input.mode}`);
+    return await sendShipmentLegs(res, req.user.tenantId, shipmentId, 201, { legId: leg.id });
+  } catch (error) {
+    return sendError(res, error, 'The leg could not be added.', 'v2 add leg');
+  }
+});
+
+app.get('/api/v2/legs/:id', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const legId = positiveId(req.params.id);
+    const leg = legId ? await getLeg(req.user.tenantId, legId) : null;
+    if (!leg) return res.status(404).json({ success: false, message: 'Leg not found.' });
+    const data = await getShipmentLegs(req.user.tenantId, leg.shipmentId);
+    return res.json({ success: true, leg, events: data.events.filter((event) => event.legId === leg.id), documents: await listLegDocuments(req.user.tenantId, leg.id) });
+  } catch (error) {
+    return sendError(res, error, 'Leg could not be loaded.', 'v2 leg');
+  }
+});
+
+app.patch('/api/v2/legs/:id', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
+  try {
+    const legId = positiveId(req.params.id);
+    const current = legId ? await getLeg(req.user.tenantId, legId) : null;
+    if (!current) return res.status(404).json({ success: false, message: 'Leg not found.' });
+    const input = legInput(res, req.body || {}, { partial: true, mode: current.mode });
+    if (!input) return null;
+    const result = await updateLeg(req.user.tenantId, legId, input, req.user.id);
+    if (result.changed.length) audit(req, 'leg.updated', `leg ${legId}: ${result.changed.join(', ')}`);
+    return await sendShipmentLegs(res, req.user.tenantId, current.shipmentId, 200, { changed: result.changed });
+  } catch (error) {
+    return sendError(res, error, 'The leg could not be updated.', 'v2 update leg');
+  }
+});
+
+app.post('/api/v2/legs/:id/status', authMiddleware, async (req, res) => {
+  try {
+    const legId = positiveId(req.params.id);
+    const status = String(req.body?.status || '');
+    if (!legsLib.LEG_STATUSES.includes(status)) return res.status(400).json({ success: false, message: `Status must be one of ${legsLib.LEG_STATUSES.join(', ')}.` });
+    // Booking is a dispatcher's decision; moving a booked leg along is an operator's job.
+    if (!hasPermission(req.user, status === 'Booked' ? 'shipments:dispatch' : 'shipments:status')) {
+      return res.status(403).json({ success: false, message: `Forbidden: missing ${status === 'Booked' ? 'shipments:dispatch' : 'shipments:status'} permission.` });
+    }
+    const current = legId ? await getLeg(req.user.tenantId, legId) : null;
+    if (!current) return res.status(404).json({ success: false, message: 'Leg not found.' });
+    const text = (value, label, max) => {
+      if (value === undefined || value === null || value === '') return null;
+      if (typeof value !== 'string' || value.trim().length > max) throw httpError(400, `${label} must be text of at most ${max} characters.`);
+      return value.trim();
+    };
+    const handover = req.body?.handover && typeof req.body.handover === 'object'
+      ? { location: text(req.body.handover.location, 'Handover location', 200), receivedBy: text(req.body.handover.receivedBy, 'Received by', 120), note: text(req.body.handover.note, 'Handover note', 500) }
+      : null;
+    const result = await setLegStatus(req.user.tenantId, legId, status, { note: text(req.body?.note, 'Note', 500), handover }, req.user.id);
+    audit(req, 'leg.status', `leg ${legId}: ${current.status} > ${status}`);
+    return await sendShipmentLegs(res, req.user.tenantId, result.shipmentId, 200, { handoverTo: result.handoverTo });
+  } catch (error) {
+    return sendError(res, error, 'The leg status could not be changed.', 'v2 leg status');
+  }
+});
+
+app.post('/api/v2/legs/:id/tracking', authMiddleware, requirePermission('shipments:track'), async (req, res) => {
+  try {
+    const legId = positiveId(req.params.id);
+    const location = typeof req.body?.location === 'string' ? req.body.location.trim() : '';
+    if (!legId || !location || location.length > 200) return res.status(400).json({ success: false, message: 'A leg and a location of at most 200 characters are required.' });
+    let eta = null;
+    try {
+      eta = legsLib.readWhen(req.body?.eta, 'eta');
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : null;
+    const update = await addLegTracking(req.user.tenantId, legId, { location, eta, note }, req.user.id);
+    return res.status(201).json({ success: true, update });
+  } catch (error) {
+    return sendError(res, error, 'The position could not be saved.', 'v2 leg tracking');
+  }
+});
+
+// File a document under a leg of its own load (legId null files it back under the load).
+app.put('/api/v2/documents/:id/leg', authMiddleware, requirePermission('shipments:document'), async (req, res) => {
+  try {
+    const documentId = positiveId(req.params.id);
+    const raw = req.body?.legId;
+    const legId = raw === null ? null : positiveId(raw);
+    if (!documentId || (raw !== null && !legId)) return res.status(400).json({ success: false, message: 'A document and a leg number (or null) are required.' });
+    return res.json({ success: true, document: await setDocumentLeg(req.user.tenantId, documentId, legId) });
+  } catch (error) {
+    return sendError(res, error, 'The document could not be filed.', 'v2 document leg');
+  }
+});
+
 // Background work saved for this company: counts, the latest jobs, and the ones that gave up ("dead").
 app.get('/api/jobs', authMiddleware, requirePermission('settings:write'), async (req, res) => {
   try {
