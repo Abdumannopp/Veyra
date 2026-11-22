@@ -9,9 +9,9 @@
   const MODES = { ROAD: 'Road', OCEAN: 'Ocean', AIR: 'Air', RAIL: 'Rail', WAREHOUSE: 'Warehouse', LAST_MILE: 'Last mile' };
   const DETAIL_FIELDS = {
     ROAD: [['truckPlate', 'Truck plate'], ['driverName', 'Driver'], ['driverPhone', 'Driver phone']],
-    OCEAN: [['vessel', 'Vessel'], ['voyage', 'Voyage'], ['containerNo', 'Container no.'], ['billOfLading', 'Bill of lading'], ['portOfLoading', 'Port of loading'], ['portOfDischarge', 'Port of discharge']],
-    AIR: [['flightNumber', 'Flight'], ['airWaybill', 'Air waybill'], ['airportFrom', 'Airport from'], ['airportTo', 'Airport to']],
-    RAIL: [['trainNo', 'Train no.'], ['wagonNo', 'Wagon no.'], ['terminalFrom', 'Terminal from'], ['terminalTo', 'Terminal to']],
+    OCEAN: [['shippingLine', 'Shipping line'], ['bookingNo', 'Booking no.'], ['vessel', 'Vessel'], ['voyage', 'Voyage'], ['containerNo', 'Container no.', 'MSCU1234566'], ['containerType', 'Container type', '40HC'], ['sealNo', 'Seal no.'], ['billOfLading', 'Bill of lading'], ['portOfLoading', 'Port of loading'], ['portOfDischarge', 'Port of discharge']],
+    AIR: [['airline', 'Airline'], ['flightNumber', 'Flight', 'TK 1234'], ['airWaybill', 'Air waybill', '235-12345675'], ['airportFrom', 'Airport from', 'TAS'], ['airportTo', 'Airport to', 'IST'], ['pieces', 'Pieces'], ['grossWeightKg', 'Gross weight (kg)'], ['volumeM3', 'Volume (m³)']],
+    RAIL: [['trainNo', 'Train no.'], ['wagonNo', 'Wagon no.', '8 or 12 digits'], ['consignmentNoteType', 'Consignment note', 'CIM, SMGS or CIM/SMGS'], ['consignmentNoteNo', 'Note no.'], ['terminalFrom', 'Terminal from'], ['terminalTo', 'Terminal to'], ['borderStation', 'Border station']],
     WAREHOUSE: [['warehouseName', 'Warehouse'], ['storageDays', 'Storage days']],
     LAST_MILE: [['courier', 'Courier'], ['parcelNo', 'Parcel no.']]
   };
@@ -145,7 +145,8 @@
       leg.paidAt ? `Paid to the carrier ${formatTimestamp(leg.paidAt)}` : null,
       leg.scheduledPickup ? `Pickup ${when(leg.scheduledPickup)}` : null,
       leg.scheduledDelivery ? `Delivery ${when(leg.scheduledDelivery)}` : null,
-      ...(DETAIL_FIELDS[leg.mode] || []).filter(([key]) => leg.details[key]).map(([key, label]) => `${label}: ${leg.details[key]}`)
+      ...(DETAIL_FIELDS[leg.mode] || []).filter(([key]) => leg.details[key]).map(([key, label]) => `${label}: ${leg.details[key]}`),
+      leg.details.chargeableWeightKg ? `Chargeable weight: ${leg.details.chargeableWeightKg} kg` : null
     ].filter(Boolean);
     if (meta.length) lines.push(text('div', 'leg-meta', meta.join(' · ')));
     if (leg.lastLocation) lines.push(text('div', 'leg-meta', `Now: ${leg.lastLocation}${leg.eta ? ` · ETA ${when(leg.eta)}` : ''}${leg.lastTrackedAt ? ` (${formatTimestamp(leg.lastTrackedAt)})` : ''}`));
@@ -295,7 +296,7 @@
     carrier.value = leg?.carrierId ? String(leg.carrierId) : '';
     const detailBox = text('div', 'leg-details span-2');
     const draw = () => {
-      detailBox.replaceChildren(...(DETAIL_FIELDS[mode.value] || []).map(([key, label]) => field(label, input(`detail:${key}`, { maxLength: 120, value: (leg && leg.mode === mode.value && leg.details[key]) || '' }))));
+      detailBox.replaceChildren(...(DETAIL_FIELDS[mode.value] || []).map(([key, label, hint]) => field(label, input(`detail:${key}`, { maxLength: 120, placeholder: hint || '', value: (leg && leg.mode === mode.value && leg.details[key]) || '' }))));
     };
     mode.addEventListener('change', draw);
     draw();
