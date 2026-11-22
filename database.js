@@ -840,6 +840,15 @@ const MIGRATIONS = [
     down: () => {
       throw new Error('0006_shipment_legs cannot be reversed. Recovery: restore the database backup taken before the upgrade.');
     }
+  },
+  {
+    id: '0007_leg_payments',
+    name: 'Each leg of a multi-leg load can be marked paid to its carrier',
+    transactional: false,
+    up: () => ensureColumns('shipment_legs', [['paid_at', 'TEXT']]),
+    down: () => {
+      throw new Error('0007_leg_payments cannot be reversed. Recovery: restore the database backup taken before the upgrade (the new column is harmless if left).');
+    }
   }
 ];
 
@@ -1566,6 +1575,7 @@ async function setShipmentPayment(tenantId, id, { invoiceNumber, invoiced, custo
     if (!row) throw httpError(404, 'Shipment not found.');
     if (row.status === 'Cancelled') throw httpError(409, 'A cancelled load has no payments.');
     if (customerPaid === true && (row.customer_rate === null || row.customer_rate === undefined)) throw httpError(409, 'Enter the customer price on the load first.');
+    if (row.leg_mode === 'multi' && carrierPaid !== undefined) throw httpError(409, 'This load has several legs, each with its own carrier. Mark each leg paid instead.');
     if (carrierPaid === true && !row.carrier_id) throw httpError(409, 'This load has no carrier to pay.');
     const sets = [];
     const params = [];
@@ -1594,6 +1604,7 @@ async function setShipmentPayment(tenantId, id, { invoiceNumber, invoiced, custo
 // Money that is still open: delivered loads the customer has not paid, and carriers not yet paid.
 // Totals add up only amounts in the company's current currency; loads priced in another currency
 // (kept from before the company changed currency) are listed under otherCurrencies, never mixed in.
+// A load with several legs owes each carrier for its own delivered legs (openLegs), not one carrier for the load.
 async function getFinanceSummary(tenantId) {
   assertTenant(tenantId);
   const currency = await currencyOf(tenantId);
@@ -1603,34 +1614,65 @@ async function getFinanceSummary(tenantId) {
       ROUND(SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN customer_rate ELSE 0 END), 4) AS receivable,
       SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN 1 ELSE 0 END) AS receivableLoads,
       SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_invoiced_at IS NULL AND customer_rate IS NOT NULL THEN 1 ELSE 0 END) AS notInvoiced,
-      ROUND(SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN rate ELSE 0 END), 4) AS payable,
-      SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN 1 ELSE 0 END) AS payableLoads
+      ROUND(SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL AND leg_mode <> 'multi' THEN rate ELSE 0 END), 4) AS payable,
+      SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL AND leg_mode <> 'multi' THEN 1 ELSE 0 END) AS payableLoads
     FROM shipments WHERE tenant_id = ? AND ${inCurrency} = ?`, [tenantId, currency]);
   const others = await all(`
     SELECT ${inCurrency} AS currency,
       ROUND(SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN customer_rate ELSE 0 END), 4) AS receivable,
-      ROUND(SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN rate ELSE 0 END), 4) AS payable
+      ROUND(SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL AND leg_mode <> 'multi' THEN rate ELSE 0 END), 4) AS payable
     FROM shipments WHERE tenant_id = ? AND ${inCurrency} <> ? AND status = 'Delivered'
     GROUP BY ${inCurrency} ORDER BY currency`, [tenantId, currency]);
+
+  // Delivered legs not yet paid to their carriers, by currency (a leg without its own currency uses its load's).
+  const legCurrency = `COALESCE(l.currency, s.currency, '${DEFAULT_CURRENCY}')`;
+  const legTotals = await all(`
+    SELECT ${legCurrency} AS currency, ROUND(SUM(l.price), 4) AS payable, COUNT(DISTINCT l.shipment_id) AS loads
+    FROM shipment_legs l JOIN shipments s ON s.id = l.shipment_id
+    WHERE l.tenant_id = ? AND l.status = 'Delivered' AND l.paid_at IS NULL AND l.price IS NOT NULL AND s.status <> 'Cancelled'
+    GROUP BY ${legCurrency}`, [tenantId]);
+  const legDelivered = `(SELECT MAX(created_at) FROM leg_events WHERE leg_events.leg_id = l.id AND leg_events.to_status = 'Delivered')`;
+  const openLegs = await all(`
+    SELECT l.id AS legId, l.shipment_id AS shipmentId, l.sequence, l.mode, carriers.name AS carrierName, l.price, ${legCurrency} AS currency,
+      s.customer, ${legDelivered} AS deliveredAt, CAST(julianday('now') - julianday(${legDelivered}) AS INTEGER) AS daysSinceDelivery
+    FROM shipment_legs l JOIN shipments s ON s.id = l.shipment_id LEFT JOIN carriers ON carriers.id = l.carrier_id
+    WHERE l.tenant_id = ? AND l.status = 'Delivered' AND l.paid_at IS NULL AND l.price IS NOT NULL AND s.status <> 'Cancelled'
+    ORDER BY ${legDelivered} ASC LIMIT 100`, [tenantId]);
+
+  const otherCurrencies = new Map(others.map((row) => [row.currency, { currency: row.currency, receivable: Number(row.receivable) || 0, payable: Number(row.payable) || 0 }]));
+  let payable = Number(totals?.payable) || 0;
+  let payableLoads = Number(totals?.payableLoads) || 0;
+  for (const row of legTotals) {
+    if (row.currency === currency) {
+      payable = addMoney(currency, payable, Number(row.payable) || 0);
+      payableLoads += Number(row.loads) || 0;
+    } else {
+      const entry = otherCurrencies.get(row.currency) || { currency: row.currency, receivable: 0, payable: 0 };
+      entry.payable = addMoney(row.currency, entry.payable, Number(row.payable) || 0);
+      otherCurrencies.set(row.currency, entry);
+    }
+  }
+
   const delivered = `(SELECT MAX(created_at) FROM shipment_events WHERE shipment_events.shipment_id = shipments.id AND shipment_events.to_status = 'Delivered')`;
   const open = await all(`
-    SELECT shipments.id, customer, customer_rate AS customerRate, rate, ${inCurrency} AS currency, customer_invoice_number AS invoiceNumber,
+    SELECT shipments.id, customer, customer_rate AS customerRate, CASE WHEN leg_mode = 'multi' THEN NULL ELSE rate END AS rate, ${inCurrency} AS currency, customer_invoice_number AS invoiceNumber,
       customer_invoiced_at AS invoicedAt, customer_paid_at AS customerPaidAt, carrier_paid_at AS carrierPaidAt,
       carriers.name AS carrierName, ${delivered} AS deliveredAt,
       CAST(julianday('now') - julianday(${delivered}) AS INTEGER) AS daysSinceDelivery
     FROM shipments LEFT JOIN carriers ON carriers.id = shipments.carrier_id
     WHERE shipments.tenant_id = ? AND shipments.status = 'Delivered'
-      AND ((customer_paid_at IS NULL AND customer_rate IS NOT NULL) OR (carrier_paid_at IS NULL AND rate IS NOT NULL))
+      AND ((customer_paid_at IS NULL AND customer_rate IS NOT NULL) OR (carrier_paid_at IS NULL AND rate IS NOT NULL AND leg_mode <> 'multi'))
     ORDER BY ${delivered} ASC LIMIT 100`, [tenantId]);
   return {
     currency,
     receivable: Number(totals?.receivable) || 0,
     receivableLoads: Number(totals?.receivableLoads) || 0,
     notInvoiced: Number(totals?.notInvoiced) || 0,
-    payable: Number(totals?.payable) || 0,
-    payableLoads: Number(totals?.payableLoads) || 0,
-    otherCurrencies: others.map((row) => ({ currency: row.currency, receivable: Number(row.receivable) || 0, payable: Number(row.payable) || 0 })),
-    open: open.map((row) => ({ ...row, id: `SHP-${row.id}` }))
+    payable,
+    payableLoads,
+    otherCurrencies: [...otherCurrencies.values()].sort((a, b) => (a.currency < b.currency ? -1 : 1)),
+    open: open.map((row) => ({ ...row, id: `SHP-${row.id}` })),
+    openLegs: openLegs.map((row) => ({ ...row, shipmentId: `SHP-${row.shipmentId}`, price: Number(row.price) }))
   };
 }
 
@@ -2425,7 +2467,7 @@ async function countAgentTasksToday(tenantId) {
 async function listStaleLoadsAllTenants(staleHours) {
   return all(
     `SELECT id, tenant_id AS tenantId, last_tracked_at AS lastTrackedAt FROM shipments
-     WHERE status IN ('Dispatched', 'In Transit') AND ${LAST_SIGN_OF_LIFE} < datetime('now', ?)`,
+     WHERE status IN ('Dispatched', 'In Transit') AND leg_mode <> 'multi' AND ${LAST_SIGN_OF_LIFE} < datetime('now', ?)`,
     [`-${Number(staleHours)} hours`]
   );
 }
@@ -2731,7 +2773,7 @@ async function listSentinelLoads(tenantId) {
        (SELECT created_at FROM tracking_updates WHERE tracking_updates.shipment_id = shipments.id AND source = 'gps' AND lat IS NOT NULL ORDER BY id DESC LIMIT 1) AS lastGpsAt,
        (SELECT COUNT(*) FROM messages WHERE messages.shipment_id = shipments.id
           AND messages.delivery_status IN ('failed', 'undelivered') AND messages.created_at >= datetime('now', '-2 days')) AS failedMessages
-     FROM shipments WHERE status NOT IN ('Delivered', 'Cancelled') ${scoped ? 'AND tenant_id = ?' : ''}
+     FROM shipments WHERE status NOT IN ('Delivered', 'Cancelled') AND leg_mode <> 'multi' ${scoped ? 'AND tenant_id = ?' : ''}
      ORDER BY id DESC LIMIT 5000`,
     scoped ? [tenantId] : []
   );
@@ -3056,7 +3098,7 @@ async function exportTenantData(tenantId) {
 // legs are stored; from then on its status, price and tracking come from the legs.
 const LEG_SELECT = `SELECT l.id, l.shipment_id AS shipmentId, l.sequence, l.mode, l.status, l.carrier_id AS carrierId, carriers.name AS carrierName,
     l.origin, l.destination, l.scheduled_pickup AS scheduledPickup, l.scheduled_delivery AS scheduledDelivery, l.price, l.currency, l.reference,
-    l.details, l.last_location AS lastLocation, l.eta, l.last_tracked_at AS lastTrackedAt, l.created_at AS createdAt, l.updated_at AS updatedAt
+    l.details, l.last_location AS lastLocation, l.eta, l.last_tracked_at AS lastTrackedAt, l.paid_at AS paidAt, l.created_at AS createdAt, l.updated_at AS updatedAt
   FROM shipment_legs l LEFT JOIN carriers ON carriers.id = l.carrier_id`;
 
 function mapLeg(row) {
@@ -3072,7 +3114,7 @@ function mapLeg(row) {
     scheduledPickup: row.scheduledPickup || null, scheduledDelivery: row.scheduledDelivery || null,
     price: row.price === null || row.price === undefined ? null : Number(row.price), currency: row.currency || null,
     reference: row.reference || null, details, lastLocation: row.lastLocation || null, eta: row.eta || null,
-    lastTrackedAt: row.lastTrackedAt || null, createdAt: row.createdAt, updatedAt: row.updatedAt, synthetic: false
+    lastTrackedAt: row.lastTrackedAt || null, paidAt: row.paidAt || null, createdAt: row.createdAt, updatedAt: row.updatedAt, synthetic: false
   };
 }
 
@@ -3087,7 +3129,7 @@ function syntheticLeg(row) {
     carrierId: row.carrier_id ?? null, carrierName: row.carrierName || null, origin: row.origin, destination: row.destination,
     scheduledPickup: row.pickup || null, scheduledDelivery: row.delivery || null,
     price: row.rate === null || row.rate === undefined ? null : Number(row.rate), currency: row.currency || null, reference: row.reference || null,
-    details, lastLocation: row.last_location || null, eta: row.eta || null, lastTrackedAt: row.last_tracked_at || null,
+    details, lastLocation: row.last_location || null, eta: row.eta || null, lastTrackedAt: row.last_tracked_at || null, paidAt: row.carrier_paid_at || null,
     createdAt: row.created_at, updatedAt: row.created_at, synthetic: true
   };
 }
@@ -3149,7 +3191,7 @@ async function rollupShipment(tx, tenantId, shipmentId, actorId, note) {
   const rate = live.length && priced.length === live.length ? addMoney(shipment.currency, ...priced.map((leg) => Number(leg.price))) : null;
   await tx.run('UPDATE shipments SET status = ?, rate = ? WHERE id = ?', [status, rate, shipmentId]);
   if (status !== shipment.status) await recordShipmentEvent(shipmentId, shipment.status, status, note, actorId, tx.run);
-  return status;
+  return { status, before: shipment.status };
 }
 
 // A new load made of several legs.
@@ -3265,8 +3307,8 @@ async function setLegStatus(tenantId, legId, status, { note = null, handover = n
         );
       }
     }
-    const shipmentStatus = await rollupShipment(tx, tenantId, leg.shipment_id, actorId, `Leg ${leg.sequence} (${leg.mode}): ${status}`);
-    return { id: legId, shipmentId: leg.shipment_id, status, shipmentStatus, handoverTo };
+    const rolled = await rollupShipment(tx, tenantId, leg.shipment_id, actorId, `Leg ${leg.sequence} (${leg.mode}): ${status}`);
+    return { id: legId, shipmentId: leg.shipment_id, status, shipmentStatus: rolled.status, shipmentStatusBefore: rolled.before, handoverTo };
   });
 }
 
@@ -3286,6 +3328,62 @@ async function addLegTracking(tenantId, legId, { location, eta, note }, actorId)
     await tx.run('UPDATE shipments SET last_location = ?, eta = COALESCE(?, eta), last_tracked_at = ? WHERE id = ?', [location, eta || null, created.created_at, leg.shipment_id]);
     return { id: result.id, legId, shipmentId: leg.shipment_id, location, eta: eta || null, note: note || null, source: 'manual', createdAt: created.created_at };
   });
+}
+
+// A delivered leg is paid to its carrier (or the payment is undone). The load's own "carrier paid" stamp follows:
+// set when every leg that has a price is paid.
+async function setLegPayment(tenantId, legId, paid, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const leg = await tx.get('SELECT id, shipment_id, sequence, mode, status, price, paid_at FROM shipment_legs WHERE id = ? AND tenant_id = ?', [legId, tenantId]);
+    if (!leg) throw httpError(404, 'Leg not found.');
+    if (leg.status !== 'Delivered') throw httpError(409, 'A leg can be marked paid once it is delivered.');
+    if (leg.price === null || leg.price === undefined) throw httpError(409, 'Enter the price of this leg first.');
+    if (Boolean(leg.paid_at) === paid) return { id: legId, shipmentId: leg.shipment_id, paid, changed: false };
+    await tx.run(`UPDATE shipment_legs SET paid_at = ${paid ? "datetime('now')" : 'NULL'}, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?`, [legId, tenantId]);
+    await recordLegEvent(tx, tenantId, legId, leg.status, leg.status, paid ? 'Paid to the carrier' : 'Payment undone', actorId);
+    const open = await tx.get(
+      "SELECT COUNT(*) AS total FROM shipment_legs WHERE shipment_id = ? AND tenant_id = ? AND status <> 'Cancelled' AND price IS NOT NULL AND paid_at IS NULL",
+      [leg.shipment_id, tenantId]
+    );
+    await tx.run(`UPDATE shipments SET carrier_paid_at = ${Number(open.total) === 0 ? "COALESCE(carrier_paid_at, datetime('now'))" : 'NULL'} WHERE id = ? AND tenant_id = ?`, [leg.shipment_id, tenantId]);
+    return { id: legId, shipmentId: leg.shipment_id, paid, changed: true };
+  });
+}
+
+// What NEXUS needs to react to a leg: the leg, its load and the carrier's phone.
+async function getLegContext(tenantId, legId) {
+  assertTenant(tenantId);
+  const leg = await getLeg(tenantId, legId);
+  if (!leg) return null;
+  const shipment = await getShipment(tenantId, leg.shipmentId);
+  if (!shipment) return null;
+  const carrier = leg.carrierId ? await get('SELECT phone FROM carriers WHERE id = ? AND tenant_id = ?', [leg.carrierId, tenantId]) : null;
+  return { leg, shipment, carrierPhone: carrier?.phone || null };
+}
+
+async function countLegExceptions(tenantId, legId) {
+  const row = await get("SELECT COUNT(*) AS total FROM leg_events WHERE tenant_id = ? AND leg_id = ? AND to_status = 'Exception'", [assertTenant(tenantId), legId]);
+  return Number(row?.total) || 0;
+}
+
+// The next leg of a load after this one (cancelled ones skipped), if any.
+async function getNextLeg(tenantId, legId) {
+  assertTenant(tenantId);
+  const leg = await get('SELECT shipment_id, sequence FROM shipment_legs WHERE id = ? AND tenant_id = ?', [legId, tenantId]);
+  if (!leg) return null;
+  const next = await get(`${LEG_SELECT} WHERE l.shipment_id = ? AND l.tenant_id = ? AND l.sequence > ? AND l.status <> 'Cancelled' ORDER BY l.sequence LIMIT 1`, [leg.shipment_id, tenantId, leg.sequence]);
+  return next ? mapLeg(next) : null;
+}
+
+// System job (NEXUS sweeper): legs on the way with no position for staleHours.
+async function listStaleLegsAllTenants(staleHours) {
+  return all(
+    `SELECT l.id, l.tenant_id AS tenantId, l.shipment_id AS shipmentId, l.last_tracked_at AS lastTrackedAt
+     FROM shipment_legs l JOIN shipments s ON s.id = l.shipment_id
+     WHERE l.status = 'In Transit' AND s.status NOT IN ('Delivered', 'Cancelled') AND COALESCE(l.last_tracked_at, l.updated_at) < datetime('now', ?)`,
+    [`-${Number(staleHours)} hours`]
+  );
 }
 
 // Files a document under one leg of its own load (or back under the load, with legId null).
@@ -3415,6 +3513,11 @@ module.exports = {
   isPostgres,
   getShipmentLegs,
   getLeg,
+  setLegPayment,
+  getLegContext,
+  countLegExceptions,
+  getNextLeg,
+  listStaleLegsAllTenants,
   createShipmentWithLegs,
   addLeg,
   updateLeg,

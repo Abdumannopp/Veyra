@@ -166,6 +166,7 @@ async function handleBuiltIn(event, context) {
   switch (event) {
     case 'inbox.received': return onInboxReceived(context);
     case 'shipment.status': return onShipmentStatus(context);
+    case 'leg.status': return onLegStatus(context);
     case 'shipment.dispatched': return onShipmentDispatched(context);
     case 'document.uploaded': return onDocumentUploaded(context);
     case 'inbox.attached': return onInboxAttached(context);
@@ -275,7 +276,8 @@ async function onShipmentStatus({ tenantId, shipmentId, status }) {
     });
   }
 
-  if (status === 'Exception') {
+  // A load with several legs raises its exceptions per leg (onLegStatus), which says which leg and carrier.
+  if (status === 'Exception' && shipment.leg_mode !== 'multi') {
     const count = await db.countShipmentExceptions(tenantId, shipmentId);
     await db.createTask(tenantId, {
       kind: 'attention',
@@ -288,6 +290,56 @@ async function onShipmentStatus({ tenantId, shipmentId, status }) {
 
   if (status === 'Delivered' && (await automationOn(tenantId, 'deliveredMessage'))) {
     await draftMessageTask(tenantId, shipment, 'customer', 'delivered', `msg:${shipmentId}:customer:delivered`);
+  }
+}
+
+/* ---------- a leg of a multi-leg load changed status ---------- */
+// The load itself is shown to the leg's message templates, with the leg's own route, carrier, price and details.
+const MODE_NAMES = { ROAD: 'road', OCEAN: 'ocean', AIR: 'air', RAIL: 'rail', WAREHOUSE: 'warehouse', LAST_MILE: 'last mile' };
+const legLabel = (shipmentId, leg) => `SHP-${shipmentId} leg ${leg.sequence} (${MODE_NAMES[leg.mode] || leg.mode})`;
+function legView({ leg, shipment, carrierPhone }) {
+  return {
+    ...shipment, origin: leg.origin, destination: leg.destination, pickup: leg.scheduledPickup || shipment.pickup, delivery: leg.scheduledDelivery || shipment.delivery,
+    carrierName: leg.carrierName, carrierPhone, rate: leg.price, truck_plate: leg.details.truckPlate || null, driver_name: leg.details.driverName || null,
+    driver_phone: leg.details.driverPhone || null, last_location: leg.lastLocation, eta: leg.eta, status: leg.status
+  };
+}
+
+async function onLegStatus({ tenantId, shipmentId, legId, status, handoverTo }) {
+  const context = await db.getLegContext(tenantId, legId);
+  if (!context) return;
+  const { leg, shipment } = context;
+  const label = legLabel(shipmentId, leg);
+  if (status !== 'Exception') await db.resolveTasksByKey(tenantId, `legex:${legId}:`);
+  if (['Booked', 'In Transit', 'Cancelled'].includes(status)) await db.resolveTasksByKey(tenantId, `handover:${legId}:`);
+  if (['Delivered', 'Cancelled'].includes(status)) await db.resolveTasksByKey(tenantId, `quietleg:${legId}:`);
+
+  if (status === 'Exception') {
+    const count = await db.countLegExceptions(tenantId, legId);
+    await db.createTask(tenantId, {
+      kind: 'attention',
+      title: `${label} is in Exception · ${shipment.customer}`,
+      shipmentId,
+      dedupeKey: `legex:${legId}:${count}`,
+      payload: { text: 'Find out what happened on this leg, tell the customer if the delivery will be late, then resume or cancel the leg.', carrierPhone: context.carrierPhone, driverPhone: leg.details.driverPhone || null }
+    });
+  }
+
+  if (status === 'Booked' && (await automationOn(tenantId, 'bookingMessages'))) {
+    await draftMessageTask(tenantId, legView(context), 'carrier', 'booking_confirmation', `msg:${shipmentId}:leg${legId}:carrier:booking`, '', { label, currency: leg.currency || undefined });
+  }
+
+  if (status === 'Delivered' && handoverTo) {
+    const next = await db.getNextLeg(tenantId, legId);
+    if (next) {
+      await db.createTask(tenantId, {
+        kind: 'attention',
+        title: `${label} delivered: leg ${next.sequence} (${MODE_NAMES[next.mode] || next.mode}) is next · ${shipment.customer}`,
+        shipmentId,
+        dedupeKey: `handover:${next.id}:next`,
+        payload: { text: `Handed over at ${next.origin}. ${next.status === 'Planned' ? 'Book the next leg' : 'Start the next leg'} when it is ready.`, carrierPhone: context.carrierPhone }
+      });
+    }
   }
 }
 
@@ -317,16 +369,17 @@ async function onShipmentDispatched({ tenantId, shipmentId }) {
 }
 
 // A drafted message waits for approval. It is only created when the load has a number to send it to.
-async function draftMessageTask(tenantId, shipment, recipient, purpose, dedupeKey, extraTitle = '') {
+// options.label: what the message is about when it is one leg of a load; options.currency: the currency of its price.
+async function draftMessageTask(tenantId, shipment, recipient, purpose, dedupeKey, extraTitle = '', options = {}) {
   const tenant = await db.getTenant(tenantId);
   const draft = relayAgent.draftMessage({
-    shipment, recipient, purpose, company: tenant?.name || '', formatMoney: moneyFor((await regionFor(tenantId)).currency)
+    shipment, recipient, purpose, company: tenant?.name || '', formatMoney: moneyFor(options.currency || (await regionFor(tenantId)).currency), label: options.label || null
   });
   if (!draft?.to) return false;
   const what = { booking_confirmation: 'booking', pickup_details: 'pickup details', location_request: 'ask for location', status_update: 'status update', delivered: 'delivered' }[draft.purpose] || draft.purpose;
   const result = await db.createTask(tenantId, {
     kind: 'message',
-    title: `Message the ${recipient} about SHP-${shipment.id}: ${what}${extraTitle}`,
+    title: `Message the ${recipient} about ${options.label || `SHP-${shipment.id}`}: ${what}${extraTitle}`,
     shipmentId: shipment.id,
     dedupeKey,
     payload: { recipient, purpose: draft.purpose, body: draft.body, to: draft.to }
@@ -383,6 +436,27 @@ async function sweep() {
 async function sweepAllCompanies() {
   const stale = await db.listStaleLoadsAllTenants(settings.staleHours);
   let created = 0;
+  // Legs of multi-leg loads that are on the way with no position for a while.
+  for (const row of await db.listStaleLegsAllTenants(settings.staleHours)) {
+    if (!(await automationOn(row.tenantId, 'quietTrucks'))) continue;
+    const context = await db.getLegContext(row.tenantId, row.id);
+    if (!context) continue;
+    const label = legLabel(row.shipmentId, context.leg);
+    const key = `quietleg:${row.id}:${row.lastTrackedAt || 'none'}`;
+    const view = legView(context);
+    if (context.leg.mode === 'ROAD' && view.driver_phone && await draftMessageTask(row.tenantId, view, 'driver', 'location_request', key, ` (no update for ${settings.staleHours}h+)`, { label })) {
+      created += 1;
+      continue;
+    }
+    const result = await db.createTask(row.tenantId, {
+      kind: 'attention',
+      title: `${label}: no position update for ${settings.staleHours}h+ — ask the carrier`,
+      shipmentId: row.shipmentId,
+      dedupeKey: key,
+      payload: { text: 'Ask the carrier where this leg is, then log the position on the leg.', carrierPhone: context.carrierPhone }
+    });
+    if (result.created) created += 1;
+  }
   for (const row of stale) {
     if (!(await automationOn(row.tenantId, 'quietTrucks'))) continue;
     const shipment = await db.getShipment(row.tenantId, row.id);

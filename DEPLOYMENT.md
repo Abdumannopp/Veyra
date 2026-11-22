@@ -202,7 +202,8 @@ One customer order can move in several legs (road, ocean, air, rail, warehouse, 
 - Migration `0006_shipment_legs` adds the leg, leg history and handover tables (protected by row level security on PostgreSQL) and cannot be reversed; take a backup before upgrading.
 - Existing loads and `/api/*` are unchanged: a classic load is shown as one ROAD leg and nothing is rewritten.
 - A multi-leg load rejects the classic status, dispatch and location actions (`409`); use its legs.
-- Prices and tracking are entered by people. There is no carrier, port or airline connection yet, and NEXUS does not react to multi-leg loads yet.
+- Prices and tracking are entered by people. There is no carrier, port or airline connection yet.
+- NEXUS and Finance work per leg (booking message, exception, next-leg reminder, quiet leg; carriers paid leg by leg). Migration `0007_leg_payments` adds the leg payment column and cannot be reversed; take a backup before upgrading.
 - Price fields now keep up to 4 decimals on input and are rounded to the currency's minor unit when saved (before, input was cut to 2 decimals first, which was wrong for currencies like KWD).
 
 ## Time zones and number formats

@@ -183,6 +183,9 @@ Open the load and look at **Route legs**:
 - An ordinary single-truck load is one road leg. Before its truck is booked you can press **Split into legs** to add more.
 - On a multi-leg load, use the legs for status and location; the usual "Move to" and "Dispatch" buttons are hidden.
 
+- **Mark paid** on a delivered leg (or in **Billing → Carriers owed per leg**) records that its carrier was paid. Each leg's carrier is owed for its own leg.
+- NEXUS helps per leg: it drafts the booking message to a leg's carrier, raises a task when a leg has a problem, reminds you which leg is next after a handover, and asks for a position when a leg on the way has been quiet. You still press Send yourself.
+
 You enter all prices, numbers and positions yourself: Veyra is not connected to shipping lines, airlines or rail operators.
 
 ## Not available yet
