@@ -203,6 +203,7 @@ One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migra
 - The truck's price is shared among the loads by weight (to the minor unit); each delivered load owes the carrier its share in Finance.
 - A GPS position that matches a truck's plate now reaches every active load on that truck (before, only the newest load).
 - Screens: **Trips** in the side menu (plan a trip, put loads on it, book the truck, start, add a position, deliver load by load).
+- NEXUS: one manifest message to the carrier and driver when a trip is booked, one task per problem or silence on the trip, and pooling suggestions for loads that could share one truck. `LTL_TRUCK_KG` (default 20000) is the truck size used for suggestions. No migration.
 
 ## Shipment legs (API v2)
 

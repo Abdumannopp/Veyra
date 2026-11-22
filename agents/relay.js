@@ -54,4 +54,29 @@ function draftMessage({ shipment, recipient, purpose, company, formatMoney, labe
   return { purpose: chosen, body: TEMPLATES[key](data), to: recipientPhone(shipment, recipient) };
 }
 
-module.exports = { draftMessage, recipientPhone, PURPOSES };
+// One message about a whole trip (a truck with several loads). `shipments` are the trip's loads.
+// recipient 'carrier': the booking with the full manifest; 'driver': the stops; purposes 'booking_confirmation', 'pickup_details', 'location_request'.
+function draftTripMessage({ trip, shipments, recipient, purpose, company, formatMoney, formatWeight = (kg) => `${kg} kg` }) {
+  const loads = shipments.map((load) => `${load.shipmentId} ${load.customer} ${formatWeight(load.weightKg)} ${load.origin} → ${load.destination}`);
+  const totals = `${shipments.length} load${shipments.length === 1 ? '' : 's'}, ${formatWeight(shipments.reduce((sum, load) => sum + load.weightKg, 0))}`;
+  const route = `${trip.origin} → ${trip.destination}`;
+  const truck = [trip.truckPlate && `truck ${trip.truckPlate}`, trip.driverName && `driver ${trip.driverName}`].filter(Boolean).join(', ');
+  if (recipient === 'carrier') {
+    return {
+      purpose: 'booking_confirmation', to: trip.carrierPhone || null,
+      body: `${company}: trip ${trip.number} booked with ${trip.carrierName || 'you'}${truck ? ` (${truck})` : ''}. ${route}${trip.scheduledPickup ? `, pickup ${trip.scheduledPickup}` : ''}${trip.scheduledDelivery ? `, delivery ${trip.scheduledDelivery}` : ''}. ${totals}: ${loads.join('; ')}.${trip.cost !== null && trip.cost !== undefined ? ` Price ${formatMoney(trip.cost)}.` : ''}`
+    };
+  }
+  if (recipient === 'driver') {
+    const chosen = purpose === 'location_request' ? 'location_request' : 'pickup_details';
+    return {
+      purpose: chosen, to: trip.driverPhone || null,
+      body: chosen === 'location_request'
+        ? `Hello ${trip.driverName || 'driver'}, please reply with your current location and ETA for trip ${trip.number} (${route}, ${totals}). Thank you — ${company}`
+        : `Hello ${trip.driverName || 'driver'}, trip ${trip.number}: ${route}${trip.scheduledPickup ? `, pickup ${trip.scheduledPickup}` : ''}. ${totals}: ${loads.join('; ')}. — ${company}`
+    };
+  }
+  return null;
+}
+
+module.exports = { draftMessage, draftTripMessage, recipientPhone, PURPOSES };

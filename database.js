@@ -2543,7 +2543,7 @@ async function countAgentTasksToday(tenantId) {
 async function listStaleLoadsAllTenants(staleHours) {
   return all(
     `SELECT id, tenant_id AS tenantId, last_tracked_at AS lastTrackedAt FROM shipments
-     WHERE status IN ('Dispatched', 'In Transit') AND leg_mode <> 'multi' AND ${LAST_SIGN_OF_LIFE} < datetime('now', ?)`,
+     WHERE status IN ('Dispatched', 'In Transit') AND leg_mode <> 'multi' AND trip_id IS NULL AND ${LAST_SIGN_OF_LIFE} < datetime('now', ?)`,
     [`-${Number(staleHours)} hours`]
   );
 }
@@ -3818,6 +3818,33 @@ async function deliverTripShipment(tenantId, tripId, shipmentId, { note = null }
   });
 }
 
+// Loads still waiting for a truck that could be pooled on one (tenantId null = every company, for the NEXUS sweep).
+async function listPoolableLoads(tenantId = null) {
+  const scoped = tenantId !== null;
+  if (scoped) assertTenant(tenantId);
+  const rows = await all(
+    `SELECT id, tenant_id AS tenantId, customer, origin, destination, pickup, delivery, weight FROM shipments
+     WHERE status IN ('New', 'Sourcing', 'Pending Approval') AND carrier_id IS NULL AND trip_id IS NULL AND leg_mode <> 'multi' ${scoped ? 'AND tenant_id = ?' : ''}
+     ORDER BY id LIMIT 5000`,
+    scoped ? [tenantId] : []
+  );
+  return rows.map((row) => ({ id: row.id, tenantId: row.tenantId, customer: row.customer, origin: row.origin, destination: row.destination, pickup: row.pickup, delivery: row.delivery, weightKg: tripsLib.weightToKg(row.weight) }))
+    .filter((load) => load.weightKg !== null);
+}
+
+async function countTripExceptions(tenantId, tripId) {
+  const row = await get("SELECT COUNT(*) AS total FROM trip_events WHERE tenant_id = ? AND trip_id = ? AND to_status = 'Exception'", [assertTenant(tenantId), tripId]);
+  return Number(row?.total) || 0;
+}
+
+// System job (NEXUS sweeper): trips on the road with no position for staleHours.
+async function listStaleTripsAllTenants(staleHours) {
+  return all(
+    "SELECT id, tenant_id AS tenantId, last_tracked_at AS lastTrackedAt FROM trips WHERE status = 'In Transit' AND COALESCE(last_tracked_at, updated_at) < datetime('now', ?)",
+    [`-${Number(staleHours)} hours`]
+  );
+}
+
 // A position for the truck: it is the position of every load still on it.
 async function addTripTracking(tenantId, tripId, { location, eta, note }, actorId) {
   assertTenant(tenantId);
@@ -3943,6 +3970,9 @@ async function retryJob(tenantId, id) {
 
 module.exports = {
   isPostgres,
+  listPoolableLoads,
+  countTripExceptions,
+  listStaleTripsAllTenants,
   createTrip,
   getTrip,
   listTrips,
