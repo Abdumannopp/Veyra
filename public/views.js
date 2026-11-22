@@ -338,7 +338,8 @@
         const actions = el('div', { class: 'row-actions' }, [
           el('button', { class: 'table-detail-button', type: 'button', onclick: () => openShipmentDetails(shipment.id) }, 'View')
         ]);
-        const options = allowedShipmentStatuses(shipment.status);
+        const multi = shipment.legMode === 'multi';
+        const options = multi ? [] : allowedShipmentStatuses(shipment.status);
         if (canStatus && options.length) {
           const select = el('select', {
             class: 'status-select', 'aria-label': `Change status of ${shipment.id}`,
@@ -346,13 +347,14 @@
           }, [el('option', { value: '', text: 'Move to…' }), ...options.map((option) => el('option', { value: option, text: option }))]);
           actions.append(select);
         }
-        if (canDispatch && ['Sourcing', 'Pending Approval'].includes(shipment.status) && !shipment.carrierId) {
+        if (canDispatch && !multi && ['Sourcing', 'Pending Approval'].includes(shipment.status) && !shipment.carrierId) {
           actions.append(el('button', { class: 'dispatch-button', type: 'button', onclick: () => openDispatch(shipment) }, 'Dispatch'));
         }
         return el('tr', {}, [
           el('td', {}, [
             el('button', { class: 'link-btn id-link', type: 'button', onclick: () => openShipmentDetails(shipment.id) }, shipment.id),
-            shipment.reference ? el('small', { class: 'cell-sub', text: shipment.reference }) : null
+            shipment.reference ? el('small', { class: 'cell-sub', text: shipment.reference }) : null,
+            multi ? el('small', { class: 'cell-sub', text: 'Multi-leg' }) : null
           ]),
           el('td', { text: shipment.customer }),
           el('td', {}, [el('span', { text: shipment.origin }), el('small', { class: 'cell-sub', text: `→ ${shipment.destination}` })]),

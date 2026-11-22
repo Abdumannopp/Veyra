@@ -171,6 +171,20 @@ For the map to know city positions, `GEO_PROVIDER=osm` must be set in `.env`. Th
 
 Rules only prepare: sending a message and booking a truck still happen with a person's button. Only an administrator can change a rule.
 
+## Multi-leg orders (road, sea, air, rail, warehouse, last mile)
+
+One customer order can travel in several legs. On **Shipments**, press **+ Multi-leg order**: enter the customer and the whole route, then add the legs in order (for example Road → Ocean → Last mile) with a price and a booking number for each if you have them.
+
+Open the load and look at **Route legs**:
+- **Edit** a leg to add the carrier, reference (booking, bill of lading, air waybill, CMR), dates and the details of that mode (truck plate, vessel and container, flight, train and wagon, warehouse, courier).
+- **Book** a leg once it has a carrier or a reference. **Start** it when it leaves. **Add position** to note where it is. **Delivered** closes the leg and records the **handover** to the next one (where, who received it). **Report problem** marks an exception; **Resume** continues. **Cancel leg** drops one that is no longer needed.
+- A leg cannot start before the leg before it is delivered.
+- The load's own status and total price follow its legs. The total price is shown only when every leg that is still going has a price.
+- An ordinary single-truck load is one road leg. Before its truck is booked you can press **Split into legs** to add more.
+- On a multi-leg load, use the legs for status and location; the usual "Move to" and "Dispatch" buttons are hidden.
+
+You enter all prices, numbers and positions yourself: Veyra is not connected to shipping lines, airlines or rail operators.
+
 ## Not available yet
 
 - Live border queues (no free open source; entered by hand for now).

@@ -1,0 +1,20 @@
+/* Shipment legs: the "Route legs" section and the planner. */
+.legs-section { margin: 18px 0; }
+.leg-card { border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface-2); padding: 12px 14px; margin-bottom: 8px; }
+.leg-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
+.leg-route { font-weight: 600; color: var(--text-strong); }
+.leg-meta { color: var(--muted); font-size: 13px; margin-top: 3px; overflow-wrap: anywhere; }
+.leg-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.leg-card.status-delivered { opacity: .8; }
+.leg-card.status-cancelled { opacity: .55; }
+.leg-handover { margin: 0 0 8px 14px; padding-left: 12px; border-left: 2px dashed var(--line-2); color: var(--muted); font-size: 13px; }
+.leg-form { margin: 8px 0 12px; }
+.leg-form label > span:first-child { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.leg-details { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.planner-leg { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 10px; background: var(--surface-2); }
+.planner-leg .planner-number { grid-column: 1 / -1; color: var(--text-strong); }
+.planner-leg .planner-remove { grid-column: 1 / -1; justify-self: end; }
+.planner-leg label span:first-child { color: var(--muted); font-size: 12px; }
+@media (max-width: 860px) {
+  .leg-details { grid-template-columns: 1fr; }
+}
