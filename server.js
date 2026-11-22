@@ -160,7 +160,8 @@ const {
   releaseShipment,
   setTripStatus,
   deliverTripShipment,
-  addTripTracking
+  addTripTracking,
+  listPoolableLoads
 } = require('./database');
 const aiGateway = require('./ai/gateway');
 const flowAgent = require('./agents/flow');
@@ -3587,6 +3588,24 @@ app.post('/api/v2/trips', authMiddleware, requirePermission('shipments:dispatch'
   }
 });
 
+// Loads that wait for a truck and could share one: same lane, pickups within a few days, together within the truck's capacity.
+app.get('/api/v2/trips/suggestions', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const envCapacity = Number(process.env.LTL_TRUCK_KG) > 0 ? Number(process.env.LTL_TRUCK_KG) : 20000;
+    const requested = Number(req.query.capacityKg);
+    const capacityKg = Number.isFinite(requested) && requested > 0 && requested <= 100000 ? requested : envCapacity;
+    const days = Number(req.query.windowDays);
+    const windowDays = Number.isInteger(days) && days >= 0 && days <= 30 ? days : 3;
+    const pools = tripsLib.suggestPools(await listPoolableLoads(req.user.tenantId), { capacityKg, windowDays });
+    return res.json({
+      success: true, capacityKg, windowDays,
+      suggestions: pools.map((pool) => ({ ...pool, loads: pool.loads.map(({ id, tenantId, ...load }) => ({ shipmentId: `SHP-${id}`, ...load })) }))
+    });
+  } catch (error) {
+    return sendError(res, error, 'Suggestions could not be loaded.', 'v2 trip suggestions');
+  }
+});
+
 app.get('/api/v2/trips/:id', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
   try {
     const id = positiveId(req.params.id);
@@ -3657,6 +3676,8 @@ app.post('/api/v2/trips/:id/status', authMiddleware, async (req, res) => {
     const result = await setTripStatus(req.user.tenantId, id, status, { note }, req.user.id);
     audit(req, 'trip.status', `T-${id}: ${status}`);
     emitTripMoves(req.user.tenantId, result.moved);
+    // NEXUS: the manifest messages when booked, one task per problem on the road.
+    nexus.emit('trip.status', { tenantId: req.user.tenantId, tripId: id, status });
     return await sendTrip(res, req.user.tenantId, id);
   } catch (error) {
     return sendError(res, error, 'The trip status could not be changed.', 'v2 trip status');
@@ -3669,9 +3690,10 @@ app.post('/api/v2/trips/:id/shipments/:shipmentId/deliver', authMiddleware, requ
     const shipmentId = parseShipmentId(req.params.shipmentId);
     if (!id || !shipmentId) return res.status(400).json({ success: false, message: 'A valid trip and shipment are required.' });
     const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : null;
-    await deliverTripShipment(req.user.tenantId, id, shipmentId, { note }, req.user.id);
+    const delivered = await deliverTripShipment(req.user.tenantId, id, shipmentId, { note }, req.user.id);
     audit(req, 'trip.delivered', `T-${id}: SHP-${shipmentId}`);
     emitTripMoves(req.user.tenantId, [{ shipmentId, status: 'Delivered' }]);
+    if (delivered.tripStatus === 'Delivered') nexus.emit('trip.status', { tenantId: req.user.tenantId, tripId: id, status: 'Delivered' });
     return await sendTrip(res, req.user.tenantId, id);
   } catch (error) {
     return sendError(res, error, 'The delivery could not be saved.', 'v2 trip deliver');

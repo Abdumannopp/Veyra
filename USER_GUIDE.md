@@ -200,6 +200,8 @@ Use **Trips** when one truck carries part loads for several customers.
 - Before the truck leaves you can **Take off** a load (it waits for a truck again), add another, or **Take back to planned** / **Cancel trip**.
 - A load on a trip is marked *Trip T-n* in Shipments; its status, truck and position follow the trip, so the usual "Move to" and "Dispatch" controls are hidden for it.
 - The carrier is owed each load's cost share, and you mark them paid load by load in Billing.
+- **Loads that can share one truck**: at the top of Trips (and as a task in Inbox & tasks) Veyra suggests loads on the same lane with pickups within a few days that fit one truck. Press **Plan this trip**, then choose the carrier and the price and book it.
+- When you book a trip, Veyra drafts one message to the carrier with every load listed, one to the driver with the stops, and one to each customer. You read and press Send yourself. If a trip goes quiet or has a problem you get one task for the whole truck.
 
 ## Not available yet
 

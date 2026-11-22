@@ -100,6 +100,8 @@
     ]);
     const parts = [head];
     if (state.form === 'new') parts.push(await tripForm(null));
+    const pools = await suggestions();
+    if (pools.length) parts.push(suggestionPanel(pools));
     if (!shown.length) {
       parts.push(h('p', { class: 'muted trips-empty', text: trips.length
         ? 'No trips with this status.'
@@ -108,6 +110,48 @@
       parts.push(h('div', { class: 'trip-grid' }, shown.map(tripCard)));
     }
     box.replaceChildren(...parts);
+  }
+
+  /* ---------- loads that could share one truck ---------- */
+  async function suggestions() {
+    if (!can('shipments:dispatch')) return [];
+    try {
+      return (await api('GET', '/api/v2/trips/suggestions')).suggestions || [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function suggestionPanel(pools) {
+    const cards = pools.slice(0, 6).map((pool) => h('div', { class: 'trip-card trip-suggestion' }, [
+      h('div', { class: 'trip-card-head' }, [h('strong', { text: `${pool.loads.length} loads` }), h('span', { class: 'status-badge planned', text: 'Suggestion' })]),
+      h('div', { class: 'trip-route', text: `${pool.origin} → ${pool.destination}` }),
+      h('div', { class: 'trip-meta', text: pool.loads.map((load) => `${load.shipmentId} ${load.customer} (${weight(load.weightKg)})`).join(' · ') }),
+      bar(pool.totalWeightKg, pool.capacityKg, `${weight(pool.totalWeightKg)} of a ${weight(pool.capacityKg)} truck`),
+      h('div', { class: 'trip-meta', text: pool.pickupFrom ? `Pickup ${when(pool.pickupFrom)}${pool.pickupTo && pool.pickupTo !== pool.pickupFrom ? ` to ${when(pool.pickupTo)}` : ''}` : 'No pickup date' }),
+      h('button', { class: 'btn btn-primary small', type: 'button', onclick: (event) => planFrom(pool, event.currentTarget) }, 'Plan this trip')
+    ]));
+    return h('div', { class: 'trip-suggestions' }, [
+      h('div', { class: 'detail-timeline-head' }, [h('strong', { text: 'Loads that can share one truck' }), h('span', { text: 'Same lane, pickups within a few days, they fit one truck' })]),
+      h('div', { class: 'trip-grid' }, cards)
+    ]);
+  }
+
+  // Plans the trip with these loads on it; you choose the carrier and the price and book it on the trip page.
+  async function planFrom(pool, button) {
+    button.disabled = true;
+    let tripId = null;
+    try {
+      const created = await api('POST', '/api/v2/trips', { origin: pool.origin, destination: pool.destination, capacityWeightKg: pool.capacityKg, scheduledPickup: pool.pickupFrom || undefined });
+      tripId = created.trip.id;
+      for (const load of pool.loads) await api('POST', `/api/v2/trips/${tripId}/shipments`, { shipmentId: load.shipmentId, weightKg: load.weightKg });
+      state.eligible = null;
+      notify(`${created.trip.number} planned with ${pool.loads.length} loads. Choose the carrier and book the truck.`, 'ok');
+    } catch (error) {
+      notify(error.message, 'error');
+      button.disabled = false;
+    }
+    if (tripId) window.location.hash = `#/trips?trip=${tripId}`;
   }
 
   function tripCard(trip) {

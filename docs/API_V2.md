@@ -73,6 +73,7 @@ the classic status, dispatch and location actions on that shipment answer `409`.
 |---|---|
 | `GET /api/v2/trips` | The company's trips (`?status=Planned`); each with its load count and weight |
 | `POST /api/v2/trips` | New planned trip: `origin`, `destination`, optional `carrierId`, `capacityWeightKg`, `capacityPallets`, `cost` (+ `currency`), `scheduledPickup` / `scheduledDelivery`, `truckPlate`, `driverName`, `driverPhone`, `notes` |
+| `GET /api/v2/trips/suggestions` | Loads waiting for a truck that could share one: `?capacityKg=` (default `LTL_TRUCK_KG`, 20000) and `?windowDays=` (pickups within this many days, default 3) |
 | `GET /api/v2/trips/:id` | The trip, its loads (weight, pallets, cost share, stops), totals (weight and pallet use, customers' revenue, margin) and history |
 | `PATCH /api/v2/trips/:id` | Edit a planned or booked trip (not the carrier or currency once booked; capacity cannot go below what is on it) |
 | `POST /api/v2/trips/:id/shipments` | Put a load on the trip: `{ shipmentId: "SHP-12", weightKg?, pallets? }` (weight defaults to the load's own weight) |
@@ -87,4 +88,13 @@ Rules:
 - Booking needs a carrier and at least one load, and makes the carrier busy; it is free again when the trip is delivered, cancelled or taken back to planned. Adding a load to a booked trip books it at once; a trip that has left takes no more loads.
 - GPS positions that match the truck's plate reach every load on the truck.
 - Booking, taking back, cancelling, editing and putting loads on need `shipments:dispatch`; the other status changes and deliveries need `shipments:status`; positions need `shipments:track`.
-- NEXUS does not draft a single booking message for the whole trip yet (each load's own events run as usual); consolidation suggestions are planned.
+- NEXUS and pooling: see the end of this page.
+
+## NEXUS and pooling for trips
+
+NEXUS only prepares tasks for people; it never sends or books anything.
+- A trip is **booked**: one manifest message to the carrier (the trip, truck and driver, the route, every load with its weight, the price), one message to the driver (the stops), and one booking message to each load's customer. The carrier gets no message per load.
+- A trip goes to **Exception**: one task for the trip (not one per load); it closes when the trip resumes or ends.
+- A trip is **In Transit** with no position for the stale time (default 12 h): one task, or one drafted message to the driver, per silence (not one per load). It closes when the trip is delivered or cancelled. The whole-load quiet-truck check skips loads on a trip.
+- **Pooling**: NEXUS (periodically) and `GET /api/v2/trips/suggestions` look at loads that still wait for a truck. Loads on the same lane (ignoring case and spacing) with pickups within a few days are packed into trucks of `LTL_TRUCK_KG` (default 20000 kg), heaviest first; a truck with two or more loads is a suggestion. NEXUS makes one task per group ("3 loads can share one truck · A → B"); it closes by itself when the loads are booked, put on a trip or no longer fit together, and a task a person dismissed does not come back. It can be switched off in the AI Command Center ("Suggest loads that can share one truck").
+- The Trips page shows the suggestions with a "Plan this trip" button that creates the trip and puts the loads on it; you then choose the carrier and the price and book the truck.

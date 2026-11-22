@@ -21,6 +21,7 @@ const relayAgent = require('./relay');
 const vaultAgent = require('./vault');
 const pulseAgent = require('./pulse');
 const sentinelAgent = require('./sentinel');
+const tripsAgent = require('../lib/trips');
 const geo = require('../integrations/geo');
 
 const defaults = {
@@ -60,7 +61,8 @@ const AUTOMATIONS = {
   readDocuments: 'Read CMR and proof-of-delivery files',
   priceCheck: 'Check prices when a truck is booked',
   quietTrucks: 'Ask quiet trucks where they are',
-  riskWatch: 'Warn about loads at risk'
+  riskWatch: 'Warn about loads at risk',
+  pooling: 'Suggest loads that can share one truck'
 };
 
 async function automationOn(tenantId, key) {
@@ -167,6 +169,7 @@ async function handleBuiltIn(event, context) {
     case 'inbox.received': return onInboxReceived(context);
     case 'shipment.status': return onShipmentStatus(context);
     case 'leg.status': return onLegStatus(context);
+    case 'trip.status': return onTripStatus(context);
     case 'shipment.dispatched': return onShipmentDispatched(context);
     case 'document.uploaded': return onDocumentUploaded(context);
     case 'inbox.attached': return onInboxAttached(context);
@@ -277,7 +280,8 @@ async function onShipmentStatus({ tenantId, shipmentId, status }) {
   }
 
   // A load with several legs raises its exceptions per leg (onLegStatus), which says which leg and carrier.
-  if (status === 'Exception' && shipment.leg_mode !== 'multi') {
+  // Multi-leg loads and loads on a trip raise their exceptions per leg / per trip (onLegStatus, onTripStatus).
+  if (status === 'Exception' && shipment.leg_mode !== 'multi' && !shipment.trip_id) {
     const count = await db.countShipmentExceptions(tenantId, shipmentId);
     await db.createTask(tenantId, {
       kind: 'attention',
@@ -339,6 +343,53 @@ async function onLegStatus({ tenantId, shipmentId, legId, status, handoverTo }) 
         dedupeKey: `handover:${next.id}:next`,
         payload: { text: `Handed over at ${next.origin}. ${next.status === 'Planned' ? 'Book the next leg' : 'Start the next leg'} when it is ready.`, carrierPhone: context.carrierPhone }
       });
+    }
+  }
+}
+
+/* ---------- a trip (one truck, several loads) changed status ---------- */
+// One manifest message to the carrier and one to the driver instead of one per load; one task per problem on the road.
+const formatWeightFor = (unit) => (kg) => (unit === 'lb' ? `${Math.round((kg / 0.45359237) * 10) / 10} lb` : `${Math.round(kg * 10) / 10} kg`);
+
+async function draftTripTask(tenantId, data, recipient, purpose, dedupeKey, extraTitle = '') {
+  const tenant = await db.getTenant(tenantId);
+  const region = await regionFor(tenantId);
+  const draft = relayAgent.draftTripMessage({
+    trip: data.trip, shipments: data.shipments, recipient, purpose, company: tenant?.name || '',
+    formatMoney: moneyFor(data.trip.currency || region.currency), formatWeight: formatWeightFor(region.weightUnit)
+  });
+  if (!draft?.to) return false;
+  const what = { booking_confirmation: 'booking', pickup_details: 'stops', location_request: 'ask for location' }[draft.purpose] || draft.purpose;
+  const result = await db.createTask(tenantId, {
+    kind: 'message', title: `Message the ${recipient} about trip ${data.trip.number}: ${what}${extraTitle}`, shipmentId: null, dedupeKey,
+    payload: { recipient, purpose: draft.purpose, body: draft.body, to: draft.to, tripId: data.trip.id }
+  });
+  return result.created;
+}
+
+async function onTripStatus({ tenantId, tripId, status }) {
+  const data = await db.getTrip(tenantId, tripId);
+  if (!data) return;
+  const { trip } = data;
+  if (status !== 'Exception') await db.resolveTasksByKey(tenantId, `tripex:${tripId}:`);
+  if (['Delivered', 'Cancelled'].includes(status)) await db.resolveTasksByKey(tenantId, `quiettrip:${tripId}:`);
+
+  if (status === 'Exception') {
+    const count = await db.countTripExceptions(tenantId, tripId);
+    await db.createTask(tenantId, {
+      kind: 'attention',
+      title: `Trip ${trip.number} is in Exception · ${data.shipments.length} load${data.shipments.length === 1 ? '' : 's'} on the truck`,
+      dedupeKey: `tripex:${tripId}:${count}`,
+      payload: { text: 'Find out what happened, tell the customers whose loads will be late, then resume the trip.', carrierPhone: trip.carrierPhone, driverPhone: trip.driverPhone }
+    });
+  }
+
+  if (status === 'Booked' && (await automationOn(tenantId, 'bookingMessages'))) {
+    await draftTripTask(tenantId, data, 'carrier', 'booking_confirmation', `msg:trip${tripId}:carrier:booking`);
+    await draftTripTask(tenantId, data, 'driver', 'pickup_details', `msg:trip${tripId}:driver:pickup`);
+    for (const item of data.shipments) {
+      const shipment = await db.getShipment(tenantId, Number(item.shipmentId.replace('SHP-', '')));
+      if (shipment) await draftMessageTask(tenantId, shipment, 'customer', 'booking_confirmation', `msg:${shipment.id}:customer:booking`);
     }
   }
 }
@@ -436,6 +487,24 @@ async function sweep() {
 async function sweepAllCompanies() {
   const stale = await db.listStaleLoadsAllTenants(settings.staleHours);
   let created = 0;
+  // Trips on the road with no position for a while: one task (or one message to the driver) per trip, not per load.
+  for (const row of await db.listStaleTripsAllTenants(settings.staleHours)) {
+    if (!(await automationOn(row.tenantId, 'quietTrucks'))) continue;
+    const data = await db.getTrip(row.tenantId, row.id);
+    if (!data) continue;
+    const key = `quiettrip:${row.id}:${row.lastTrackedAt || 'none'}`;
+    if (await draftTripTask(row.tenantId, data, 'driver', 'location_request', key, ` (no update for ${settings.staleHours}h+)`)) {
+      created += 1;
+      continue;
+    }
+    const result = await db.createTask(row.tenantId, {
+      kind: 'attention',
+      title: `Trip ${data.trip.number}: no position update for ${settings.staleHours}h+ — ask the carrier`,
+      dedupeKey: key,
+      payload: { text: 'Ask the carrier or driver where the truck is, then log the position on the trip.', carrierPhone: data.trip.carrierPhone }
+    });
+    if (result.created) created += 1;
+  }
   // Legs of multi-leg loads that are on the way with no position for a while.
   for (const row of await db.listStaleLegsAllTenants(settings.staleHours)) {
     if (!(await automationOn(row.tenantId, 'quietTrucks'))) continue;
@@ -515,12 +584,50 @@ async function sentinelSweepAllCompanies(now) {
   return created;
 }
 
+/* ---------- POOLING: loads that could share one truck (periodic) ---------- */
+// One task per group of loads on the same lane with close pickups that fit one truck. When the loads are booked, put on a trip
+// or no longer fit together, the task closes by itself. A task a person dismissed does not come back.
+async function poolingSweep() {
+  return runAsSystem(poolingSweepAllCompanies);
+}
+
+async function poolingSweepAllCompanies() {
+  const capacityKg = Number(process.env.LTL_TRUCK_KG) > 0 ? Number(process.env.LTL_TRUCK_KG) : 20000;
+  const byTenant = new Map();
+  for (const load of await db.listPoolableLoads(null)) byTenant.set(load.tenantId, [...(byTenant.get(load.tenantId) || []), load]);
+  const active = new Set();
+  let created = 0;
+  for (const [tenantId, loads] of byTenant) {
+    if (!(await automationOn(tenantId, 'pooling'))) continue;
+    for (const pool of tripsAgent.suggestPools(loads, { capacityKg })) {
+      const ids = pool.loads.map((load) => load.id);
+      const key = `pool:${ids.join('-')}`;
+      active.add(`${tenantId}|${key}`);
+      const result = await db.createTask(tenantId, {
+        kind: 'attention',
+        title: `${ids.length} loads can share one truck · ${pool.origin} → ${pool.destination}`,
+        dedupeKey: key,
+        payload: {
+          text: `${ids.map((id) => `SHP-${id}`).join(', ')} go the same way within a few days and weigh ${Math.round(pool.totalWeightKg)} kg together (${Math.round(pool.utilization * 100)}% of a ${capacityKg} kg truck). Plan one trip in Trips and book the truck once.`,
+          shipmentIds: ids, totalWeightKg: pool.totalWeightKg, utilization: pool.utilization
+        }
+      });
+      if (result.created) created += 1;
+    }
+  }
+  for (const task of await db.listOpenTasksByKeyPrefix(null, 'pool:')) {
+    if (!active.has(`${task.tenantId}|${task.dedupeKey}`)) await db.resolveTask(task.tenantId, task.id, { status: 'done' });
+  }
+  return created;
+}
+
 let sweepTimer = null;
 
 function startSweeper(intervalMinutes = 10) {
   if (!enabled() || sweepTimer) return;
   const run = () => sweep()
     .then(() => sentinelSweep())
+    .then(() => poolingSweep())
     .catch((error) => console.error('[NEXUS] sweep failed:', error.message));
   sweepTimer = setInterval(run, intervalMinutes * 60 * 1000);
   sweepTimer.unref();
@@ -532,4 +639,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, startSweeper, stopSweeper };
+module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, poolingSweep, startSweeper, stopSweeper };

@@ -20,3 +20,7 @@
 .trip-facts { margin-bottom: 14px; }
 .status-badge.planned { background: rgba(100, 116, 139, .2); color: #64748b; }
 .status-badge.booked { background: rgba(167, 139, 250, .2); color: #7c6ad8; }
+
+.trip-suggestions { margin: 0 0 18px; }
+.trip-suggestion { cursor: default; border-style: dashed; }
+.trip-suggestion:hover { border-color: var(--line-2); box-shadow: none; }
