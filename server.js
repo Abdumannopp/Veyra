@@ -3981,10 +3981,12 @@ app.use((error, req, res, next) => {
 });
 
 function startServer() {
+  // A wrong storage or encryption setting stops the server here, not on the first upload.
+  const storage = require('./lib/blob-store').checkConfig();
   return initialize()
     .then(() => new Promise((resolve) => {
       const server = app.listen(PORT, HOST, () => {
-        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'})`);
+        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'}, documents: ${storage.storage}${storage.encrypted ? ' encrypted' : ''})`);
         runAsSystem(() => {
           jobQueue.start();
           nexus.startSweeper();
