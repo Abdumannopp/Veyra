@@ -9,6 +9,7 @@
 //
 // Every reaction is idempotent (tasks carry a dedupe key), runs after the web request has
 // finished, and failures are logged, never thrown at the person who triggered the event.
+const legsLib = require('../lib/legs');
 const db = require('../database');
 const { runAsSystem } = require('../lib/tenant-context');
 const jobQueue = require('../lib/job-queue');
@@ -584,6 +585,56 @@ async function sentinelSweepAllCompanies(now) {
   return created;
 }
 
+/* ---------- DELAYS: legs that are late or put the next handover at risk (periodic) ---------- */
+// One task per leg per kind of delay. A later ETA that is still late keeps the same task; the task closes by
+// itself when the leg is on time again, delivered or cancelled. A task a person dismissed does not come back.
+const DELAY_TITLES = {
+  pickup_missed: 'pickup has not started',
+  overdue: 'past the planned delivery',
+  eta_late: 'ETA is after the planned delivery',
+  handover_risk: 'the leg before will arrive after this pickup'
+};
+const DELAY_ADVICE = {
+  pickup_missed: 'Ask the carrier when the pickup happens, then update the leg (or its plan).',
+  overdue: 'Ask the carrier where the cargo is, log the position and a new ETA, or mark the leg delivered.',
+  eta_late: 'Tell the customer about the new time, and check the next leg can wait.',
+  handover_risk: 'Move this leg\'s pickup (and tell its carrier), or speed up the leg before.'
+};
+
+async function delaySweep(now = new Date()) {
+  return runAsSystem(() => delaySweepAllCompanies(now));
+}
+
+async function delaySweepAllCompanies(now) {
+  const active = new Set();
+  let created = 0;
+  for (const row of await db.listOpenMultiLegShipmentsAllTenants()) {
+    if (!(await automationOn(row.tenantId, 'riskWatch'))) continue;
+    const data = await db.getShipmentLegs(row.tenantId, row.id);
+    if (!data?.multi) continue;
+    const timing = legsLib.legTiming(data.legs, { now });
+    for (const [index, leg] of data.legs.entries()) {
+      for (const issue of timing[index].issues) {
+        const key = `legdelay:${leg.id}:${issue.kind}`;
+        active.add(`${row.tenantId}|${key}`);
+        const label = legLabel(row.id, leg);
+        const result = await db.createTask(row.tenantId, {
+          kind: 'attention',
+          title: `${label}: ${DELAY_TITLES[issue.kind]} (${issue.hours} h)`,
+          shipmentId: row.id,
+          dedupeKey: key,
+          payload: { text: `${label}: ${issue.text}. ${DELAY_ADVICE[issue.kind]}`, severity: issue.kind === 'eta_late' ? 'medium' : 'high' }
+        });
+        if (result.created) created += 1;
+      }
+    }
+  }
+  for (const task of await db.listOpenTasksByKeyPrefix(null, 'legdelay:')) {
+    if (!active.has(`${task.tenantId}|${task.dedupeKey}`)) await db.resolveTask(task.tenantId, task.id, { status: 'done' });
+  }
+  return created;
+}
+
 /* ---------- POOLING: loads that could share one truck (periodic) ---------- */
 // One task per group of loads on the same lane with close pickups that fit one truck. When the loads are booked, put on a trip
 // or no longer fit together, the task closes by itself. A task a person dismissed does not come back.
@@ -627,6 +678,7 @@ function startSweeper(intervalMinutes = 10) {
   if (!enabled() || sweepTimer) return;
   const run = () => sweep()
     .then(() => sentinelSweep())
+    .then(() => delaySweep())
     .then(() => poolingSweep())
     .catch((error) => console.error('[NEXUS] sweep failed:', error.message));
   sweepTimer = setInterval(run, intervalMinutes * 60 * 1000);
@@ -639,4 +691,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, poolingSweep, startSweeper, stopSweeper };
+module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, poolingSweep, startSweeper, stopSweeper };

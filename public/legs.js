@@ -149,6 +149,7 @@
       leg.details.chargeableWeightKg ? `Chargeable weight: ${leg.details.chargeableWeightKg} kg` : null
     ].filter(Boolean);
     if (meta.length) lines.push(text('div', 'leg-meta', meta.join(' · ')));
+    if (leg.timing && leg.timing.late) lines.push(text('div', 'leg-meta leg-late', `Late: ${leg.timing.issues.map((issue) => issue.text).join('; ')}`));
     if (leg.lastLocation) lines.push(text('div', 'leg-meta', `Now: ${leg.lastLocation}${leg.eta ? ` · ETA ${when(leg.eta)}` : ''}${leg.lastTrackedAt ? ` (${formatTimestamp(leg.lastTrackedAt)})` : ''}`));
     const actions = text('div', 'leg-actions');
     const add = (label, handler, cls = 'btn btn-ghost small') => {

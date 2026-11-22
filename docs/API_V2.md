@@ -108,3 +108,14 @@ NEXUS only prepares tasks for people; it never sends or books anything.
 - A trip is **In Transit** with no position for the stale time (default 12 h): one task, or one drafted message to the driver, per silence (not one per load). It closes when the trip is delivered or cancelled. The whole-load quiet-truck check skips loads on a trip.
 - **Pooling**: NEXUS (periodically) and `GET /api/v2/trips/suggestions` look at loads that still wait for a truck. Loads on the same lane (ignoring case and spacing) with pickups within a few days are packed into trucks of `LTL_TRUCK_KG` (default 20000 kg), heaviest first; a truck with two or more loads is a suggestion. NEXUS makes one task per group ("3 loads can share one truck · A → B"); it closes by itself when the loads are booked, put on a trip or no longer fit together, and a task a person dismissed does not come back. It can be switched off in the AI Command Center ("Suggest loads that can share one truck").
 - The Trips page shows the suggestions with a "Plan this trip" button that creates the trip and puts the loads on it; you then choose the carrier and the price and book the truck.
+
+## Schedules and delays
+
+Every leg in `GET /api/v2/shipments/:id` has `timing`: `{ late, issues: [{ kind, hours, text }], expectedArrival }`.
+- `pickup_missed`: still Planned or Booked more than an hour after the planned pickup.
+- `overdue`: not delivered more than an hour after the planned delivery.
+- `eta_late`: on the way and the latest ETA is more than an hour after the planned delivery.
+- `handover_risk`: the leg before (cancelled legs skipped) is expected (its ETA, else its plan) more than an hour after this leg's planned pickup.
+A planned date without a time counts as the end of that day (UTC). Free text (such as "Oct 3" on older loads) is not read as a time.
+
+NEXUS checks multi-leg loads every sweep (with "Warn about loads at risk" on) and makes one task per leg and kind of delay. The task closes by itself when the leg is on time again, delivered or cancelled; a task a person dismissed does not come back.

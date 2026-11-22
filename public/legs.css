@@ -18,3 +18,8 @@
 @media (max-width: 860px) {
   .leg-details { grid-template-columns: 1fr; }
 }
+
+.leg-late {
+  color: var(--red, #e11d48);
+  font-weight: 600;
+}
