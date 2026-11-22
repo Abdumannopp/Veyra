@@ -7,7 +7,8 @@ const path = require('node:path');
 const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-jobs-'));
-Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'j.db'), BCRYPT_COST: '10', NEXUS_ENABLED: 'false', JOBS_RETRY_BASE_SECONDS: '1' });
+// A failed job waits 10 minutes by itself; the tests make it due on purpose, so a slow machine cannot run it early.
+Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'j.db'), BCRYPT_COST: '10', NEXUS_ENABLED: 'false', JOBS_RETRY_BASE_SECONDS: '600' });
 
 const database = require('../database');
 const queue = require('../lib/job-queue');
