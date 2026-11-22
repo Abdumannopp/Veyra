@@ -2218,7 +2218,32 @@
       el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Open invoices and payments' }), el('small', { text: 'Oldest delivery first. Open a load to mark it invoiced or paid, or to print its invoice.' })])),
       miniTable(['Load', 'Customer', 'Customer owes', 'Invoice', 'Carrier is owed', 'Delivered'], rows, 'Nothing is open: every delivered load is paid on both sides.')
     ]);
-    container.replaceChildren(...[billing ? planCard(billing) : null, kpis, table].filter(Boolean));
+    // Loads with several legs: each delivered leg is owed to its own carrier.
+    const legRows = (finance.openLegs || []).map((row) => [
+      el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(row.shipmentId) }, row.shipmentId),
+      el('span', {}, [`Leg ${row.sequence} · ${row.mode.replace('_', ' ').toLowerCase()}`, el('small', { class: 'cell-sub', text: row.customer })]),
+      row.carrierName || '—',
+      el('span', {}, [money(row.price), row.currency && row.currency !== finance.currency ? el('small', { class: 'cell-sub', text: row.currency }) : null]),
+      row.daysSinceDelivery === null || row.daysSinceDelivery === undefined ? '—' : `${row.daysSinceDelivery} day${row.daysSinceDelivery === 1 ? '' : 's'} ago`,
+      el('button', {
+        class: 'btn btn-ghost small', type: 'button',
+        onclick: async (event) => {
+          event.target.disabled = true;
+          try {
+            await api(`/api/v2/legs/${row.legId}/payment`, { method: 'PUT', body: JSON.stringify({ paid: true }) });
+            renderBilling();
+          } catch (error) {
+            event.target.disabled = false;
+            toast(error.message, 'error');
+          }
+        }
+      }, 'Mark paid')
+    ]);
+    const legTable = legRows.length ? el('div', { class: 'card panel-card' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Carriers owed per leg' }), el('small', { text: 'Loads with several legs: each delivered leg is paid to its own carrier. Oldest first.' })])),
+      miniTable(['Load', 'Leg', 'Carrier', 'Owed', 'Delivered', ''], legRows, '')
+    ]) : null;
+    container.replaceChildren(...[billing ? planCard(billing) : null, kpis, table, legTable].filter(Boolean));
   }
 
   // The company's Veyra subscription: plan, trial, usage against limits, and what the plan includes.

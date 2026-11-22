@@ -2273,7 +2273,9 @@ function setupDetailTools(shipment) {
     paymentForm.elements.invoiced.checked = Boolean(shipment.invoicedAt);
     paymentForm.elements.customerPaid.checked = Boolean(shipment.customerPaidAt);
     paymentForm.elements.carrierPaid.checked = Boolean(shipment.carrierPaidAt);
-    paymentForm.elements.carrierPaid.disabled = !shipment.carrierId;
+    // A load with several legs pays each carrier for its own leg (see the legs section).
+    paymentForm.elements.carrierPaid.disabled = !shipment.carrierId || shipment.legMode === 'multi';
+    paymentForm.elements.carrierPaid.title = shipment.legMode === 'multi' ? 'Mark each leg paid in Route legs' : '';
     document.getElementById('paymentMessage').textContent = '';
   }
   const invoice = document.getElementById('invoiceLink');

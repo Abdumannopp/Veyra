@@ -125,6 +125,7 @@
       leg.carrierName ? `Carrier: ${leg.carrierName}` : null,
       leg.price !== null ? `Price: ${money(leg.price, leg.currency)}` : null,
       leg.reference ? `Ref: ${leg.reference}` : null,
+      leg.paidAt ? `Paid to the carrier ${formatTimestamp(leg.paidAt)}` : null,
       leg.scheduledPickup ? `Pickup ${when(leg.scheduledPickup)}` : null,
       leg.scheduledDelivery ? `Delivery ${when(leg.scheduledDelivery)}` : null,
       ...(DETAIL_FIELDS[leg.mode] || []).filter(([key]) => leg.details[key]).map(([key, label]) => `${label}: ${leg.details[key]}`)
@@ -142,6 +143,9 @@
     const canMove = can('shipments:status');
     const canTrack = can('shipments:track');
     if (['Planned', 'Booked', 'In Transit', 'Exception'].includes(leg.status) && canBook) add('Edit', () => openForm({ leg }));
+    if (leg.status === 'Delivered' && leg.price !== null && !leg.synthetic && can('shipments:finance')) {
+      add(leg.paidAt ? 'Undo payment' : 'Mark paid', () => pay(leg, !leg.paidAt), leg.paidAt ? 'btn btn-ghost small' : 'btn btn-primary small');
+    }
     if (leg.status === 'Planned' && canBook) add('Book', () => move(leg, 'Booked'), 'btn btn-primary small');
     if (leg.status === 'Booked' && canMove) add('Start', () => move(leg, 'In Transit'), 'btn btn-primary small');
     if (leg.status === 'In Transit' && canMove) add('Delivered', () => openHandover(leg), 'btn btn-primary small');
@@ -151,6 +155,16 @@
     if (['Planned', 'Booked', 'Exception'].includes(leg.status) && canMove) add('Cancel leg', () => move(leg, 'Cancelled'));
     card.append(head, ...lines, actions);
     return card;
+  }
+
+  async function pay(leg, paid) {
+    try {
+      await api('PUT', `/api/v2/legs/${leg.id}/payment`, { paid });
+      notify(paid ? `Leg ${leg.sequence} marked paid.` : `Payment of leg ${leg.sequence} undone.`, 'ok');
+      await reload();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
   }
 
   async function move(leg, status, extra = {}) {

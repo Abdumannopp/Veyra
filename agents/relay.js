@@ -26,13 +26,14 @@ function recipientPhone(shipment, recipient) {
   return null;
 }
 
-function draftMessage({ shipment, recipient, purpose, company, formatMoney }) {
+// `label` names what the message is about when it is not the whole load (for example a leg of it).
+function draftMessage({ shipment, recipient, purpose, company, formatMoney, label = null }) {
   const allowed = PURPOSES[recipient] || [];
   const chosen = allowed.includes(purpose) ? purpose : allowed[0];
   if (!chosen) return null;
   const key = chosen === 'booking_confirmation' ? `booking_confirmation_${recipient}` : chosen;
   const data = {
-    id: `SHP-${shipment.id}`,
+    id: label || `SHP-${shipment.id}`,
     company,
     customer: shipment.customer,
     origin: shipment.origin,

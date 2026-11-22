@@ -150,7 +150,8 @@ const {
   setLegStatus,
   addLegTracking,
   setDocumentLeg,
-  listLegDocuments
+  listLegDocuments,
+  setLegPayment
 } = require('./database');
 const aiGateway = require('./ai/gateway');
 const flowAgent = require('./agents/flow');
@@ -3403,6 +3404,8 @@ app.post('/api/v2/shipments', authMiddleware, requirePermission('shipments:creat
       actorId: req.user.id, tenantId: req.user.tenantId, legs
     });
     audit(req, 'shipment.created', `${created.id}: ${legs.map((leg) => leg.mode).join(' > ')}`);
+    // The company's own rules ("when a load is created ...") run for it like for any load.
+    nexus.emit('shipment.created', { tenantId: req.user.tenantId, shipmentId: created.shipmentId });
     return await sendShipmentLegs(res, req.user.tenantId, created.shipmentId, 201);
   } catch (error) {
     return sendError(res, error, 'Shipment could not be created.', 'v2 create');
@@ -3471,6 +3474,12 @@ app.post('/api/v2/legs/:id/status', authMiddleware, async (req, res) => {
       : null;
     const result = await setLegStatus(req.user.tenantId, legId, status, { note: text(req.body?.note, 'Note', 500), handover }, req.user.id);
     audit(req, 'leg.status', `leg ${legId}: ${current.status} > ${status}`);
+    // NEXUS reacts to the leg (exceptions, booking message, "next leg" reminder) and, when the load's own status moved
+    // because of it, to the load too (delivered message, company rules).
+    nexus.emit('leg.status', { tenantId: req.user.tenantId, shipmentId: result.shipmentId, legId, status, handoverTo: result.handoverTo });
+    if (result.shipmentStatus !== result.shipmentStatusBefore) {
+      nexus.emit('shipment.status', { tenantId: req.user.tenantId, shipmentId: result.shipmentId, status: result.shipmentStatus });
+    }
     return await sendShipmentLegs(res, req.user.tenantId, result.shipmentId, 200, { handoverTo: result.handoverTo });
   } catch (error) {
     return sendError(res, error, 'The leg status could not be changed.', 'v2 leg status');
@@ -3493,6 +3502,19 @@ app.post('/api/v2/legs/:id/tracking', authMiddleware, requirePermission('shipmen
     return res.status(201).json({ success: true, update });
   } catch (error) {
     return sendError(res, error, 'The position could not be saved.', 'v2 leg tracking');
+  }
+});
+
+// A delivered leg is paid to its carrier (paid: false undoes it).
+app.put('/api/v2/legs/:id/payment', authMiddleware, requirePermission('shipments:finance'), async (req, res) => {
+  try {
+    const legId = positiveId(req.params.id);
+    if (!legId || typeof req.body?.paid !== 'boolean') return res.status(400).json({ success: false, message: 'A leg and paid: true or false are required.' });
+    const result = await setLegPayment(req.user.tenantId, legId, req.body.paid, req.user.id);
+    if (result.changed) audit(req, 'leg.payment', `leg ${legId}: ${req.body.paid ? 'paid' : 'payment undone'}`);
+    return await sendShipmentLegs(res, req.user.tenantId, result.shipmentId);
+  } catch (error) {
+    return sendError(res, error, 'The payment could not be saved.', 'v2 leg payment');
   }
 });
 

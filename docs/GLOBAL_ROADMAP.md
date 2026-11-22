@@ -21,7 +21,7 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 |---|---|---|
 | 2.1 | `shipment_legs` (mode, sequence, carrier, price, schedule, reference, mode details, tracking), leg status history, handovers, documents per leg, load status and price rolled up from legs, `/api/v2` (see `docs/API_V2.md`); a classic load is one ROAD leg and `/api/*` is unchanged | Done |
 | 2.2 | Screens for legs: "Multi-leg order" planner, a "Route legs" section in the load record (book, start, deliver with handover, report a problem, add a position, edit, cancel), multi-leg loads marked in the list | Done |
-| 2.3 | NEXUS and the finance views understand multi-leg loads | Planned |
+| 2.3 | NEXUS (per-leg booking message, exceptions, next-leg reminder, quiet leg) and Finance (carriers paid leg by leg) understand multi-leg loads | Done |
 
 ## Phase 3 — Road FTL and LTL
 Existing FTL moved onto legs without changing its screens; LTL consolidation and allocation of shipments to trucks.
