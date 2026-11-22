@@ -6,6 +6,7 @@ const { createRunner } = require('./lib/migrations');
 const { normalizeCurrency, roundMoney, addMoney } = require('./lib/money');
 const timeLib = require('./lib/time');
 const legsLib = require('./lib/legs');
+const tripsLib = require('./lib/trips');
 const { current: currentContext, runAsSystem, settingsFor } = require('./lib/tenant-context');
 const secrets = require('./lib/secrets');
 
@@ -849,6 +850,77 @@ const MIGRATIONS = [
     down: () => {
       throw new Error('0007_leg_payments cannot be reversed. Recovery: restore the database backup taken before the upgrade (the new column is harmless if left).');
     }
+  },
+  {
+    id: '0008_trips',
+    name: 'Trips: one truck run carrying several shipments (LTL), with the truck price split among them',
+    transactional: false,
+    up: async (tx) => {
+      await ensureColumns('shipments', [['trip_id', 'INTEGER']]);
+      await run(`
+        CREATE TABLE IF NOT EXISTS trips (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          carrier_id INTEGER REFERENCES carriers(id),
+          status TEXT NOT NULL DEFAULT 'Planned',
+          origin TEXT NOT NULL,
+          destination TEXT NOT NULL,
+          scheduled_pickup TEXT,
+          scheduled_delivery TEXT,
+          capacity_weight_kg REAL,
+          capacity_pallets INTEGER,
+          cost REAL,
+          currency TEXT,
+          truck_plate TEXT,
+          driver_name TEXT,
+          driver_phone TEXT,
+          notes TEXT,
+          last_location TEXT,
+          eta TEXT,
+          last_tracked_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
+      await run('CREATE INDEX IF NOT EXISTS idx_trips_tenant ON trips (tenant_id, status, id)');
+      await run(`
+        CREATE TABLE IF NOT EXISTS trip_shipments (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          trip_id INTEGER NOT NULL REFERENCES trips(id),
+          shipment_id INTEGER NOT NULL REFERENCES shipments(id),
+          weight_kg REAL NOT NULL DEFAULT 0,
+          pallets INTEGER NOT NULL DEFAULT 0,
+          pickup_seq INTEGER,
+          drop_seq INTEGER,
+          cost_share REAL,
+          delivered_at TEXT,
+          released_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
+      // A shipment is on at most one trip at a time (a released allocation stays as history).
+      await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_trip_shipments_active ON trip_shipments (shipment_id) WHERE released_at IS NULL');
+      await run('CREATE INDEX IF NOT EXISTS idx_trip_shipments_trip ON trip_shipments (tenant_id, trip_id)');
+      await run(`
+        CREATE TABLE IF NOT EXISTS trip_events (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          trip_id INTEGER NOT NULL REFERENCES trips(id),
+          from_status TEXT,
+          to_status TEXT NOT NULL,
+          note TEXT,
+          actor_id INTEGER,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )`);
+      await run('CREATE INDEX IF NOT EXISTS idx_trip_events_trip ON trip_events (trip_id, id)');
+      if (isPostgres) {
+        await run('ALTER TABLE trips ALTER COLUMN cost TYPE NUMERIC(18,4) USING ROUND(cost::numeric, 4)');
+        await run('ALTER TABLE trip_shipments ALTER COLUMN cost_share TYPE NUMERIC(18,4) USING ROUND(cost_share::numeric, 4)');
+        for (const table of ['trips', 'trip_shipments', 'trip_events']) await protectTenantTable(tx, table);
+      }
+    },
+    down: () => {
+      throw new Error('0008_trips cannot be reversed. Recovery: restore the database backup taken before the upgrade.');
+    }
   }
 ];
 
@@ -1412,6 +1484,7 @@ async function getShipment(tenantId, id) {
 // A load with several legs is driven through its legs (API /api/v2); the classic single-truck actions would contradict them.
 function assertSingleLeg(shipment) {
   if (shipment.leg_mode === 'multi') throw httpError(409, 'This load has several legs. Update its legs instead (API /api/v2/legs).');
+  if (shipment.trip_id) throw httpError(409, `This load travels on trip T-${shipment.trip_id}. Manage it there (API /api/v2/trips).`);
 }
 
 const STATUS_TRANSITIONS = {
@@ -1445,7 +1518,7 @@ async function recordShipmentEvent(shipmentId, fromStatus, toStatus, note, actor
 async function updateShipmentStatus(tenantId, id, status, actorId, note) {
   assertTenant(tenantId);
   return withTransaction(async (transaction) => {
-    const current = await transaction.get('SELECT id, status, carrier_id, leg_mode FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+    const current = await transaction.get('SELECT id, status, carrier_id, leg_mode, trip_id FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
     if (!current) throw httpError(404, 'Shipment not found.');
     assertSingleLeg(current);
 
@@ -1697,7 +1770,7 @@ async function findSharedShipment(tokenHash) {
 async function dispatchShipment(tenantId, id, carrierId, rate, actorId, details = {}) {
   assertTenant(tenantId);
   return withTransaction(async (transaction) => {
-    const shipment = await transaction.get('SELECT id, status, carrier_id, currency, leg_mode FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+    const shipment = await transaction.get('SELECT id, status, carrier_id, currency, leg_mode, trip_id FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
     if (!shipment) throw httpError(404, 'Shipment not found.');
     assertSingleLeg(shipment);
     if (!['Sourcing', 'Pending Approval'].includes(shipment.status) || shipment.carrier_id) {
@@ -1743,7 +1816,7 @@ async function dispatchShipment(tenantId, id, carrierId, rate, actorId, details 
 async function addTrackingUpdate(tenantId, shipmentId, { location, eta, note }, actorId) {
   assertTenant(tenantId);
   return withTransaction(async (transaction) => {
-    const shipment = await transaction.get('SELECT id, status, leg_mode FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+    const shipment = await transaction.get('SELECT id, status, leg_mode, trip_id FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
     if (!shipment) throw httpError(404, 'Shipment not found.');
     assertSingleLeg(shipment);
     if (!TRACKABLE_STATUSES.includes(shipment.status)) {
@@ -1771,22 +1844,24 @@ async function recordGpsPositions(tenantId, positions, { minIntervalMinutes = 15
   return withTransaction(async (transaction) => {
     const summary = { accepted: 0, skipped: 0, unmatched: 0 };
     for (const position of positions) {
-      const shipment = position.shipmentId
-        ? await transaction.get(
+      // A truck can carry several loads at once (a trip): the position belongs to every one of them.
+      const targets = position.shipmentId
+        ? await transaction.all(
           `SELECT id FROM shipments WHERE id = ? AND tenant_id = ? AND status IN (${TRACKABLE_STATUSES.map(() => '?').join(', ')})`,
           [position.shipmentId, tenantId, ...TRACKABLE_STATUSES]
         )
-        : await transaction.get(
+        : await transaction.all(
           `SELECT id FROM shipments WHERE tenant_id = ? AND truck_plate IS NOT NULL
              AND upper(replace(replace(replace(truck_plate, ' ', ''), '-', ''), '.', '')) = ?
              AND status IN (${TRACKABLE_STATUSES.map(() => '?').join(', ')})
-           ORDER BY id DESC LIMIT 1`,
+           ORDER BY id DESC`,
           [tenantId, normalizePlate(position.truckPlate), ...TRACKABLE_STATUSES]
         );
-      if (!shipment) {
+      if (!targets.length) {
         summary.unmatched += 1;
         continue;
       }
+      for (const shipment of targets) {
       const recent = await transaction.get(
         "SELECT id FROM tracking_updates WHERE shipment_id = ? AND source = 'gps' AND created_at > datetime('now', ?) LIMIT 1",
         [shipment.id, `-${Number(minIntervalMinutes)} minutes`]
@@ -1804,6 +1879,7 @@ async function recordGpsPositions(tenantId, positions, { minIntervalMinutes = 15
       const created = await transaction.get('SELECT created_at FROM tracking_updates WHERE id = ?', [result.id]);
       await transaction.run('UPDATE shipments SET last_location = ?, last_tracked_at = ? WHERE id = ?', [location, created.created_at, shipment.id]);
       summary.accepted += 1;
+      }
     }
     return summary;
   });
@@ -3218,6 +3294,7 @@ async function addLeg(tenantId, shipmentId, input, actorId) {
     const shipment = await tx.get('SELECT shipments.*, carriers.name AS carrierName FROM shipments LEFT JOIN carriers ON carriers.id = shipments.carrier_id WHERE shipments.id = ? AND shipments.tenant_id = ?', [shipmentId, tenantId]);
     if (!shipment) throw httpError(404, 'Shipment not found.');
     if (['Delivered', 'Cancelled'].includes(shipment.status)) throw httpError(409, `A ${shipment.status.toLowerCase()} load cannot get another leg.`);
+    if (shipment.trip_id) throw httpError(409, `This load travels on trip T-${shipment.trip_id}; take it off the trip before splitting it into legs.`);
     if (shipment.leg_mode !== 'multi') {
       if (shipment.carrier_id || ['Dispatched', 'In Transit', 'Exception'].includes(shipment.status)) {
         throw httpError(409, 'A load whose truck is already booked cannot be split into legs. Add the legs before booking.');
@@ -3409,6 +3486,361 @@ async function listLegDocuments(tenantId, legId) {
   );
 }
 
+/* ---------- trips: one truck run carrying several shipments (lib/trips.js has the rules) ---------- */
+// A trip is booked with one carrier for one price; the shipments on it are ordinary loads (customers, documents,
+// invoices, tracking pages) whose carrier, truck and status come from the trip and whose carrier cost is their
+// weight's share of the truck's price. While a load is on a trip its status moves with the trip, not by hand.
+const TRIP_SELECT = `SELECT t.id, t.status, t.carrier_id AS carrierId, carriers.name AS carrierName, carriers.phone AS carrierPhone,
+    t.origin, t.destination, t.scheduled_pickup AS scheduledPickup, t.scheduled_delivery AS scheduledDelivery,
+    t.capacity_weight_kg AS capacityWeightKg, t.capacity_pallets AS capacityPallets, t.cost, t.currency,
+    t.truck_plate AS truckPlate, t.driver_name AS driverName, t.driver_phone AS driverPhone, t.notes,
+    t.last_location AS lastLocation, t.eta, t.last_tracked_at AS lastTrackedAt, t.created_at AS createdAt, t.updated_at AS updatedAt
+  FROM trips t LEFT JOIN carriers ON carriers.id = t.carrier_id`;
+const TRIP_BOOKED = ['Booked', 'In Transit', 'Exception'];
+
+function mapTrip(row) {
+  return {
+    id: row.id, number: `T-${row.id}`, status: row.status, carrierId: row.carrierId ?? null, carrierName: row.carrierName || null,
+    carrierPhone: row.carrierPhone || null, origin: row.origin, destination: row.destination,
+    scheduledPickup: row.scheduledPickup || null, scheduledDelivery: row.scheduledDelivery || null,
+    capacityWeightKg: row.capacityWeightKg === null || row.capacityWeightKg === undefined ? null : Number(row.capacityWeightKg),
+    capacityPallets: row.capacityPallets === null || row.capacityPallets === undefined ? null : Number(row.capacityPallets),
+    cost: row.cost === null || row.cost === undefined ? null : Number(row.cost), currency: row.currency || null,
+    truckPlate: row.truckPlate || null, driverName: row.driverName || null, driverPhone: row.driverPhone || null, notes: row.notes || null,
+    lastLocation: row.lastLocation || null, eta: row.eta || null, lastTrackedAt: row.lastTrackedAt || null, createdAt: row.createdAt, updatedAt: row.updatedAt
+  };
+}
+
+const ALLOCATION_SELECT = `SELECT ts.id, ts.shipment_id AS shipmentId, ts.weight_kg AS weightKg, ts.pallets, ts.pickup_seq AS pickupSeq, ts.drop_seq AS dropSeq,
+    ts.cost_share AS costShare, ts.delivered_at AS deliveredAt, s.customer, s.origin, s.destination, s.status, s.weight,
+    s.customer_rate AS customerRate, s.currency AS shipmentCurrency
+  FROM trip_shipments ts JOIN shipments s ON s.id = ts.shipment_id`;
+
+function mapAllocation(row) {
+  return {
+    shipmentId: `SHP-${row.shipmentId}`, weightKg: Number(row.weightKg), pallets: Number(row.pallets), pickupSeq: row.pickupSeq ?? null, dropSeq: row.dropSeq ?? null,
+    costShare: row.costShare === null || row.costShare === undefined ? null : Number(row.costShare), deliveredAt: row.deliveredAt || null,
+    customer: row.customer, origin: row.origin, destination: row.destination, status: row.status, weight: row.weight,
+    customerRate: row.customerRate === null || row.customerRate === undefined ? null : Number(row.customerRate), currency: row.shipmentCurrency || null
+  };
+}
+
+async function recordTripEvent(tx, tenantId, tripId, fromStatus, toStatus, note, actorId) {
+  await tx.run('INSERT INTO trip_events (tenant_id, trip_id, from_status, to_status, note, actor_id) VALUES (?, ?, ?, ?, ?, ?)',
+    [tenantId, tripId, fromStatus || null, toStatus, note ? String(note).slice(0, 500) : null, actorId || null]);
+}
+
+const activeAllocations = (tx, tenantId, tripId) => tx.all(
+  `${ALLOCATION_SELECT} WHERE ts.trip_id = ? AND ts.tenant_id = ? AND ts.released_at IS NULL ORDER BY COALESCE(ts.pickup_seq, 9999), ts.id`, [tripId, tenantId]
+);
+
+async function loadTrip(tx, tenantId, tripId) {
+  const trip = await tx.get('SELECT * FROM trips WHERE id = ? AND tenant_id = ?', [tripId, tenantId]);
+  if (!trip) throw httpError(404, 'Trip not found.');
+  return trip;
+}
+
+// The truck's price is shared among the loads on it by weight (to the minor unit; the shares add up to the price).
+// Once the trip is booked each load's carrier cost is its share.
+async function recomputeTripShares(tx, tenantId, trip) {
+  const allocations = await tx.all('SELECT id, shipment_id, weight_kg FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL ORDER BY id', [trip.id, tenantId]);
+  if (!allocations.length) return;
+  const priced = trip.cost !== null && trip.cost !== undefined;
+  const shares = priced ? tripsLib.splitMoney(Number(trip.cost), trip.currency, allocations.map((row) => Number(row.weight_kg))) : allocations.map(() => null);
+  for (const [index, row] of allocations.entries()) {
+    await tx.run('UPDATE trip_shipments SET cost_share = ? WHERE id = ?', [shares[index], row.id]);
+    if (TRIP_BOOKED.includes(trip.status)) await tx.run('UPDATE shipments SET rate = ?, currency = ? WHERE id = ? AND tenant_id = ?', [shares[index], trip.currency, row.shipment_id, tenantId]);
+  }
+}
+
+// Puts one load on the trip's truck: carrier, driver, plate, its cost share and the Dispatched status.
+async function bookShipmentOnTrip(tx, tenantId, trip, carrierName, shipmentId, actorId) {
+  const share = await tx.get('SELECT cost_share FROM trip_shipments WHERE trip_id = ? AND shipment_id = ? AND released_at IS NULL', [trip.id, shipmentId]);
+  const before = await tx.get('SELECT status FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+  const result = await tx.run(
+    `UPDATE shipments SET carrier_id = ?, status = 'Dispatched', driver_name = ?, driver_phone = ?, truck_plate = ?, rate = ?, currency = ?, trip_id = ?
+     WHERE id = ? AND tenant_id = ? AND status IN ('New', 'Sourcing', 'Pending Approval')`,
+    [trip.carrier_id, trip.driver_name || null, trip.driver_phone || null, trip.truck_plate || null, share?.cost_share ?? null, trip.currency, trip.id, shipmentId, tenantId]
+  );
+  if (result.changes !== 1) throw httpError(409, `SHP-${shipmentId} is no longer waiting for a truck.`);
+  await recordShipmentEvent(shipmentId, before.status, 'Dispatched', `Booked on trip T-${trip.id} with ${carrierName}${share?.cost_share !== null && share?.cost_share !== undefined ? ` (cost share ${Number(share.cost_share).toFixed(2)} ${trip.currency || ''})` : ''}`.trim(), actorId, tx.run);
+}
+
+// Gives the load back: it waits for a truck again (Sourcing), without carrier, truck or trip.
+async function unbookShipment(tx, tenantId, tripId, shipmentId, actorId, note) {
+  const before = await tx.get('SELECT status FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+  const result = await tx.run(
+    `UPDATE shipments SET carrier_id = NULL, rate = NULL, driver_name = NULL, driver_phone = NULL, truck_plate = NULL, status = 'Sourcing', trip_id = NULL
+     WHERE id = ? AND tenant_id = ? AND status IN ('Dispatched', 'New', 'Sourcing', 'Pending Approval')`, [shipmentId, tenantId]
+  );
+  if (result.changes !== 1) throw httpError(409, `SHP-${shipmentId} is already on the road and cannot be taken off the trip.`);
+  if (before.status !== 'Sourcing') await recordShipmentEvent(shipmentId, before.status, 'Sourcing', note, actorId, tx.run);
+}
+
+async function releaseTripCarrier(tx, trip) {
+  if (trip.carrier_id) await tx.run("UPDATE carriers SET status = 'Available' WHERE id = ? AND status = 'Busy'", [trip.carrier_id]);
+}
+
+async function createTrip(tenantId, input, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const currency = input.currency || (await currencyOf(tenantId, tx.get));
+    const cost = input.cost === null || input.cost === undefined ? null : roundMoney(input.cost, currency);
+    if (input.carrierId && !(await tx.get('SELECT id FROM carriers WHERE id = ? AND tenant_id = ?', [input.carrierId, tenantId]))) throw httpError(404, 'Carrier not found.');
+    const result = await tx.run(
+      `INSERT INTO trips (tenant_id, carrier_id, origin, destination, scheduled_pickup, scheduled_delivery, capacity_weight_kg, capacity_pallets, cost, currency, truck_plate, driver_name, driver_phone, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [tenantId, input.carrierId || null, input.origin, input.destination, input.scheduledPickup || null, input.scheduledDelivery || null,
+        input.capacityWeightKg ?? null, input.capacityPallets ?? null, cost, currency, input.truckPlate || null, input.driverName || null, input.driverPhone || null, input.notes || null]
+    );
+    await recordTripEvent(tx, tenantId, result.id, null, 'Planned', 'Trip created', actorId);
+    return result.id;
+  });
+}
+
+async function getTrip(tenantId, tripId) {
+  assertTenant(tenantId);
+  const row = await get(`${TRIP_SELECT} WHERE t.id = ? AND t.tenant_id = ?`, [tripId, tenantId]);
+  if (!row) return null;
+  const trip = mapTrip(row);
+  const [allocations, events] = await Promise.all([
+    all(`${ALLOCATION_SELECT} WHERE ts.trip_id = ? AND ts.tenant_id = ? AND ts.released_at IS NULL ORDER BY COALESCE(ts.pickup_seq, 9999), ts.id`, [tripId, tenantId]),
+    all('SELECT e.id, e.from_status AS fromStatus, e.to_status AS toStatus, e.note, e.created_at AS createdAt, users.name AS actor FROM trip_events e LEFT JOIN users ON users.id = e.actor_id WHERE e.tenant_id = ? AND e.trip_id = ? ORDER BY e.id DESC LIMIT 100', [tenantId, tripId])
+  ]);
+  const shipments = allocations.map(mapAllocation);
+  const weight = shipments.reduce((sum, item) => sum + item.weightKg, 0);
+  const pallets = shipments.reduce((sum, item) => sum + item.pallets, 0);
+  const sameCurrency = shipments.every((item) => item.customerRate !== null && (item.currency || trip.currency) === trip.currency);
+  const revenue = shipments.length && sameCurrency ? addMoney(trip.currency, ...shipments.map((item) => item.customerRate)) : null;
+  trip.totals = {
+    shipments: shipments.length, weightKg: Math.round(weight * 1000) / 1000, pallets,
+    weightUtilization: trip.capacityWeightKg ? Math.round((weight / trip.capacityWeightKg) * 1000) / 1000 : null,
+    palletUtilization: trip.capacityPallets ? Math.round((pallets / trip.capacityPallets) * 1000) / 1000 : null,
+    revenue, margin: revenue !== null && trip.cost !== null ? addMoney(trip.currency, revenue, -trip.cost) : null
+  };
+  return { trip, shipments, events: events.map((event) => ({ ...event })) };
+}
+
+async function listTrips(tenantId, { status = null, limit = 50 } = {}) {
+  assertTenant(tenantId);
+  const rows = await all(
+    `${TRIP_SELECT.replace('FROM trips t', ", (SELECT COUNT(*) FROM trip_shipments ts WHERE ts.trip_id = t.id AND ts.released_at IS NULL) AS shipmentCount, (SELECT COALESCE(SUM(ts.weight_kg), 0) FROM trip_shipments ts WHERE ts.trip_id = t.id AND ts.released_at IS NULL) AS weightKg FROM trips t")}
+     WHERE t.tenant_id = ? ${status ? 'AND t.status = ?' : ''} ORDER BY t.id DESC LIMIT ?`,
+    status ? [tenantId, status, limit] : [tenantId, limit]
+  );
+  return rows.map((row) => ({ ...mapTrip(row), shipmentCount: Number(row.shipmentCount) || 0, allocatedWeightKg: Number(row.weightKg) || 0 }));
+}
+
+const TRIP_FIELDS = {
+  carrierId: 'carrier_id', origin: 'origin', destination: 'destination', scheduledPickup: 'scheduled_pickup', scheduledDelivery: 'scheduled_delivery',
+  capacityWeightKg: 'capacity_weight_kg', capacityPallets: 'capacity_pallets', cost: 'cost', currency: 'currency', truckPlate: 'truck_plate',
+  driverName: 'driver_name', driverPhone: 'driver_phone', notes: 'notes'
+};
+
+async function updateTrip(tenantId, tripId, changes, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const trip = await loadTrip(tx, tenantId, tripId);
+    if (!tripsLib.EDITABLE_TRIP_STATUSES.includes(trip.status)) throw httpError(409, `A trip that is ${trip.status.toLowerCase()} can no longer be edited.`);
+    if (trip.status === 'Booked' && changes.carrierId !== undefined && changes.carrierId !== trip.carrier_id) throw httpError(409, 'The carrier of a booked trip cannot change. Take it back to planned first.');
+    if (trip.status === 'Booked' && changes.currency !== undefined && changes.currency !== trip.currency) throw httpError(409, "The currency of a booked trip cannot change.");
+    if (changes.carrierId && !(await tx.get('SELECT id FROM carriers WHERE id = ? AND tenant_id = ?', [changes.carrierId, tenantId]))) throw httpError(404, 'Carrier not found.');
+    const used = await tx.get('SELECT COALESCE(SUM(weight_kg), 0) AS weight, COALESCE(SUM(pallets), 0) AS pallets FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL', [tripId, tenantId]);
+    if (changes.capacityWeightKg && Number(used.weight) > changes.capacityWeightKg + 0.0005) throw httpError(409, `The shipments on this trip weigh ${Number(used.weight)} kg, more than ${changes.capacityWeightKg} kg.`);
+    if (changes.capacityPallets && Number(used.pallets) > changes.capacityPallets) throw httpError(409, `The shipments on this trip need ${Number(used.pallets)} pallet places, more than ${changes.capacityPallets}.`);
+    const currency = changes.currency || trip.currency;
+    const sets = [];
+    const params = [];
+    const notes = [];
+    for (const [field, column] of Object.entries(TRIP_FIELDS)) {
+      if (changes[field] === undefined) continue;
+      const value = field === 'cost' && changes.cost !== null ? roundMoney(changes.cost, currency) : changes[field];
+      if (String(value ?? '') === String(trip[column] ?? '')) continue;
+      sets.push(`${column} = ?`);
+      params.push(value);
+      notes.push(field);
+    }
+    if (!sets.length) return { changed: [], shipmentIds: [] };
+    sets.push("updated_at = datetime('now')");
+    await tx.run(`UPDATE trips SET ${sets.join(', ')} WHERE id = ? AND tenant_id = ?`, [...params, tripId, tenantId]);
+    const updated = await loadTrip(tx, tenantId, tripId);
+    if (notes.includes('cost') || notes.includes('currency')) await recomputeTripShares(tx, tenantId, updated);
+    // The truck's details follow onto the loads once it is booked.
+    if (TRIP_BOOKED.includes(updated.status) && notes.some((field) => ['truckPlate', 'driverName', 'driverPhone'].includes(field))) {
+      await tx.run('UPDATE shipments SET truck_plate = ?, driver_name = ?, driver_phone = ? WHERE trip_id = ? AND tenant_id = ?', [updated.truck_plate, updated.driver_name, updated.driver_phone, tripId, tenantId]);
+    }
+    await recordTripEvent(tx, tenantId, tripId, trip.status, trip.status, `Updated: ${notes.join(', ')}`, actorId);
+    const shipmentIds = (await tx.all('SELECT shipment_id FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL', [tripId, tenantId])).map((row) => row.shipment_id);
+    return { changed: notes, shipmentIds };
+  });
+}
+
+// Puts a load on a trip. It must not be booked yet, must fit the truck and (once the trip is booked) is booked with it.
+async function allocateShipment(tenantId, tripId, input, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const trip = await loadTrip(tx, tenantId, tripId);
+    if (!tripsLib.EDITABLE_TRIP_STATUSES.includes(trip.status)) throw httpError(409, 'Loads can only be added while the trip is planned or booked.');
+    const shipment = await tx.get('SELECT id, status, weight, leg_mode, trip_id, carrier_id, customer_rate, currency FROM shipments WHERE id = ? AND tenant_id = ?', [input.shipmentId, tenantId]);
+    if (!shipment) throw httpError(404, 'Shipment not found.');
+    if (shipment.leg_mode === 'multi') throw httpError(409, 'A load with several legs cannot go on a trip.');
+    if (shipment.trip_id) throw httpError(409, `SHP-${shipment.id} is already on trip T-${shipment.trip_id}.`);
+    if (!tripsLib.ALLOCATABLE_SHIPMENT_STATUSES.includes(shipment.status) || shipment.carrier_id) throw httpError(409, `SHP-${shipment.id} already has a truck or is finished. Only loads still waiting for a truck can go on a trip.`);
+    if (shipment.customer_rate !== null && shipment.customer_rate !== undefined && shipment.currency && trip.currency && shipment.currency !== trip.currency) {
+      throw httpError(409, `SHP-${shipment.id} is priced in ${shipment.currency} and this trip in ${trip.currency}.`);
+    }
+    const weightKg = input.weightKg ?? tripsLib.weightToKg(shipment.weight);
+    if (weightKg === null || weightKg === undefined) throw httpError(400, 'The weight of the load could not be read. Give weightKg.');
+    const pallets = input.pallets ?? 0;
+    const used = await tx.get('SELECT COALESCE(SUM(weight_kg), 0) AS weight, COALESCE(SUM(pallets), 0) AS pallets FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL', [tripId, tenantId]);
+    if (trip.capacity_weight_kg && Number(used.weight) + weightKg > Number(trip.capacity_weight_kg) + 0.0005) {
+      throw httpError(409, `It does not fit: the truck takes ${Number(trip.capacity_weight_kg)} kg, ${Number(used.weight)} kg are on it and this load is ${weightKg} kg.`);
+    }
+    if (trip.capacity_pallets && Number(used.pallets) + pallets > Number(trip.capacity_pallets)) {
+      throw httpError(409, `It does not fit: the truck has ${Number(trip.capacity_pallets)} pallet places, ${Number(used.pallets)} are used and this load needs ${pallets}.`);
+    }
+    const next = await tx.get('SELECT COALESCE(MAX(pickup_seq), 0) AS pickup, COALESCE(MAX(drop_seq), 0) AS drop_seq FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL', [tripId, tenantId]);
+    await tx.run(
+      'INSERT INTO trip_shipments (tenant_id, trip_id, shipment_id, weight_kg, pallets, pickup_seq, drop_seq) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [tenantId, tripId, shipment.id, weightKg, pallets, input.pickupSeq ?? Number(next.pickup) + 1, input.dropSeq ?? Number(next.drop_seq) + 1]
+    );
+    await tx.run('UPDATE shipments SET trip_id = ? WHERE id = ? AND tenant_id = ?', [tripId, shipment.id, tenantId]);
+    await recomputeTripShares(tx, tenantId, trip);
+    if (trip.status === 'Booked') {
+      const carrier = await tx.get('SELECT name FROM carriers WHERE id = ?', [trip.carrier_id]);
+      await bookShipmentOnTrip(tx, tenantId, trip, carrier?.name || 'the carrier', shipment.id, actorId);
+    }
+    await recordTripEvent(tx, tenantId, tripId, trip.status, trip.status, `SHP-${shipment.id} added (${weightKg} kg)`, actorId);
+    return { shipmentId: shipment.id, weightKg };
+  });
+}
+
+// Takes a load off a planned or booked trip; it waits for a truck again.
+async function releaseShipment(tenantId, tripId, shipmentId, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const trip = await loadTrip(tx, tenantId, tripId);
+    if (!tripsLib.EDITABLE_TRIP_STATUSES.includes(trip.status)) throw httpError(409, 'Loads can only be taken off while the trip is planned or booked.');
+    const allocation = await tx.get('SELECT id FROM trip_shipments WHERE trip_id = ? AND shipment_id = ? AND tenant_id = ? AND released_at IS NULL', [tripId, shipmentId, tenantId]);
+    if (!allocation) throw httpError(404, 'That load is not on this trip.');
+    await tx.run("UPDATE trip_shipments SET released_at = datetime('now'), cost_share = NULL WHERE id = ?", [allocation.id]);
+    await unbookShipment(tx, tenantId, tripId, shipmentId, actorId, `Taken off trip T-${tripId}`);
+    await recomputeTripShares(tx, tenantId, trip);
+    await recordTripEvent(tx, tenantId, tripId, trip.status, trip.status, `SHP-${shipmentId} taken off`, actorId);
+    return { shipmentId };
+  });
+}
+
+// Planned > Booked > In Transit > (each load delivered) > Delivered; Exception and back; cancel or un-book before it leaves.
+async function setTripStatus(tenantId, tripId, status, { note = null } = {}, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const trip = await loadTrip(tx, tenantId, tripId);
+    if (status === 'Delivered') {
+      const open = await tx.get("SELECT COUNT(*) AS total FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL AND delivered_at IS NULL", [tripId, tenantId]);
+      if (trip.status !== 'In Transit' || Number(open.total) > 0) throw httpError(409, 'A trip is delivered when every load on it is delivered. Deliver the loads one by one.');
+    } else if (!(tripsLib.TRIP_TRANSITIONS[trip.status] || []).includes(status)) {
+      throw httpError(409, `Cannot move a trip from ${trip.status} to ${status}.`);
+    }
+    const allocations = await tx.all('SELECT shipment_id, delivered_at FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL ORDER BY id', [tripId, tenantId]);
+    const moved = [];
+    const carrier = trip.carrier_id ? await tx.get('SELECT id, name, status FROM carriers WHERE id = ? AND tenant_id = ?', [trip.carrier_id, tenantId]) : null;
+
+    if (status === 'Booked') {
+      if (!carrier) throw httpError(409, 'Choose the carrier before booking the trip.');
+      if (!allocations.length) throw httpError(409, 'Put at least one load on the trip before booking it.');
+      if (carrier.status !== 'Available') throw httpError(409, 'The carrier is not available.');
+      const claimed = await tx.run("UPDATE carriers SET status = 'Busy' WHERE id = ? AND status = 'Available'", [carrier.id]);
+      if (claimed.changes !== 1) throw httpError(409, 'The carrier is no longer available.');
+      await recomputeTripShares(tx, tenantId, { ...trip, status: 'Booked' });
+      for (const row of allocations) {
+        await bookShipmentOnTrip(tx, tenantId, trip, carrier.name, row.shipment_id, actorId);
+        moved.push({ shipmentId: row.shipment_id, status: 'Dispatched' });
+      }
+    } else if (status === 'Planned' || status === 'Cancelled') {
+      if (trip.status === 'Booked') {
+        // The loads wait for a truck again and the carrier is free.
+        for (const row of allocations) {
+          await unbookShipment(tx, tenantId, tripId, row.shipment_id, actorId, status === 'Planned' ? `Trip T-${tripId} taken back to planned` : `Trip T-${tripId} cancelled`);
+          moved.push({ shipmentId: row.shipment_id, status: 'Sourcing' });
+        }
+        await releaseTripCarrier(tx, trip);
+      }
+      if (status === 'Planned') {
+        // The loads stay on the planned trip.
+        await tx.run('UPDATE shipments SET trip_id = ? WHERE id IN (SELECT shipment_id FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL) AND tenant_id = ?', [tripId, tripId, tenantId, tenantId]);
+      } else {
+        await tx.run("UPDATE trip_shipments SET released_at = datetime('now'), cost_share = NULL WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL", [tripId, tenantId]);
+        await tx.run('UPDATE shipments SET trip_id = NULL WHERE trip_id = ? AND tenant_id = ?', [tripId, tenantId]);
+      }
+    } else if (status === 'In Transit' || status === 'Exception') {
+      if (status === 'In Transit' && trip.status === 'Booked' && !allocations.length) throw httpError(409, 'The trip has no loads.');
+      const from = status === 'In Transit' ? (trip.status === 'Booked' ? 'Dispatched' : 'Exception') : 'In Transit';
+      for (const row of allocations) {
+        if (row.delivered_at) continue;
+        const result = await tx.run('UPDATE shipments SET status = ? WHERE id = ? AND tenant_id = ? AND status = ?', [status, row.shipment_id, tenantId, from]);
+        if (result.changes === 1) {
+          await recordShipmentEvent(row.shipment_id, from, status, note || `Trip T-${tripId}: ${status}`, actorId, tx.run);
+          moved.push({ shipmentId: row.shipment_id, status });
+        }
+      }
+    }
+    await tx.run("UPDATE trips SET status = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ?", [status, tripId, tenantId]);
+    await recordTripEvent(tx, tenantId, tripId, trip.status, status, note, actorId);
+    return { id: tripId, status, moved };
+  });
+}
+
+// One load of the trip is delivered. When the last one is, the trip is delivered and its carrier is free again.
+async function deliverTripShipment(tenantId, tripId, shipmentId, { note = null } = {}, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const trip = await loadTrip(tx, tenantId, tripId);
+    if (trip.status !== 'In Transit') throw httpError(409, 'Loads are delivered while the trip is in transit.');
+    const allocation = await tx.get('SELECT id, delivered_at FROM trip_shipments WHERE trip_id = ? AND shipment_id = ? AND tenant_id = ? AND released_at IS NULL', [tripId, shipmentId, tenantId]);
+    if (!allocation) throw httpError(404, 'That load is not on this trip.');
+    if (allocation.delivered_at) throw httpError(409, 'That load is already delivered.');
+    const result = await tx.run("UPDATE shipments SET status = 'Delivered' WHERE id = ? AND tenant_id = ? AND status = 'In Transit'", [shipmentId, tenantId]);
+    if (result.changes !== 1) throw httpError(409, 'That load is not in transit.');
+    await tx.run("UPDATE trip_shipments SET delivered_at = datetime('now') WHERE id = ?", [allocation.id]);
+    await recordShipmentEvent(shipmentId, 'In Transit', 'Delivered', note || `Delivered from trip T-${tripId}`, actorId, tx.run);
+    const open = await tx.get('SELECT COUNT(*) AS total FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL AND delivered_at IS NULL', [tripId, tenantId]);
+    let tripStatus = trip.status;
+    if (Number(open.total) === 0) {
+      tripStatus = 'Delivered';
+      await tx.run("UPDATE trips SET status = 'Delivered', updated_at = datetime('now') WHERE id = ?", [tripId]);
+      await releaseTripCarrier(tx, trip);
+      await recordTripEvent(tx, tenantId, tripId, 'In Transit', 'Delivered', 'Every load delivered', actorId);
+    } else {
+      await recordTripEvent(tx, tenantId, tripId, 'In Transit', 'In Transit', `SHP-${shipmentId} delivered`, actorId);
+    }
+    return { shipmentId, tripStatus };
+  });
+}
+
+// A position for the truck: it is the position of every load still on it.
+async function addTripTracking(tenantId, tripId, { location, eta, note }, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const trip = await loadTrip(tx, tenantId, tripId);
+    if (!tripsLib.TRACKABLE_TRIP_STATUSES.includes(trip.status)) throw httpError(409, `Location updates are only possible while a trip is ${tripsLib.TRACKABLE_TRIP_STATUSES.join(', ')}.`);
+    const onBoard = await tx.all('SELECT shipment_id FROM trip_shipments WHERE trip_id = ? AND tenant_id = ? AND released_at IS NULL AND delivered_at IS NULL', [tripId, tenantId]);
+    let stamp = null;
+    for (const row of onBoard) {
+      const result = await tx.run(
+        "INSERT INTO tracking_updates (shipment_id, actor_id, location, eta, note, source) VALUES (?, ?, ?, ?, ?, 'manual')",
+        [row.shipment_id, actorId || null, location, eta || null, note || null]
+      );
+      const created = await tx.get('SELECT created_at FROM tracking_updates WHERE id = ?', [result.id]);
+      stamp = created.created_at;
+      await tx.run('UPDATE shipments SET last_location = ?, eta = COALESCE(?, eta), last_tracked_at = ? WHERE id = ? AND tenant_id = ?', [location, eta || null, created.created_at, row.shipment_id, tenantId]);
+    }
+    await tx.run("UPDATE trips SET last_location = ?, eta = COALESCE(?, eta), last_tracked_at = COALESCE(?, datetime('now')) WHERE id = ?", [location, eta || null, stamp, tripId]);
+    return { tripId, location, eta: eta || null, loads: onBoard.length };
+  });
+}
+
+
 /* ---------- durable background jobs (lib/job-queue.js runs them) ---------- */
 // A job is one unit of background work. It is saved before it runs, retried with growing delays when it
 // fails, never added twice under the same idempotency key, and kept as a "dead" row when it gives up.
@@ -3511,6 +3943,15 @@ async function retryJob(tenantId, id) {
 
 module.exports = {
   isPostgres,
+  createTrip,
+  getTrip,
+  listTrips,
+  updateTrip,
+  allocateShipment,
+  releaseShipment,
+  setTripStatus,
+  deliverTripShipment,
+  addTripTracking,
   getShipmentLegs,
   getLeg,
   setLegPayment,

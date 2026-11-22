@@ -62,3 +62,29 @@ NEXUS only prepares tasks for people; it never sends or books anything.
 - The whole-load quiet-truck check and the risk watch look at classic loads only.
 
 Finance: a classic load owes one carrier for the load; a multi-leg load owes each leg's carrier for its own delivered leg. `GET /api/finance/summary` adds `openLegs` (unpaid delivered legs, oldest first) and counts those legs in `payable` / `payableLoads` (other currencies stay apart as before). The whole-load "carrier paid" switch is refused on a multi-leg load (`409`); mark each leg paid instead. The load's own carrier-paid stamp is set when every priced leg is paid. A cancelled load owes nothing.
+
+## Trips (LTL): one truck, several shipments
+
+A **trip** is one truck run booked with one carrier for one price. Several ordinary shipments (customers, documents, invoices,
+public tracking pages) travel on it. While a shipment is on a trip, its carrier, truck, driver, cost and status come from the trip;
+the classic status, dispatch and location actions on that shipment answer `409`.
+
+| Method and path | What it does |
+|---|---|
+| `GET /api/v2/trips` | The company's trips (`?status=Planned`); each with its load count and weight |
+| `POST /api/v2/trips` | New planned trip: `origin`, `destination`, optional `carrierId`, `capacityWeightKg`, `capacityPallets`, `cost` (+ `currency`), `scheduledPickup` / `scheduledDelivery`, `truckPlate`, `driverName`, `driverPhone`, `notes` |
+| `GET /api/v2/trips/:id` | The trip, its loads (weight, pallets, cost share, stops), totals (weight and pallet use, customers' revenue, margin) and history |
+| `PATCH /api/v2/trips/:id` | Edit a planned or booked trip (not the carrier or currency once booked; capacity cannot go below what is on it) |
+| `POST /api/v2/trips/:id/shipments` | Put a load on the trip: `{ shipmentId: "SHP-12", weightKg?, pallets? }` (weight defaults to the load's own weight) |
+| `DELETE /api/v2/trips/:id/shipments/:shipmentId` | Take a load off a planned or booked trip; it waits for a truck again |
+| `POST /api/v2/trips/:id/status` | `Booked`, `Planned` (take it back), `In Transit`, `Exception`, `Cancelled` |
+| `POST /api/v2/trips/:id/shipments/:shipmentId/deliver` | One load is delivered; the last one delivers the trip |
+| `POST /api/v2/trips/:id/tracking` | `{ location, eta?, note? }` is the position of every load still on the truck |
+
+Rules:
+- Only loads still waiting for a truck (New, Sourcing, Pending Approval, no carrier, not multi-leg) can go on a trip, and they must fit the truck's weight and pallet capacity. A load priced in another currency than the trip is refused.
+- The truck's price is shared among the loads **by weight**, to the minor unit, so the shares always add up to the price. Once the trip is booked each load's carrier cost (`rate`) is its share, so margins and Finance work per load as before: the carrier is owed each delivered load's share and is paid load by load.
+- Booking needs a carrier and at least one load, and makes the carrier busy; it is free again when the trip is delivered, cancelled or taken back to planned. Adding a load to a booked trip books it at once; a trip that has left takes no more loads.
+- GPS positions that match the truck's plate reach every load on the truck.
+- Booking, taking back, cancelling, editing and putting loads on need `shipments:dispatch`; the other status changes and deliveries need `shipments:status`; positions need `shipments:track`.
+- NEXUS does not draft a single booking message for the whole trip yet (each load's own events run as usual); consolidation suggestions are planned.
