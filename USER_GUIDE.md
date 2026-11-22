@@ -188,6 +188,19 @@ Open the load and look at **Route legs**:
 
 You enter all prices, numbers and positions yourself: Veyra is not connected to shipping lines, airlines or rail operators.
 
+## Trips: one truck, several loads (LTL)
+
+Use **Trips** when one truck carries part loads for several customers.
+
+1. **+ New trip**: enter where it goes, the carrier, the truck price, and how much the truck takes (weight and pallet places).
+2. Open the trip and **Put a load on this trip**: only loads that still wait for a truck appear. A load that does not fit the truck is refused with the reason.
+3. **Book the truck**: every load gets the carrier, truck and driver, and becomes *Dispatched*. The truck price is shared among the loads **by weight**, so each load shows its **cost share**; margins and Finance then work load by load.
+4. **Start** when the truck leaves. **Add position** gives one position for every load on the truck. **Report problem** / **Resume** for trouble on the road.
+5. When a customer receives their goods press **Delivered** on that load. When the last load is delivered the trip is complete and the carrier is free.
+- Before the truck leaves you can **Take off** a load (it waits for a truck again), add another, or **Take back to planned** / **Cancel trip**.
+- A load on a trip is marked *Trip T-n* in Shipments; its status, truck and position follow the trip, so the usual "Move to" and "Dispatch" controls are hidden for it.
+- The carrier is owed each load's cost share, and you mark them paid load by load in Billing.
+
 ## Not available yet
 
 - Live border queues (no free open source; entered by hand for now).

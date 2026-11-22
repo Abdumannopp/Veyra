@@ -258,3 +258,12 @@ test('what may not go on a trip, and who can see trips', async () => {
   assert.equal((await json(admin, 'POST', '/api/v2/trips', { origin: 'A' })).status, 400);
   assert.equal((await json(admin, 'POST', '/api/v2/trips', { origin: 'A', destination: 'B', carrierId: 999999 })).status, 404);
 });
+
+test('the screens for trips are served and wired into the page; loads report their trip', async () => {
+  const page = await (await fetch(`${base}/`)).text();
+  for (const marker of ['data-view="trips"', 'id="tripsView"', 'data-nav="trips"', 'src="trips.js"', 'href="trips.css"']) assert.ok(page.includes(marker), marker);
+  for (const file of ['trips.js', 'trips.css']) assert.equal((await fetch(`${base}/${file}`)).status, 200, file);
+  const listed = (await json(admin, 'GET', '/api/admin/shipments')).body.shipments;
+  assert.equal(listed.find((shipment) => shipment.id === s1).tripId, tripId, 'a load on a trip says which one');
+  assert.ok(listed.some((shipment) => shipment.tripId === null), 'a load on no trip has tripId null');
+});

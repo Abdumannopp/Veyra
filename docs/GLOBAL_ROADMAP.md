@@ -28,7 +28,7 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 |---|---|---|
 | 3.0 | Existing FTL on legs: a classic load is one ROAD leg (nothing rewritten, `/api/*` unchanged) | Done (Phase 2) |
 | 3.1 | Trips: one truck run carrying several shipments; capacity (kg and pallets), the truck price shared by weight, loads move with the trip, one position and GPS for all loads on it, `/api/v2/trips` (see `docs/API_V2.md`) | Done |
-| 3.2 | Screens for trips (plan a trip, put loads on it, book, track, deliver one by one) | Next |
+| 3.2 | Screens for trips: a Trips page with load bars, a trip page (facts, loads with cost share, add and take off loads, book, start, report a problem, add a position, take back, cancel, deliver one by one); loads on a trip are marked and their classic status controls hidden | Done |
 | 3.3 | NEXUS for trips (one booking message to the carrier with the whole manifest) and consolidation suggestions (LTL loads on the same lane that fit one truck) | Planned |
 
 ## Phase 4 — Ocean, rail, air

@@ -7,7 +7,7 @@
    fetchDashboardData, loadAdminConsole.
    ========================================================= */
 (function () {
-  const VIEWS = ['dashboard', 'shipments', 'tracking', 'quotes', 'inbox', 'command', 'automation', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
+  const VIEWS = ['dashboard', 'shipments', 'trips', 'tracking', 'quotes', 'inbox', 'command', 'automation', 'carriers', 'agents', 'analytics', 'billing', 'settings'];
   const STATUS_ORDER = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
   const STATUS_COLORS = {
     New: '#2563ff',
@@ -153,7 +153,7 @@
     const { view, params } = parseHash();
     state.view = view;
     state.params = params;
-    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', tracking: 'Global Tracking', quotes: 'Quotes', command: 'AI Command Center', automation: 'Automation Studio', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
+    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', trips: 'Trips', tracking: 'Global Tracking', quotes: 'Quotes', command: 'AI Command Center', automation: 'Automation Studio', inbox: 'Inbox & tasks', carriers: 'Carriers', agents: 'AI Agents', analytics: 'Analytics', billing: 'Billing', settings: 'Team & settings' };
     document.title = `${TITLES[view]} | Veyra`;
 
     document.querySelectorAll('.view[data-view]').forEach((node) => node.classList.toggle('hidden', node.dataset.view !== view));
@@ -195,6 +195,9 @@
     } else if (view === 'automation') {
       if (search) search.value = '';
       renderStudio();
+    } else if (view === 'trips') {
+      if (search) search.value = '';
+      window.VeyraTrips?.render();
     } else if (view === 'tracking') {
       if (search) search.value = '';
       renderTracking();
@@ -338,7 +341,8 @@
         const actions = el('div', { class: 'row-actions' }, [
           el('button', { class: 'table-detail-button', type: 'button', onclick: () => openShipmentDetails(shipment.id) }, 'View')
         ]);
-        const multi = shipment.legMode === 'multi';
+        // A load with several legs or on a trip is moved through those, not by hand.
+        const multi = shipment.legMode === 'multi' || Boolean(shipment.tripId);
         const options = multi ? [] : allowedShipmentStatuses(shipment.status);
         if (canStatus && options.length) {
           const select = el('select', {
@@ -354,7 +358,8 @@
           el('td', {}, [
             el('button', { class: 'link-btn id-link', type: 'button', onclick: () => openShipmentDetails(shipment.id) }, shipment.id),
             shipment.reference ? el('small', { class: 'cell-sub', text: shipment.reference }) : null,
-            multi ? el('small', { class: 'cell-sub', text: 'Multi-leg' }) : null
+            shipment.legMode === 'multi' ? el('small', { class: 'cell-sub', text: 'Multi-leg' }) : null,
+            shipment.tripId ? el('small', { class: 'cell-sub', text: `Trip T-${shipment.tripId}` }) : null
           ]),
           el('td', { text: shipment.customer }),
           el('td', {}, [el('span', { text: shipment.origin }), el('small', { class: 'cell-sub', text: `→ ${shipment.destination}` })]),
@@ -2437,6 +2442,7 @@
     if (state.view === 'agents') await renderAgents();
     if (state.view === 'quotes') await renderQuotes();
     if (state.view === 'command') await renderCommand();
+    if (state.view === 'trips') await window.VeyraTrips?.render();
     if (state.view === 'tracking') await renderTracking();
     if (state.view === 'automation') await renderStudio(true);
     if (state.view === 'billing') await renderBilling();

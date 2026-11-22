@@ -1,0 +1,22 @@
+/* Trips (LTL): the list, the load bar and the trip page. */
+.trips-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+.trips-empty { padding: 18px 4px; }
+.trip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.trip-card { text-align: left; font: inherit; color: inherit; border: 1px solid var(--line-2); border-radius: 14px; background: var(--surface); padding: 14px 16px; cursor: pointer; display: grid; gap: 8px; }
+.trip-card:hover, .trip-card:focus-visible { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59, 91, 255, .14); outline: none; }
+.trip-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.trip-route { font-weight: 600; color: var(--text-strong); }
+.trip-meta { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.trip-title { margin: 6px 0 14px; font-size: 20px; color: var(--text-strong); }
+.trip-bars { display: grid; gap: 10px; margin: 6px 0 14px; }
+.trip-bar-row { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.trip-bar-label { display: flex; justify-content: space-between; gap: 8px; }
+.trip-bar { height: 8px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
+.trip-bar span { display: block; height: 100%; border-radius: 99px; background: var(--blue); }
+.trip-bar.full span { background: var(--amber, #f59e0b); }
+.trip-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.trip-form, .trip-add { margin: 0 0 16px; }
+.trip-form label > span:first-child, .trip-add label > span:first-child { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.trip-facts { margin-bottom: 14px; }
+.status-badge.planned { background: rgba(100, 116, 139, .2); color: #64748b; }
+.status-badge.booked { background: rgba(167, 139, 250, .2); color: #7c6ad8; }

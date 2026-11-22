@@ -61,6 +61,23 @@
     if (!box) return;
     view.shipment = shipment;
     view.form = null;
+    // A load on a trip is moved with the trip: show where it is, not the legs.
+    if (shipment.tripId) {
+      document.getElementById('legsCount').textContent = `Trip T-${shipment.tripId}`;
+      const open = text('button', 'btn btn-primary small', 'Open the trip');
+      open.type = 'button';
+      open.addEventListener('click', () => {
+        document.getElementById('shipmentDetailsModal')?.classList.add('hidden');
+        window.location.hash = `#/trips?trip=${shipment.tripId}`;
+      });
+      document.getElementById('legsBody').replaceChildren(
+        text('p', 'muted', `This load travels on trip T-${shipment.tripId} with its truck, driver and carrier cost share. Its status and position follow the trip.`),
+        open
+      );
+      document.getElementById('legAdd').classList.add('hidden');
+      box.classList.remove('hidden');
+      return;
+    }
     try {
       view.data = await api('GET', `/api/v2/shipments/${encodeURIComponent(shipment.id)}`);
     } catch (error) {
