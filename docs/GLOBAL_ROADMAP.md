@@ -34,6 +34,12 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 ## Phase 4 — Ocean, rail, air
 `OceanLegDetails` (vessel, voyage, container, B/L, ports), `RailLegDetails` (wagon, station, CIM/SMGS), `AirLegDetails` (AWB, flight, airports, chargeable weight). Integrations are marked as simulated until a real provider is connected.
 
+| Step | What | State |
+|---|---|---|
+| 4.1 | Ocean, air and rail details with industry checks: ISO 6346 container numbers, container types, seal and booking; AWB check digit, IATA airports, pieces, weights and chargeable weight; UIC / 1520 wagon numbers, CIM/SMGS notes, border station. Screens show the new fields | Done |
+| 4.2 | Schedules and delays: planned vs. estimated times per leg, a delay flag and NEXUS tasks for late legs and missed handovers | Next |
+| 4.3 | Mode documents (B/L, AWB, CIM/SMGS) linked to their leg and read by VAULT | Planned |
+
 ## Phase 5 — Multimodal, cold chain, warehouse, last mile
 Sequential legs with handovers; temperature ranges and excursions; warehouse receiving and storage; last-mile stops and proof of delivery.
 

@@ -35,11 +35,21 @@ carries an offset), `reference` (booking, bill of lading, AWB, CMR number) and `
 | Mode | Details |
 |---|---|
 | ROAD | truckPlate, driverName, driverPhone, equipment |
-| OCEAN | vessel, voyage, containerNo, billOfLading, portOfLoading, portOfDischarge |
-| AIR | flightNumber, airWaybill, airportFrom, airportTo |
-| RAIL | trainNo, wagonNo, terminalFrom, terminalTo |
+| OCEAN | shippingLine, bookingNo, vessel, voyage, containerNo, containerType, sealNo, billOfLading, portOfLoading, portOfDischarge |
+| AIR | airline, flightNumber, airWaybill, airportFrom, airportTo, pieces, grossWeightKg, volumeM3 (+ `chargeableWeightKg`, worked out) |
+| RAIL | trainNo, wagonNo, consignmentNoteType, consignmentNoteNo, terminalFrom, terminalTo, borderStation |
 | WAREHOUSE | warehouseName, storageDays |
 | LAST_MILE | courier, parcelNo |
+
+Checked and normalised (a wrong value is refused with the reason, 400):
+- `containerNo`: ISO 6346, 4 letters (the 4th U, J or Z) and 7 digits with the check digit, e.g. `CSQU3054383`. Spaces and dashes are removed.
+- `containerType`: one of 20GP, 40GP, 40HC, 45HC, 20RF, 40RF, 40HR, 20OT, 40OT, 20FR, 40FR, 20TK.
+- `airWaybill`: 11 digits (airline prefix, serial, mod-7 check digit), stored as `176-12345675`.
+- `flightNumber`: airline code and number, stored without spaces (`TK371`). `airportFrom`/`airportTo`: 3-letter IATA codes.
+- `pieces` (whole number), `grossWeightKg`, `volumeM3` (numbers). `chargeableWeightKg` = the larger of the gross weight and the volume weight (1 m³ = 166.67 kg), rounded up to 0.5 kg; it cannot be typed.
+- `wagonNo`: 8 digits (1520 gauge) or 12 digits (UIC) with the check digit. `consignmentNoteType`: CIM, SMGS or CIM/SMGS.
+
+All of this is entered by people; there is no connection to a shipping line, airline or railway.
 
 ## Leg status
 
