@@ -734,7 +734,7 @@ async function loadAdminConsole() {
           const statusClass = String(shipment.status || '').toLowerCase().replace(/\s+/g, '-');
           shipmentMeta.append(createTextElement('span', `status-badge ${statusClass}`, shipment.status));
 
-          const statusOptions = shipment.legMode === 'multi' ? [] : allowedShipmentStatuses(shipment.status);
+          const statusOptions = shipment.legMode === 'multi' || shipment.tripId ? [] : allowedShipmentStatuses(shipment.status);
           if (statusOptions.length) {
             const statusSelect = document.createElement('select');
             statusSelect.className = 'status-select';
@@ -2091,7 +2091,7 @@ async function openShipmentDetails(shipmentId) {
 
     const trackingForm = document.getElementById('trackingForm');
     // A load with several legs is tracked per leg (see the legs section).
-    const canTrack = hasPermission('shipments:track') && TRACKABLE_STATUSES.includes(shipment.status) && shipment.legMode !== 'multi';
+    const canTrack = hasPermission('shipments:track') && TRACKABLE_STATUSES.includes(shipment.status) && shipment.legMode !== 'multi' && !shipment.tripId;
     trackingForm?.classList.toggle('hidden', !canTrack);
     const trackingMessage = document.getElementById('trackingFormMessage');
     if (trackingMessage) trackingMessage.textContent = '';

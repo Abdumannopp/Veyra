@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="legs.css" />
+    <link rel="stylesheet" href="trips.css" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   </head>
   <body>
@@ -155,6 +156,7 @@
           <nav>
             <a class="active" href="#/dashboard" data-nav="dashboard"><svg class="ico"><use href="#i-home" /></svg>Dashboard</a>
             <a href="#/shipments" data-nav="shipments"><svg class="ico"><use href="#i-truck" /></svg>Shipments</a>
+            <a href="#/trips" data-nav="trips"><svg class="ico"><use href="#i-box" /></svg>Trips</a>
             <a href="#/tracking" data-nav="tracking"><svg class="ico"><use href="#i-target" /></svg>Tracking</a>
             <a href="#/quotes" data-nav="quotes"><svg class="ico"><use href="#i-doc" /></svg>Quotes</a>
             <a href="#/shipments?status=Pending%20Approval" data-nav="approvals"><svg class="ico"><use href="#i-check-square" /></svg>Approvals <span class="nav-badge hidden" id="navApprovalsBadge">0</span></a>
@@ -356,6 +358,17 @@
               </div>
             </div>
             <div class="view-body" id="trackingView"></div>
+          </div>
+
+          <!-- ===== Trips (LTL) ===== -->
+          <div class="view hidden" data-view="trips">
+            <div class="board-head">
+              <div>
+                <h2 class="head-label">Trips</h2>
+                <div class="head-sub">One truck, several loads. Put loads on a trip, book the truck once, and the price is shared by weight.</div>
+              </div>
+            </div>
+            <div class="view-body" id="tripsView"></div>
           </div>
 
           <!-- ===== Quotes ===== -->
@@ -978,5 +991,6 @@
     <script src="assistant.js"></script>
     <script src="views.js"></script>
     <script src="legs.js"></script>
+    <script src="trips.js"></script>
   </body>
 </html>

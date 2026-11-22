@@ -453,6 +453,7 @@ function serializeShipment(shipment) {
     status: shipment.status || 'Pending Approval',
     reference: shipment.reference,
     legMode: shipment.leg_mode || 'single',
+    tripId: shipment.trip_id || null,
     carrier: shipment.carrier_id,
     carrierId: shipment.carrier_id,
     rate: shipment.rate,

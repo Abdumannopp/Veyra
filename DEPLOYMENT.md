@@ -202,7 +202,7 @@ One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migra
 - Shipments and `/api/*` are unchanged. While a shipment is on a trip its status, carrier and cost follow the trip, and the classic status, dispatch and location actions answer `409` for it.
 - The truck's price is shared among the loads by weight (to the minor unit); each delivered load owes the carrier its share in Finance.
 - A GPS position that matches a truck's plate now reaches every active load on that truck (before, only the newest load).
-- Screens for trips are not built yet (API only).
+- Screens: **Trips** in the side menu (plan a trip, put loads on it, book the truck, start, add a position, deliver load by load).
 
 ## Shipment legs (API v2)
 
