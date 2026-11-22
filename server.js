@@ -151,7 +151,16 @@ const {
   addLegTracking,
   setDocumentLeg,
   listLegDocuments,
-  setLegPayment
+  setLegPayment,
+  createTrip,
+  getTrip,
+  listTrips,
+  updateTrip,
+  allocateShipment,
+  releaseShipment,
+  setTripStatus,
+  deliverTripShipment,
+  addTripTracking
 } = require('./database');
 const aiGateway = require('./ai/gateway');
 const flowAgent = require('./agents/flow');
@@ -167,6 +176,7 @@ const { runAsSystem, runAsTenant } = require('./lib/tenant-context');
 const { addMoney } = require('./lib/money');
 const timeLib = require('./lib/time');
 const legsLib = require('./lib/legs');
+const tripsLib = require('./lib/trips');
 const jobQueue = require('./lib/job-queue');
 const plans = require('./lib/plans');
 const paddle = require('./integrations/paddle');
@@ -3528,6 +3538,161 @@ app.put('/api/v2/documents/:id/leg', authMiddleware, requirePermission('shipment
     return res.json({ success: true, document: await setDocumentLeg(req.user.tenantId, documentId, legId) });
   } catch (error) {
     return sendError(res, error, 'The document could not be filed.', 'v2 document leg');
+  }
+});
+
+/* =========================================================
+   Trips (LTL): one truck run that carries several shipments. See docs/API_V2.md.
+   ========================================================= */
+function tripInput(res, body, options) {
+  try {
+    return tripsLib.readTripInput(body, { parseMoney, ...options });
+  } catch (error) {
+    if (error instanceof legsLib.LegInputError) {
+      res.status(400).json({ success: false, message: error.message });
+      return null;
+    }
+    throw error;
+  }
+}
+
+async function sendTrip(res, tenantId, tripId, status = 200, extra = {}) {
+  const data = await getTrip(tenantId, tripId);
+  if (!data) return res.status(404).json({ success: false, message: 'Trip not found.' });
+  return res.status(status).json({ success: true, ...data, ...extra });
+}
+
+// Loads on a trip change status with it; NEXUS and the company's rules hear about each one.
+const emitTripMoves = (tenantId, moved) => moved.forEach(({ shipmentId, status }) => nexus.emit('shipment.status', { tenantId, shipmentId, status }));
+
+app.get('/api/v2/trips', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const status = tripsLib.TRIP_STATUSES.includes(req.query.status) ? req.query.status : null;
+    return res.json({ success: true, trips: await listTrips(req.user.tenantId, { status, limit: 100 }) });
+  } catch (error) {
+    return sendError(res, error, 'Trips could not be loaded.', 'v2 trips');
+  }
+});
+
+app.post('/api/v2/trips', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
+  try {
+    const input = tripInput(res, req.body || {});
+    if (!input) return null;
+    const id = await createTrip(req.user.tenantId, input, req.user.id);
+    audit(req, 'trip.created', `T-${id}: ${input.origin} → ${input.destination}`);
+    return await sendTrip(res, req.user.tenantId, id, 201);
+  } catch (error) {
+    return sendError(res, error, 'The trip could not be created.', 'v2 create trip');
+  }
+});
+
+app.get('/api/v2/trips/:id', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const id = positiveId(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: 'A valid trip is required.' });
+    return await sendTrip(res, req.user.tenantId, id);
+  } catch (error) {
+    return sendError(res, error, 'The trip could not be loaded.', 'v2 trip');
+  }
+});
+
+app.patch('/api/v2/trips/:id', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
+  try {
+    const id = positiveId(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: 'A valid trip is required.' });
+    const input = tripInput(res, req.body || {}, { partial: true });
+    if (!input) return null;
+    const result = await updateTrip(req.user.tenantId, id, input, req.user.id);
+    if (result.changed.length) audit(req, 'trip.updated', `T-${id}: ${result.changed.join(', ')}`);
+    return await sendTrip(res, req.user.tenantId, id, 200, { changed: result.changed });
+  } catch (error) {
+    return sendError(res, error, 'The trip could not be updated.', 'v2 update trip');
+  }
+});
+
+app.post('/api/v2/trips/:id/shipments', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
+  try {
+    const id = positiveId(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: 'A valid trip is required.' });
+    let input;
+    try {
+      input = tripsLib.readAllocationInput(req.body || {});
+    } catch (error) {
+      if (error instanceof legsLib.LegInputError) return res.status(400).json({ success: false, message: error.message });
+      throw error;
+    }
+    const result = await allocateShipment(req.user.tenantId, id, input, req.user.id);
+    audit(req, 'trip.allocated', `T-${id}: SHP-${result.shipmentId} (${result.weightKg} kg)`);
+    const trip = await getTrip(req.user.tenantId, id);
+    if (trip?.trip.status === 'Booked') emitTripMoves(req.user.tenantId, [{ shipmentId: result.shipmentId, status: 'Dispatched' }]);
+    return await sendTrip(res, req.user.tenantId, id, 201);
+  } catch (error) {
+    return sendError(res, error, 'The load could not be added to the trip.', 'v2 allocate');
+  }
+});
+
+app.delete('/api/v2/trips/:id/shipments/:shipmentId', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
+  try {
+    const id = positiveId(req.params.id);
+    const shipmentId = parseShipmentId(req.params.shipmentId);
+    if (!id || !shipmentId) return res.status(400).json({ success: false, message: 'A valid trip and shipment are required.' });
+    await releaseShipment(req.user.tenantId, id, shipmentId, req.user.id);
+    audit(req, 'trip.released', `T-${id}: SHP-${shipmentId}`);
+    return await sendTrip(res, req.user.tenantId, id);
+  } catch (error) {
+    return sendError(res, error, 'The load could not be taken off the trip.', 'v2 release');
+  }
+});
+
+app.post('/api/v2/trips/:id/status', authMiddleware, async (req, res) => {
+  try {
+    const id = positiveId(req.params.id);
+    const status = String(req.body?.status || '');
+    if (!id || !tripsLib.TRIP_STATUSES.includes(status)) return res.status(400).json({ success: false, message: `A valid trip and a status (${tripsLib.TRIP_STATUSES.join(', ')}) are required.` });
+    // Booking, un-booking and cancelling are a dispatcher's decisions; the rest is an operator's job.
+    const permission = ['Booked', 'Planned', 'Cancelled'].includes(status) ? 'shipments:dispatch' : 'shipments:status';
+    if (!hasPermission(req.user, permission)) return res.status(403).json({ success: false, message: `Forbidden: missing ${permission} permission.` });
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : null;
+    const result = await setTripStatus(req.user.tenantId, id, status, { note }, req.user.id);
+    audit(req, 'trip.status', `T-${id}: ${status}`);
+    emitTripMoves(req.user.tenantId, result.moved);
+    return await sendTrip(res, req.user.tenantId, id);
+  } catch (error) {
+    return sendError(res, error, 'The trip status could not be changed.', 'v2 trip status');
+  }
+});
+
+app.post('/api/v2/trips/:id/shipments/:shipmentId/deliver', authMiddleware, requirePermission('shipments:status'), async (req, res) => {
+  try {
+    const id = positiveId(req.params.id);
+    const shipmentId = parseShipmentId(req.params.shipmentId);
+    if (!id || !shipmentId) return res.status(400).json({ success: false, message: 'A valid trip and shipment are required.' });
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : null;
+    await deliverTripShipment(req.user.tenantId, id, shipmentId, { note }, req.user.id);
+    audit(req, 'trip.delivered', `T-${id}: SHP-${shipmentId}`);
+    emitTripMoves(req.user.tenantId, [{ shipmentId, status: 'Delivered' }]);
+    return await sendTrip(res, req.user.tenantId, id);
+  } catch (error) {
+    return sendError(res, error, 'The delivery could not be saved.', 'v2 trip deliver');
+  }
+});
+
+app.post('/api/v2/trips/:id/tracking', authMiddleware, requirePermission('shipments:track'), async (req, res) => {
+  try {
+    const id = positiveId(req.params.id);
+    const location = typeof req.body?.location === 'string' ? req.body.location.trim() : '';
+    if (!id || !location || location.length > 200) return res.status(400).json({ success: false, message: 'A trip and a location of at most 200 characters are required.' });
+    let eta = null;
+    try {
+      eta = legsLib.readWhen(req.body?.eta, 'eta');
+    } catch (error) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    const note = typeof req.body?.note === 'string' ? req.body.note.trim().slice(0, 500) : null;
+    const update = await addTripTracking(req.user.tenantId, id, { location, eta, note }, req.user.id);
+    return res.status(201).json({ success: true, update });
+  } catch (error) {
+    return sendError(res, error, 'The position could not be saved.', 'v2 trip tracking');
   }
 });
 

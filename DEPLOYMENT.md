@@ -196,6 +196,14 @@ Automatic reactions (reading order emails with AI, reading CMR/POD documents, dr
 - Optional settings: `JOBS_CONCURRENCY` (4), `JOBS_POLL_MS` (2000), `JOBS_RETRY_BASE_SECONDS` (30), `JOBS_VISIBILITY_SECONDS` (600). Finished jobs are deleted after 7 days.
 - Still timer-based (they only re-check state and are safe to repeat): the NEXUS sweeps, mailbox polling and daily backups.
 
+## Trips (LTL)
+
+One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migration `0008_trips` adds the trip tables (protected by row level security on PostgreSQL) and `shipments.trip_id`; it cannot be reversed, so take a backup before upgrading.
+- Shipments and `/api/*` are unchanged. While a shipment is on a trip its status, carrier and cost follow the trip, and the classic status, dispatch and location actions answer `409` for it.
+- The truck's price is shared among the loads by weight (to the minor unit); each delivered load owes the carrier its share in Finance.
+- A GPS position that matches a truck's plate now reaches every active load on that truck (before, only the newest load).
+- Screens for trips are not built yet (API only).
+
 ## Shipment legs (API v2)
 
 One customer order can move in several legs (road, ocean, air, rail, warehouse, last mile). See `docs/API_V2.md`.
