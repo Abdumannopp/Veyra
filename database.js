@@ -3294,7 +3294,11 @@ async function getShipmentLegs(tenantId, shipmentId) {
   );
   if (!shipment) return null;
   const base = { shipmentId: shipment.id, status: shipment.status, currency: shipment.currency || null };
-  if (shipment.leg_mode !== 'multi') return { ...base, multi: false, legs: [syntheticLeg(shipment)], handovers: [], events: [] };
+  const withTiming = (legs) => {
+    const timing = legsLib.legTiming(legs);
+    return legs.map((leg, index) => ({ ...leg, timing: timing[index] }));
+  };
+  if (shipment.leg_mode !== 'multi') return { ...base, multi: false, legs: withTiming([syntheticLeg(shipment)]), handovers: [], events: [] };
   const [legs, handovers, events] = await Promise.all([
     all(`${LEG_SELECT} WHERE l.shipment_id = ? AND l.tenant_id = ? ORDER BY l.sequence`, [shipmentId, tenantId]),
     all('SELECT id, from_leg_id AS fromLegId, to_leg_id AS toLegId, location, received_by AS receivedBy, note, created_at AS createdAt FROM leg_handovers WHERE shipment_id = ? AND tenant_id = ? ORDER BY id', [shipmentId, tenantId]),
@@ -3302,7 +3306,7 @@ async function getShipmentLegs(tenantId, shipmentId) {
       FROM leg_events e LEFT JOIN users ON users.id = e.actor_id
       WHERE e.tenant_id = ? AND e.leg_id IN (SELECT id FROM shipment_legs WHERE shipment_id = ?) ORDER BY e.id DESC LIMIT 200`, [tenantId, shipmentId])
   ]);
-  return { ...base, multi: true, legs: legs.map(mapLeg), handovers: handovers.map((row) => ({ ...row })), events: events.map((row) => ({ ...row })) };
+  return { ...base, multi: true, legs: withTiming(legs.map(mapLeg)), handovers: handovers.map((row) => ({ ...row })), events: events.map((row) => ({ ...row })) };
 }
 
 async function getLeg(tenantId, legId) {
@@ -3530,6 +3534,11 @@ async function getNextLeg(tenantId, legId) {
 }
 
 // System job (NEXUS sweeper): legs on the way with no position for staleHours.
+// Multi-leg loads still under way, for the delay watch (system context).
+async function listOpenMultiLegShipmentsAllTenants() {
+  return all("SELECT id, tenant_id AS tenantId FROM shipments WHERE leg_mode = 'multi' AND status NOT IN ('Delivered', 'Cancelled') ORDER BY id");
+}
+
 async function listStaleLegsAllTenants(staleHours) {
   return all(
     `SELECT l.id, l.tenant_id AS tenantId, l.shipment_id AS shipmentId, l.last_tracked_at AS lastTrackedAt
@@ -4189,6 +4198,7 @@ module.exports = {
   getDocument,
   listDocuments,
   getDocumentFile,
+  listOpenMultiLegShipmentsAllTenants,
   moveDocumentsToStorage,
   updateDocumentExtraction,
   deleteDocument,
