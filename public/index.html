@@ -752,6 +752,10 @@
           <div id="legsBody"></div>
           <div class="detail-actions"><button class="btn btn-ghost small hidden" type="button" id="legAdd">Add a leg</button></div>
         </section>
+        <section class="legs-section hidden" id="coldSection" aria-label="Temperature">
+          <div class="detail-timeline-head"><strong>Temperature</strong><span id="coldCount"></span></div>
+          <div id="coldBody"></div>
+        </section>
         <div class="detail-actions" id="detailActions">
           <button class="btn btn-ghost small hidden" type="button" id="editShipmentToggle" aria-expanded="false" aria-controls="editShipmentForm">Edit load</button>
           <button class="btn btn-ghost small hidden" type="button" id="shareCreate">Customer tracking link</button>
@@ -991,6 +995,7 @@
     <script src="assistant.js"></script>
     <script src="views.js"></script>
     <script src="legs.js"></script>
+    <script src="coldchain.js"></script>
     <script src="trips.js"></script>
   </body>
 </html>

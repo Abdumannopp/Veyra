@@ -937,6 +937,37 @@ const MIGRATIONS = [
       }
       await run('ALTER TABLE documents DROP COLUMN storage_key');
     }
+  },
+  {
+    id: '0010_cold_chain',
+    name: 'Cold chain: a temperature range per load and the temperature readings recorded for it',
+    transactional: false,
+    up: async (tx) => {
+      await ensureColumns('shipments', [['temp_min', 'REAL'], ['temp_max', 'REAL']]);
+      await run(`
+        CREATE TABLE IF NOT EXISTS temperature_readings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          shipment_id INTEGER NOT NULL REFERENCES shipments(id),
+          leg_id INTEGER REFERENCES shipment_legs(id),
+          celsius REAL NOT NULL,
+          recorded_at TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'manual',
+          note TEXT,
+          actor_id INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await run('CREATE INDEX IF NOT EXISTS idx_temperature_readings_shipment ON temperature_readings (shipment_id, recorded_at)');
+      if (isPostgres) await protectTenantTable(tx, 'temperature_readings');
+    },
+    down: async () => {
+      const kept = await get('SELECT COUNT(*) AS total FROM temperature_readings');
+      if (Number(kept?.total) > 0) throw new Error('0010_cold_chain cannot be reversed while temperature readings exist. Restore the backup taken before the upgrade.');
+      await run('DROP TABLE IF EXISTS temperature_readings');
+      await run('ALTER TABLE shipments DROP COLUMN temp_max');
+      await run('ALTER TABLE shipments DROP COLUMN temp_min');
+    }
   }
 ];
 
@@ -3540,6 +3571,49 @@ async function listOpenMultiLegShipmentsAllTenants() {
   return all("SELECT id, tenant_id AS tenantId FROM shipments WHERE leg_mode = 'multi' AND status NOT IN ('Delivered', 'Cancelled') ORDER BY id");
 }
 
+/* ---------- cold chain (Phase 5.1) ---------- */
+
+async function setTemperatureRange(tenantId, shipmentId, range) {
+  assertTenant(tenantId);
+  const result = await run('UPDATE shipments SET temp_min = ?, temp_max = ? WHERE id = ? AND tenant_id = ?',
+    [range ? range.min : null, range ? range.max : null, shipmentId, tenantId]);
+  if (result.changes !== 1) throw httpError(404, 'Shipment not found.');
+  return range;
+}
+
+async function addTemperatureReading(tenantId, shipmentId, { celsius, recordedAt, note, legId = null, source = 'manual' }, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const shipment = await tx.get('SELECT id, status FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+    if (!shipment) throw httpError(404, 'Shipment not found.');
+    if (['Cancelled'].includes(shipment.status)) throw httpError(409, 'A cancelled load takes no readings.');
+    if (legId !== null) {
+      const leg = await tx.get('SELECT id FROM shipment_legs WHERE id = ? AND shipment_id = ? AND tenant_id = ?', [legId, shipmentId, tenantId]);
+      if (!leg) throw httpError(404, 'That leg does not belong to this load.');
+    }
+    const result = await tx.run(
+      'INSERT INTO temperature_readings (tenant_id, shipment_id, leg_id, celsius, recorded_at, source, note, actor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [tenantId, shipmentId, legId, celsius, recordedAt, source, note || null, actorId || null]
+    );
+    return { id: result.id, shipmentId, legId, celsius, recordedAt, source, note: note || null };
+  });
+}
+
+// The range and the readings (newest 500, returned oldest first).
+async function getColdChain(tenantId, shipmentId) {
+  assertTenant(tenantId);
+  const shipment = await get('SELECT id, temp_min, temp_max FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+  if (!shipment) return null;
+  const rows = await all(
+    `SELECT r.id, r.leg_id AS legId, r.celsius, r.recorded_at AS recordedAt, r.source, r.note, users.name AS actor
+     FROM temperature_readings r LEFT JOIN users ON users.id = r.actor_id
+     WHERE r.shipment_id = ? AND r.tenant_id = ? ORDER BY r.recorded_at DESC, r.id DESC LIMIT 500`,
+    [shipmentId, tenantId]
+  );
+  const range = shipment.temp_min === null || shipment.temp_min === undefined ? null : { min: Number(shipment.temp_min), max: Number(shipment.temp_max) };
+  return { range, readings: rows.reverse().map((row) => ({ ...row, celsius: Number(row.celsius) })) };
+}
+
 async function listStaleLegsAllTenants(staleHours) {
   return all(
     `SELECT l.id, l.tenant_id AS tenantId, l.shipment_id AS shipmentId, l.last_tracked_at AS lastTrackedAt
@@ -4199,6 +4273,9 @@ module.exports = {
   getDocument,
   listDocuments,
   getDocumentFile,
+  setTemperatureRange,
+  addTemperatureReading,
+  getColdChain,
   listOpenMultiLegShipmentsAllTenants,
   moveDocumentsToStorage,
   updateDocumentExtraction,

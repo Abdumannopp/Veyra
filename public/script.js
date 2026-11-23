@@ -2164,6 +2164,7 @@ async function openShipmentDetails(shipmentId) {
     loadShipmentAdvice(shipment);
     setupDetailTools(shipment);
     window.VeyraLegs?.show(shipment);
+    window.VeyraColdChain?.show(shipment);
     modal.classList.remove('hidden');
   } catch (error) {
     notify(error.message, 'error');

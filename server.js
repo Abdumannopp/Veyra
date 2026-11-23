@@ -177,6 +177,8 @@ const { runAsSystem, runAsTenant } = require('./lib/tenant-context');
 const { addMoney } = require('./lib/money');
 const timeLib = require('./lib/time');
 const legsLib = require('./lib/legs');
+const coldChain = require('./lib/cold-chain');
+const coldChainDb = require('./database');
 const tripsLib = require('./lib/trips');
 const jobQueue = require('./lib/job-queue');
 const plans = require('./lib/plans');
@@ -3372,6 +3374,64 @@ app.get('/api/v2/shipments/:id', authMiddleware, requirePermission('shipments:re
     return await sendShipmentLegs(res, req.user.tenantId, shipmentId);
   } catch (error) {
     return sendError(res, error, 'Shipment could not be loaded.', 'v2 shipment');
+  }
+});
+
+/* ---------- cold chain (Phase 5.1): a temperature range and readings per load ---------- */
+async function sendColdChain(res, tenantId, shipmentId, status = 200, extra = {}) {
+  const data = await coldChainDb.getColdChain(tenantId, shipmentId);
+  if (!data) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+  return res.status(status).json({ success: true, shipmentId: `SHP-${shipmentId}`, ...data, excursions: coldChain.excursions(data.readings, data.range), ...extra });
+}
+
+app.get('/api/v2/shipments/:id/temperatures', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+    return await sendColdChain(res, req.user.tenantId, shipmentId);
+  } catch (error) {
+    return sendError(res, error, 'Temperatures could not be loaded.', 'cold chain');
+  }
+});
+
+// { min, max } in °C, or { min: null, max: null } to clear.
+app.put('/api/v2/shipments/:id/temperature-range', authMiddleware, requirePermission('shipments:status'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+    let range;
+    try {
+      range = coldChain.readRange(req.body || {});
+    } catch (error) {
+      if (error instanceof coldChain.ColdChainError) return res.status(400).json({ success: false, message: error.message });
+      throw error;
+    }
+    await coldChainDb.setTemperatureRange(req.user.tenantId, shipmentId, range);
+    return await sendColdChain(res, req.user.tenantId, shipmentId);
+  } catch (error) {
+    return sendError(res, error, 'The temperature range could not be saved.', 'cold chain range');
+  }
+});
+
+// { celsius, recordedAt?, legId?, note? }. A reading outside the range makes NEXUS raise a task.
+app.post('/api/v2/shipments/:id/temperatures', authMiddleware, requirePermission('shipments:track'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+    let reading;
+    try {
+      reading = coldChain.readReading(req.body || {});
+    } catch (error) {
+      if (error instanceof coldChain.ColdChainError) return res.status(400).json({ success: false, message: error.message });
+      throw error;
+    }
+    const legId = req.body?.legId === undefined || req.body?.legId === null ? null : positiveId(req.body.legId);
+    if (req.body?.legId !== undefined && req.body?.legId !== null && !legId) return res.status(400).json({ success: false, message: 'legId must be a leg of this load.' });
+    const saved = await coldChainDb.addTemperatureReading(req.user.tenantId, shipmentId, { ...reading, legId }, req.user.id);
+    nexus.emit('temperature.reading', { tenantId: req.user.tenantId, shipmentId, readingId: saved.id });
+    return await sendColdChain(res, req.user.tenantId, shipmentId, 201, { reading: saved });
+  } catch (error) {
+    return sendError(res, error, 'The reading could not be saved.', 'cold chain reading');
   }
 });
 

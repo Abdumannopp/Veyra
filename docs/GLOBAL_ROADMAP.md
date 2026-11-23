@@ -43,6 +43,12 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 ## Phase 5 — Multimodal, cold chain, warehouse, last mile
 Sequential legs with handovers; temperature ranges and excursions; warehouse receiving and storage; last-mile stops and proof of delivery.
 
+| Step | What | State |
+|---|---|---|
+| 5.1 | Cold chain: a temperature range per load, readings typed by people (optionally per leg), stretches outside the range, one NEXUS task per stretch, a Temperature section in the load record | Done |
+| 5.2 | Warehouse: receiving (pieces, damage), storage days and release | Next |
+| 5.3 | Last mile: several stops, proof of delivery per stop | Planned |
+
 ## Phase 6 — Compliance, security audit, production readiness
 Customs data, dangerous goods, retention rules, external security review, load and recovery tests.
 
