@@ -1,5 +1,7 @@
 # Recovery and load runbook
 
+Part of the documentation set: see [INDEX.md](INDEX.md). Database background: [DATABASE.md](DATABASE.md).
+
 Two drills to run **before real customers** and then regularly (at least once a month, and after every big upgrade).
 Neither touches the live database.
 
@@ -62,7 +64,7 @@ the 95th and 99th percentile. As a rule of thumb for a dispatcher screen: 95% un
 
 ## 3. Not covered here
 
-- **An external security review** (penetration test) by an independent specialist. Veyra's own tests check the
+- **An external security review** (penetration test) by an independent specialist: see [SECURITY.md](SECURITY.md), section 3. Veyra's own tests check the
   rules (company isolation, permissions, input checks) but are no substitute.
 - Restoring Cloudflare R2: R2 does not keep old versions by default; keep a copy of the bucket elsewhere if files
   must survive an accidental deletion.

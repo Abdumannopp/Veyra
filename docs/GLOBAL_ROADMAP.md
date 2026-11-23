@@ -4,6 +4,21 @@ Goal: turn the FTL road-freight app into a modular, multi-transport logistics pl
 (road, ocean, air, rail, warehouse, last mile) without breaking the existing FTL workflow.
 Modular monolith; every step ships as its own pull request with tests on SQLite and PostgreSQL.
 
+## Status at a glance
+
+| Phase | State |
+|---|---|
+| 1 PostgreSQL and production foundation | Done (1.7, documents in R2, is built and switched on by settings; **never tried with a real R2 bucket**) |
+| 2 Shipment legs | Done |
+| 3 Road FTL and LTL | Done |
+| 4 Ocean, rail, air | Done (typed by people; no carrier connection) |
+| 5 Multimodal, cold chain, warehouse, last mile | Done (typed by people; no sensor, WMS or courier connection) |
+| 6 Compliance and production readiness | 6.1 to 6.3 done; **6.4 open**: the independent external security review has not been done |
+
+Open items: 6.4 (needs an outside reviewer, see [SECURITY.md](SECURITY.md)); trying each outside service with a real
+test account ([INTEGRATIONS.md](INTEGRATIONS.md)); running the restore drill and the load test on a real hosted copy
+([RECOVERY.md](RECOVERY.md)). Nothing is being built right now. All documents: [INDEX.md](INDEX.md).
+
 ## Phase 1 — PostgreSQL and production foundation
 | Step | What | Status |
 |---|---|---|
@@ -32,7 +47,7 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 | 3.3 | NEXUS for trips (one manifest message to the carrier and one to the driver when booked, one task per problem or silence on the trip) and pooling suggestions (loads on the same lane with close pickups that fit one truck: API, a Trips page panel and a NEXUS task) | Done |
 
 ## Phase 4 — Ocean, rail, air
-`OceanLegDetails` (vessel, voyage, container, B/L, ports), `RailLegDetails` (wagon, station, CIM/SMGS), `AirLegDetails` (AWB, flight, airports, chargeable weight). Integrations are marked as simulated until a real provider is connected.
+`OceanLegDetails` (vessel, voyage, container, B/L, ports), `RailLegDetails` (wagon, station, CIM/SMGS), `AirLegDetails` (AWB, flight, airports, chargeable weight). Integrations are marked as simulated until a real provider is connected ([INTEGRATIONS.md](INTEGRATIONS.md)).
 
 | Step | What | State |
 |---|---|---|
@@ -57,7 +72,7 @@ Customs data, dangerous goods, retention rules, external security review, load a
 | 6.1 | Customs and dangerous goods per load: HS code, countries, declared value, Incoterm, customs status and declaration number; UN number, class, packing group and proper shipping name (format checks, not legal advice); warnings per leg mode; NEXUS tasks for goods held by customs and dangerous goods to check | Done |
 | 6.2 | Retention: per company, how long positions, messages and files of finished loads, done tasks and the activity log are kept (off until set, with minimums); a preview, a confirmed "Remove now" and an optional daily run; loads, money and status history are never removed | Done |
 | 6.3 | Recovery and load: `npm run restore:drill` (copies a backup, upgrades and checks it: integrity, an admin per company, document files readable) and `npm run load:test` (simulated dispatchers, response times and errors); runbook in docs/RECOVERY.md | Done |
-| 6.4 | External security review | Needs an outside reviewer |
+| 6.4 | Independent external security review: scope, findings register, fixing plan and the go-live gate are in [SECURITY.md](SECURITY.md) | **Open: not started.** Needs an outside reviewer |
 
 ## Rules kept throughout
 - Existing FTL workflow keeps working after every step (the full test suite runs on both databases).

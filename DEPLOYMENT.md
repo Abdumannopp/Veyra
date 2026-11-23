@@ -1,6 +1,13 @@
 # VEYRA deployment guide
 
-The application starts with `npm run prod`, reads the platform-provided `PORT`, serves `/api/health` for health checks, and requires a persistent SQLite path. The first production startup creates one admin from the `INITIAL_ADMIN_*` variables. Development demo accounts and sample shipments are not seeded in production.
+How to put Veyra online and keep it running. The application starts with `npm run prod`, reads the platform-provided `PORT`
+and serves `/api/health` for health checks. It needs **a database**: a persistent SQLite file (`DATABASE_PATH`) or, recommended
+for production, PostgreSQL (`DATABASE_URL`). Which to choose, what is automatic and what is manual: [docs/DATABASE.md](docs/DATABASE.md).
+The first production startup creates one admin from the `INITIAL_ADMIN_*` variables. Development demo accounts and sample
+shipments are never created in production.
+
+Other documents: the index is [docs/INDEX.md](docs/INDEX.md); which integrations really work is [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md);
+security is [docs/SECURITY.md](docs/SECURITY.md); restore and load drills are [docs/RECOVERY.md](docs/RECOVERY.md).
 
 ## Render
 
@@ -32,8 +39,7 @@ INITIAL_ADMIN_PASSWORD=<unique password of at least 12 characters>
 4. Deploy. `railway.json` builds with the `Dockerfile` (Node 22, nothing to compile) and sets the start command, health check and restart policy.
 5. Add a Railway domain or custom domain. Store all generated secrets outside source control.
 
-The volume is persistent but SQLite remains a single-instance database. For multiple replicas, migrate to PostgreSQL first.
-
+The volume is persistent but SQLite remains a single-instance database. For production, and for more than one instance, use PostgreSQL: see [docs/DATABASE.md](docs/DATABASE.md) (section 3 for the Railway steps, section 4 to move existing data).
 ## VPS with systemd and Caddy
 
 Use Ubuntu/Debian with Node.js 22.13 or newer (it includes the SQLite module Veyra uses) and a domain pointed at the VPS.
@@ -96,9 +102,11 @@ Verify `http://localhost:3000/api/health` returns `{"status":"ok"}`. Delete only
 - Sign-up is **closed** in production. The first administrator signs in with the `INITIAL_ADMIN_*` account and adds the team from **Dashboard → Operations Console → Team Access → Add user**, where roles can also be changed and accounts disabled (takes effect immediately).
 - To let people sign up themselves, set `REGISTRATION_INVITE_CODE` (they need the code and become operators) or, for demos only, `ALLOW_OPEN_REGISTRATION=true`.
 
-## AI, SMS / WhatsApp and GPS (optional)
+## Optional services (AI, messaging, email, map, GPS)
 
-All three are off until configured, and the app works without them.
+Everything below is off until configured, and the app works without it.
+
+**How ready is each one?** Read [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). Most of these have so far been checked only against fake services, so try each with a test or sandbox account and check the first results yourself before you rely on it or promise it to a customer.
 
 - **AI (FLOW)**: create a key at openrouter.ai, set `OPENROUTER_API_KEY`. Optionally pick a model in `OPENROUTER_MODEL`; empty uses your OpenRouter account default. Use is limited per person (`AI_RATE_LIMIT_PER_HOUR`) and logged under Analytics → AI agents.
 - **SMS / WhatsApp (RELAY)**: in a Twilio account get the Account SID, Auth Token and a sender number (and an approved WhatsApp sender for WhatsApp). Set `MESSAGING_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SMS_FROM` and/or `TWILIO_WHATSAPP_FROM`. Phone numbers on loads must be in international format (+998…).
@@ -111,9 +119,8 @@ All three are off until configured, and the app works without them.
 - **Map** (optional): `GEO_PROVIDER=osm` turns on road distance and off-route warnings using Nominatim and OSRM (`NOMINATIM_URL`, `OSRM_URL`; the public servers are for light use only, point them at your own for heavy use). Place names of loads are sent to those servers; answers are cached. `OFF_ROUTE_KM` (default 60).
 - **Market prices**: entered by hand under Integrations; PULSE compares with them.
 - **ROUTE, PULSE, SENTINEL**: built in, no keys. They use only the company's own past loads (at least 3 delivered loads on a lane before ROUTE and PULSE give numbers). SENTINEL runs with the NEXUS check every 10 minutes.
-- **Documents**: CMR, proof of delivery and other files (PDF, JPG, PNG, WebP, up to `DOC_MAX_MB`) are stored inside the database file, so the database backup covers them. Reading CMR files with AI needs a model that can read images or PDFs: set `OPENROUTER_MODEL` to one if the account default cannot.
+- **Documents**: CMR, proof of delivery, bill of lading, air waybill, rail notes and other files (PDF, JPG, PNG, WebP, up to `DOC_MAX_MB`) are kept **in the database by default**, so the database backup covers them; or in an encrypted Cloudflare R2 bucket if you set that up (see "Where document files are kept" below). Reading these files with AI needs a model that can read images or PDFs: set `OPENROUTER_MODEL` to one if the account default cannot.
 - **GPS**: an administrator opens Dashboard → Integrations → Create GPS token and gives the provider the address `https://<your-domain>/api/integrations/gps` and the token. The provider sends positions with the truck plate; plates are matched ignoring spaces and dashes.
-
 ## NEXUS (the orchestrator)
 
 NEXUS reacts to events (an order email arrives, a load reaches Sourcing, a truck is booked, a document is uploaded, a truck goes quiet) and leaves **tasks** under Inbox & tasks. It prepares things: reads emails, ranks carriers, drafts messages, compares documents with the load. It never sends a message, books a truck, creates a load or changes a status: every one of those waits for a person to press the button. Trucks with no location update for `STALE_TRACKING_HOURS` get a drafted "where are you?" message (checked every 10 minutes). `NEXUS_ENABLED=false` switches it off.
@@ -124,15 +131,79 @@ NEXUS reacts to events (an order email arrives, a load reaches Sourcing, a truck
 - **Editing a load**: the load window -> *Edit load*. Every correction is written to the load's history. Delivered and cancelled loads are not edited.
 - **Payments**: invoice number, *Invoice sent*, *Customer paid*, *Carrier paid* in the load window; *Open invoice* gives a printable page (browser -> Print -> Save as PDF); Analytics -> *Open money* lists what is still unpaid. Role needed: admin or operations.
 - **Customer tracking link**: the load window -> *Customer tracking link*. The page shows only route, dates, status, last place, ETA and truck plate. A new link replaces the old one; *Remove link* switches it off. Set `PUBLIC_URL` so the link uses your domain.
-- **Backups**: a full copy of the database is written every day to `BACKUP_DIR` (default: `backups/` next to the database), the newest `BACKUP_KEEP` (7) are kept; `BACKUP_ENABLED=false` switches it off. These copies sit on the same disk as the database, so they protect against mistakes, not against losing the disk: the platform owner should download one regularly (Dashboard -> Backups) and keep it elsewhere. The file holds every company's data. To restore: stop the app, replace the database file with the backup, start the app.
+- **Backups**: a full copy of the database is written every day to `BACKUP_DIR` (default: `backups/` next to the database), the newest `BACKUP_KEEP` (7) are kept; `BACKUP_ENABLED=false` switches it off. These copies sit on the same disk as the database, so they protect against mistakes, not against losing the disk: the platform owner should download one regularly (Dashboard -> Backups) and keep it elsewhere. The file holds every company's data. To restore: stop the app, replace the database file with the backup, start the app. With PostgreSQL the provider's backups are used instead ([docs/DATABASE.md](docs/DATABASE.md), section 9). Prove that a backup can be restored with the restore drill ([docs/RECOVERY.md](docs/RECOVERY.md)); document files kept in R2 are not in the database backup.
 - **Activity log**: administrators see who changed accounts, passwords, integrations, payments, customer links and backups.
+## Background jobs
 
-## Before real traffic
+Automatic reactions (reading order emails with AI, reading CMR/POD documents, drafting booking and delivery messages, price checks, workflow rules) are saved as jobs in the database before they run, so a restart or crash does not lose them.
+- A failing job is retried after 30 s, 1 min, 2 min ... (up to 15 min), 5 attempts by default, then kept as "dead" so nobody has to guess what failed.
+- The same event is never saved twice under one idempotency key (for example an email delivered again).
+- A job left "running" by a server that died is queued again after 10 minutes.
+- Jobs of one company run in the order they were added; companies do not wait for each other. Several servers can share one PostgreSQL database; each job is taken by only one.
+- Admins see counts and failed jobs at `GET /api/jobs` and can give a dead job new attempts with `POST /api/jobs/:id/retry`.
+- Optional settings: `JOBS_CONCURRENCY` (4), `JOBS_POLL_MS` (2000), `JOBS_RETRY_BASE_SECONDS` (30), `JOBS_VISIBILITY_SECONDS` (600). Finished jobs are deleted after 7 days.
+- Still timer-based (they only re-check state and are safe to repeat): the NEXUS sweeps, mailbox polling and daily backups.
 
-- Change the example admin email and all generated placeholder values.
-- Keep SQLite on persistent storage and configure backups. SQLite is suitable for one app instance; use PostgreSQL before horizontal scaling.
-- Configure `ALLOWED_ORIGIN` only if a separate trusted frontend domain needs cross-origin API access. Same-origin hosting does not require it.
-- Add monitoring and restore-test your backups.
+## Where document files are kept (database by default, R2 optional)
+
+Document files (CMR, proof of delivery, B/L, AWB, rail notes, and attachments that came with an email) are kept in one of two places.
+
+| | **Database (the default)** | **Cloudflare R2 (optional)** |
+|---|---|---|
+| Chosen when | `DOCUMENT_STORAGE` is empty or `database` | `DOCUMENT_STORAGE=r2` |
+| What you must set up | Nothing | An R2 bucket, an access token and six variables (below) |
+| Where the bytes are | Inside the database row | In the bucket; the row keeps only a storage key |
+| Covered by the database backup | **Yes** | **No**: the bucket needs its own backup |
+| Encrypted | Only if `DOCUMENT_ENCRYPTION_KEY` is set | Yes, with the same key, before the file leaves the server |
+| Good for | Development and small installs | Production with many or large files: keeps the database small |
+| Readiness | Working | **Test mode**: tested only against a fake bucket, never against real R2 ([docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)) |
+
+People using Veyra see no difference ([USER_GUIDE.md](USER_GUIDE.md)). Encryption and the storage place are separate choices:
+you can encrypt files while they stay in the database. Files saved before a key was set stay readable.
+
+### Setting up R2, step by step
+
+Cloudflare's screens change from time to time; the names below may differ slightly.
+
+1. In the Cloudflare dashboard open **R2** and create a bucket, for example `veyra-documents`. Keep it **private** (no public access).
+2. In R2, open **Manage API tokens** and create a token with **Object Read & Write**, limited to that one bucket. Copy the
+   **Access Key ID** and the **Secret Access Key** now: the secret is shown only once.
+3. Note your **Account ID** (on the R2 overview page).
+4. Make the encryption key and **save a copy in a password manager before you go on**:
+
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   ```
+
+5. Set these variables in the host's settings (Railway → Variables). Never in chat, email or the code:
+
+   | Variable | Value |
+   |---|---|
+   | `DOCUMENT_STORAGE` | `r2` |
+   | `R2_ACCOUNT_ID` | the Cloudflare Account ID |
+   | `R2_ACCESS_KEY_ID` | from step 2 |
+   | `R2_SECRET_ACCESS_KEY` | from step 2 |
+   | `R2_BUCKET` | the bucket name |
+   | `DOCUMENT_ENCRYPTION_KEY` | the key from step 4 (base64, or 64 hex characters) |
+
+6. Redeploy. The start-up line must say `documents: r2 encrypted`. If a setting is wrong or missing the server **refuses to
+   start** and says which variable.
+7. **Test it** on a test load: upload a file. In the Cloudflare dashboard an object appears under
+   `documents/t<company>/s<load>/`; downloading the file from Veyra gives back the same file; the object in the bucket cannot
+   be opened as a PDF (it is encrypted).
+8. **Move the files you already have** (they are still in the database): take a backup, then run once in the host's shell
+   `npm run documents:move`. Each file is read back from R2 before the database copy is removed; running it again is safe.
+9. **Back up the bucket.** R2 does not keep old versions by default. Copy it regularly to another bucket or provider, and run the
+   restore drill ([docs/RECOVERY.md](docs/RECOVERY.md)): it reads a sample of documents, including from R2.
+
+### Rules to remember
+
+- **Keep a copy of `DOCUMENT_ENCRYPTION_KEY` for ever and never change it once files are saved.** Without it the files cannot be opened.
+- There is **no script to move files back** from R2 to the database. Once files are in R2 keep `DOCUMENT_STORAGE=r2`. If it is
+  set back, downloading those files fails with an error (never an empty file).
+- If R2 cannot be reached, an upload fails and nothing is saved; a download fails with an error.
+- Migration 0009 adds the `storage_key` column; it can be reversed only while no file is in R2.
+- Keeping old data (retention) deletes the R2 file together with its record.
 
 ## Card payments (Paddle Billing)
 
@@ -156,101 +227,31 @@ Only correctly signed webhooks are accepted (5-minute window), each company is i
 
 `CURRENCY` and `WEIGHT_UNIT` are now only defaults: each company sets its own in Team & settings → Company.
 
-## PostgreSQL (recommended for production)
+## Before real traffic (go-live checklist)
 
-Veyra runs on PostgreSQL when `DATABASE_URL` is set, and on a single SQLite file (`DATABASE_PATH`) when it is not. Tests and local development keep using SQLite; CI runs the full suite on both.
+Do these in order. A line you cannot tick is a reason to wait.
 
-**Railway:**
-1. In the project, **New → Database → PostgreSQL**.
-2. In the Veyra service, **Variables**: add `DATABASE_URL=${{Postgres.DATABASE_URL}}` and remove `DATABASE_PATH`.
-3. Redeploy. On first start Veyra creates its tables and the first administrator from `INITIAL_ADMIN_*`.
-4. The `/data` volume is no longer needed for the database.
+1. **Secrets**: a long random `JWT_SECRET`, a separate `SECRETS_KEY` (keep it: saved Twilio and mailbox passwords depend on it),
+   a unique admin password of 12+ characters, the example admin email changed. Nothing secret in the repository.
+2. **Database**: PostgreSQL for production ([docs/DATABASE.md](docs/DATABASE.md)); provider backups switched on. If you start from
+   SQLite with real data, the data copy has been done and checked.
+3. **Backups**: a backup taken before every upgrade that brings a migration (the table in docs/DATABASE.md, section 5, shows
+   which cannot be undone).
+4. **Restore drill** done on a copy and the result written down ([docs/RECOVERY.md](docs/RECOVERY.md)). Re-run it monthly.
+5. **Load test** run against a staging copy, not production ([docs/RECOVERY.md](docs/RECOVERY.md)).
+6. **Document storage** chosen: the default (database), or R2 set up, tested with a real upload, the key copied to a password manager and the bucket backed up (section above).
+7. **Integrations**: each one you will use tried with a test account of the real service ([docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)). Promise customers only what is marked Working there, and tell them everything else is typed by people.
+8. **Security**: the independent external review done and no open Critical or High finding ([docs/SECURITY.md](docs/SECURITY.md): **check its status table first**).
+9. **Legal pages** reviewed by a lawyer; for card payments the Paddle sandbox tested and the website approved ("Card payments" above).
+10. Set `ALLOWED_ORIGIN` only if a separate trusted frontend domain needs cross-origin access (same-origin hosting does not).
+11. Monitoring and log access in place; someone knows who to call at 3 a.m.
 
-**Backups:** with PostgreSQL, Veyra's own daily file backup is switched off; use the database provider's backups (Railway: the PostgreSQL service's **Backups** tab). The platform backup endpoints answer 409 with that message.
+## Upgrade notes by feature
 
-**How it works:** `lib/postgres.js` translates Veyra's SQL (placeholders, SQLite date functions, `INSERT OR IGNORE/REPLACE`, case-insensitive `LIKE`, types) and keeps timestamps as UTC text in the same format as before. One connection runs one statement at a time, like the SQLite file did; that is plenty for hundreds of companies, and a connection pool can come later.
+Take a **database backup before every upgrade** that brings a migration. The full list of migrations, what each adds and which
+can be reversed is in [docs/DATABASE.md](docs/DATABASE.md) (section 5). Notes by feature:
 
-**Moving existing SQLite data:** not automated yet. A fresh PostgreSQL database is created on first start; if you already have companies in a SQLite file, ask for a migration script before switching.
-
-## Moving existing data from SQLite to PostgreSQL
-
-Do this once, when a running SQLite install moves to PostgreSQL. The SQLite file is only read, never changed.
-
-1. Take a backup of the SQLite file (Admin → Backup, or copy the file from the Volume).
-2. Create an **empty** PostgreSQL database.
-3. Rehearse: `SQLITE_PATH=/data/veyra.db DATABASE_URL=postgres://... npm run migrate:postgres -- --dry-run`.
-   Every table is copied, checked (row count and content checksum), then undone.
-4. Stop the app (no new writes), then run the same command without `--dry-run`.
-   It refuses a database that already has data, and keeps nothing if any table differs.
-5. Only after it prints `Done: ... copied and verified`, set `DATABASE_URL` on the app and start it.
-6. Keep the SQLite backup until you have checked the app on PostgreSQL.
-
-## Background jobs
-
-Automatic reactions (reading order emails with AI, reading CMR/POD documents, drafting booking and delivery messages, price checks, workflow rules) are saved as jobs in the database before they run, so a restart or crash does not lose them.
-- A failing job is retried after 30 s, 1 min, 2 min ... (up to 15 min), 5 attempts by default, then kept as "dead" so nobody has to guess what failed.
-- The same event is never saved twice under one idempotency key (for example an email delivered again).
-- A job left "running" by a server that died is queued again after 10 minutes.
-- Jobs of one company run in the order they were added; companies do not wait for each other. Several servers can share one PostgreSQL database; each job is taken by only one.
-- Admins see counts and failed jobs at `GET /api/jobs` and can give a dead job new attempts with `POST /api/jobs/:id/retry`.
-- Optional settings: `JOBS_CONCURRENCY` (4), `JOBS_POLL_MS` (2000), `JOBS_RETRY_BASE_SECONDS` (30), `JOBS_VISIBILITY_SECONDS` (600). Finished jobs are deleted after 7 days.
-- Still timer-based (they only re-check state and are safe to repeat): the NEXUS sweeps, mailbox polling and daily backups.
-
-## Document storage (Cloudflare R2) and encryption
-
-By default document files are kept inside the database. For production, keep them in a Cloudflare R2 bucket, encrypted.
-Put these only in Railway → Variables (never in chat, email or the code):
-
-| Variable | Value |
-|---|---|
-| `DOCUMENT_STORAGE` | `r2` |
-| `R2_ACCOUNT_ID` | Cloudflare account ID (R2 page, right side) |
-| `R2_ACCESS_KEY_ID` | from R2 → Manage API tokens → Create token (Object Read & Write, this bucket only) |
-| `R2_SECRET_ACCESS_KEY` | shown once with the token |
-| `R2_BUCKET` | the bucket name, e.g. `veyra-documents` (keep it private: no public access) |
-| `DOCUMENT_ENCRYPTION_KEY` | 32 random bytes: run `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` |
-
-- Every new file is encrypted (AES-256-GCM) before it leaves the server, so R2 only sees scrambled bytes. The key also encrypts files kept in the database and email attachments waiting in the inbox.
-- **Keep a copy of `DOCUMENT_ENCRYPTION_KEY` in a safe place (a password manager). Without it the files cannot be opened. Never change it once files are saved.**
-- The server checks these settings at start-up and refuses to start if one is wrong. The start-up line says `documents: r2 encrypted`.
-- Migration 0009 adds one column (`storage_key`); it can be reversed while no file is in R2.
-- Old files stay readable from the database. To move them to R2 (and encrypt them), take a backup, then run once in the Railway shell: `npm run documents:move`. Each file is read back from R2 before the database copy is removed; running it again is safe.
-- Back up the bucket too (R2 does not keep old versions by default).
-
-## Cold chain (temperature)
-
-Migration 0010 adds a temperature range to loads and a table of temperature readings. It can be reversed only while no reading is saved; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.** Readings are typed by people; no sensor is connected.
-
-## Warehouse
-
-Migration 0011 adds the table of warehouse receipts and releases. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.**
-
-## Last-mile stops
-
-Migration 0012 adds the table of last-mile stops. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.**
-
-## Customs and dangerous goods
-
-Migration 0013 adds the customs and dangerous-goods record per load. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.** The checks are format checks only, not legal or dangerous-goods advice.
-
-## Keeping old data (retention)
-
-Migration 0014 adds two settings columns to companies (reversible). Nothing is removed until a company administrator sets days in Team & settings → "Keeping old data" and presses "Remove now" or switches on the daily run. Removal cannot be undone: **keep regular backups.**
-
-## Restore drill and load test
-
-Before real customers, and then monthly: follow docs/RECOVERY.md. `npm run restore:drill` proves a backup can be restored (it never touches the live database); `npm run load:test` measures a staging copy under many users.
-
-## Trips (LTL)
-
-One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migration `0008_trips` adds the trip tables (protected by row level security on PostgreSQL) and `shipments.trip_id`; it cannot be reversed, so take a backup before upgrading.
-- Shipments and `/api/*` are unchanged. While a shipment is on a trip its status, carrier and cost follow the trip, and the classic status, dispatch and location actions answer `409` for it.
-- The truck's price is shared among the loads by weight (to the minor unit); each delivered load owes the carrier its share in Finance.
-- A GPS position that matches a truck's plate now reaches every active load on that truck (before, only the newest load).
-- Screens: **Trips** in the side menu (plan a trip, put loads on it, book the truck, start, add a position, deliver load by load).
-- NEXUS: one manifest message to the carrier and driver when a trip is booked, one task per problem or silence on the trip, and pooling suggestions for loads that could share one truck. `LTL_TRUCK_KG` (default 20000) is the truck size used for suggestions. No migration.
-
-## Shipment legs (API v2)
+### Shipment legs (API v2)
 
 One customer order can move in several legs (road, ocean, air, rail, warehouse, last mile). See `docs/API_V2.md`.
 - Migration `0006_shipment_legs` adds the leg, leg history and handover tables (protected by row level security on PostgreSQL) and cannot be reversed; take a backup before upgrading.
@@ -260,40 +261,40 @@ One customer order can move in several legs (road, ocean, air, rail, warehouse, 
 - NEXUS and Finance work per leg (booking message, exception, next-leg reminder, quiet leg; carriers paid leg by leg). Migration `0007_leg_payments` adds the leg payment column and cannot be reversed; take a backup before upgrading.
 - Price fields now keep up to 4 decimals on input and are rounded to the currency's minor unit when saved (before, input was cut to 2 decimals first, which was wrong for currencies like KWD).
 
-## Time zones and number formats
+### Trips (LTL)
 
-- Everything is **stored in UTC** (the database clock). A company's time zone and locale only change how people see times, dates and numbers, and what "today" means for that company; they never change what is saved.
-- Each company picks a time zone (IANA name, for example `Asia/Tashkent`) and a language/number format (for example `de-DE`) in Settings → Company. The server default is `TIMEZONE` and `LOCALE` (otherwise `UTC` and `en-US`).
-- The company's own calendar day is used for the daily charts (shipments per day, AI Command Center) and for quote expiry. Clock changes (daylight saving) are handled.
-- Load pickup and delivery dates (`YYYY-MM-DD`) are calendar dates and are not shifted. The public tracking page shows times in the shipping company's zone.
-- Not yet localised: the text language of the interface and of drafted messages (English), and AI daily caps (a rolling 24 hours).
+One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migration `0008_trips` adds the trip tables (protected by row level security on PostgreSQL) and `shipments.trip_id`; it cannot be reversed, so take a backup before upgrading.
+- Shipments and `/api/*` are unchanged. While a shipment is on a trip its status, carrier and cost follow the trip, and the classic status, dispatch and location actions answer `409` for it.
+- The truck's price is shared among the loads by weight (to the minor unit); each delivered load owes the carrier its share in Finance.
+- A GPS position that matches a truck's plate now reaches every active load on that truck (before, only the newest load).
+- Screens: **Trips** in the side menu (plan a trip, put loads on it, book the truck, start, add a position, deliver load by load).
+- NEXUS: one manifest message to the carrier and driver when a trip is booked, one task per problem or silence on the trip, and pooling suggestions for loads that could share one truck. `LTL_TRUCK_KG` (default 20000) is the truck size used for suggestions. No migration.
 
-## Money and currencies
+### Ocean, air and rail details, delays, mode documents
 
-- Every priced record (loads, quotes, market rates) stores its own ISO currency next to the amount. Existing amounts were labelled with the company's currency when migration `0003_money_currency` ran.
-- Amounts are rounded to the currency's minor unit when saved (2 decimals; 0 for JPY, KRW, VND and similar; 3 for KWD, BHD and similar). Totals add exact cents.
-- PostgreSQL stores money as `NUMERIC(18,4)`. SQLite keeps floating point, rounded on write and in totals, so SQLite is for development and small single-company installs.
-- If a company changes its currency, old amounts keep their own currency. The Finance summary adds only amounts in the current currency and lists other currencies under `otherCurrencies`; analytics averages and revenue are not yet split by currency.
-- Migration `0003` cannot be reversed; take a database backup before upgrading.
+No migration. Details are checked and saved as before; documents of the new types (`bill_of_lading`, `air_waybill`,
+`rail_waybill`) are read by VAULT when AI is on ([docs/API_V2.md](docs/API_V2.md)).
 
-## Company isolation in the database (PostgreSQL)
+### Cold chain (temperature)
 
-On PostgreSQL, every company's rows are also protected by the database itself (row level security), not only by the app's own filters.
-- Migration `0002_row_level_security` creates a login-less role `veyra_app` and policies on every company table. The app switches to that role after migrating, so policies bind it.
-- A signed-in request can only read or write its own company's rows. Server work (login lookup, webhooks, background jobs, platform admins) runs as "system" and is explicit in the code.
-- Anything with no company context sees no rows (fail closed).
-- The database user from `DATABASE_URL` needs permission to create roles (Railway's default `postgres` user has it). If it cannot, the app starts and logs `row level security is NOT enforced`.
-- Set `DB_RLS=off` only for local debugging with one-off scripts that read across companies.
-- SQLite installs keep the app-level company filters only.
+Migration 0010 adds a temperature range to loads and a table of temperature readings. It can be reversed only while no reading is saved; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.** Readings are typed by people; no sensor is connected.
 
-## Database migrations
+### Warehouse
 
-Schema changes are versioned migrations (`database.js` → `MIGRATIONS`, runner in `lib/migrations.js`). Applied ids are kept in `schema_migrations`; the server applies missing ones at start, one process at a time.
+Migration 0011 adds the table of warehouse receipts and releases. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.**
 
-```bash
-npm run migrate -- status
-npm run migrate
-npm run migrate -- down 1
-```
+### Last-mile stops
 
-Take a backup before upgrading. `0001_baseline` (the schema before versioning) cannot be reversed: recovery is restoring that backup. New migrations must have a working `down()`, or say in it why not and how to recover.
+Migration 0012 adds the table of last-mile stops. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.**
+
+### Customs and dangerous goods
+
+Migration 0013 adds the customs and dangerous-goods record per load. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.** The checks are format checks only, not legal or dangerous-goods advice.
+
+### Keeping old data (retention)
+
+Migration 0014 adds two settings columns to companies (reversible). Nothing is removed until a company administrator sets days in Team & settings → "Keeping old data" and presses "Remove now" or switches on the daily run. Removal cannot be undone: **keep regular backups.**
+
+### Document storage key
+
+Migration 0009 (see "Where document files are kept"). Reversible while no file is in R2.

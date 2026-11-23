@@ -1,6 +1,8 @@
 # VEYRA — short guide for trucking companies
 
-This guide needs no technical knowledge. It explains how to take one load in VEYRA from order to delivery.
+This guide needs no technical knowledge. It explains how to take one load in VEYRA from order to delivery, and how to use the newer features (legs, trips, temperature, warehouse, last mile, customs).
+
+**Good to know first:** you type the prices, numbers and positions yourself. VEYRA is not connected to shipping lines, airlines, railways, couriers, customs or temperature sensors. Which outside services (AI, SMS, email, maps, card payments) are connected, and how far they have been tested, is in `docs/INTEGRATIONS.md`. The list of all documents is in `docs/INDEX.md`.
 
 ## Roles
 
@@ -36,6 +38,8 @@ In the `.env` file:
 - `CURRENCY=USD`: currency (USD, EUR, KZT, UZS …);
 - `MAX_RATE=10000000`: largest allowed price; raise it for currencies with big numbers;
 - `INITIAL_ADMIN_NAME`, `INITIAL_ADMIN_EMAIL`, `INITIAL_ADMIN_PASSWORD`: the first admin (password of at least 12 characters).
+- `DATABASE_URL`: use PostgreSQL (recommended for a live server); without it VEYRA keeps its data in one SQLite file (`DATABASE_PATH`). See `docs/DATABASE.md`.
+- `DOCUMENT_STORAGE`: where uploaded document files are kept: the database (the default) or Cloudflare R2. See `DEPLOYMENT.md`, "Where document files are kept".
 
 Details: `DEPLOYMENT.md`.
 
@@ -47,7 +51,7 @@ Details: `DEPLOYMENT.md`.
 | **SCOUT** | In the Dispatch window it shows the 3 best-fitting carriers: does the trailer fit, how often they delivered this lane, any past problems. It also suggests the usual rate for the lane. One click fills the form. | Nothing (free) |
 | **RELAY** | In the load window, "Messages": ready-made text for the driver, carrier or customer, filled from the load. Edit it and press **Send** (SMS/WhatsApp) or **Copy text** and send it from your own phone. | Twilio for automatic sending |
 | **NEXUS** | **Starts the other agents by itself** and leaves the result as a **task** (left menu **Inbox & tasks**). Example: an email arrives, FLOW reads it, you get a "New order" task. A load reaches Sourcing, SCOUT picks carriers, you get a "Book a carrier" task. A truck is booked, message drafts for driver, carrier and customer are ready. A truck is silent for 12 hours, a "Where are you?" draft is ready. | Nothing |
-| **VAULT** | In the load window, **Documents**: upload a CMR or POD (photo or PDF); AI reads it and compares it with the load: weight, plate, loading and unloading place, customer, date. A mismatch creates a task. Nothing is changed for you. | OpenRouter key and a model that can read images/PDFs |
+| **VAULT** | In the load window, **Documents**: upload a CMR or POD (photo or PDF); AI reads it and compares it with the load: weight, plate, loading and unloading place, customer, date. It also reads a **bill of lading, air waybill or rail note** and compares it with the sea, air or rail leg (number, vessel or flight, places, container or wagon numbers, pieces, weight). A mismatch creates a task. Nothing is changed for you. | OpenRouter key and a model that can read images/PDFs |
 | **Email inbox** | A customer emails you, VEYRA receives it, FLOW reads it, and you see a ready order in **Inbox & tasks** and press **Create load**. | An email service (below) |
 | **GPS** | Your GPS provider sends truck positions; VEYRA links them to the load by truck plate. There is also a link to open the position on a map. | A GPS provider |
 
@@ -90,7 +94,8 @@ The Shipments page shows 50 per page ("Next →"). Search and filters work acros
 ## Working with documents
 
 - Accepted: PDF, JPG, PNG, WebP (up to 8 MB). The file type is checked by its real content, not its name; other files are rejected.
-- Files are stored inside the database, so a **backup** covers them too. Do not forget to set up backups.
+- Choose the type when you upload: CMR, proof of delivery, bill of lading, air waybill, rail note (CIM/SMGS) or other. A bill of lading, air waybill or rail note is filed under the matching leg of the load.
+- **Where the files are kept** is decided by whoever installs the server, and you do not see the difference. By default they are inside the database, so the database **backup** covers them. The installer can instead keep them in an encrypted Cloudflare R2 bucket; then the bucket needs its own backup (see `DEPLOYMENT.md`, "Where document files are kept"). Ask your administrator which one is used.
 - After a document is read it shows "match" or "differs". "Differs" is only a warning: compare the paper with the load yourself and correct it if needed. The record does not change by itself.
 
 ## Files in emails, message status and three more agents
@@ -124,7 +129,7 @@ ROUTE, PULSE and SENTINEL work without an AI key: they only look at the history 
 - **Editing a load.** In the load window "Edit load": correct dates, weight, price, address, driver and so on. Every change is written to the load history (what changed, from what to what). A delivered or cancelled load cannot be edited.
 - **Payments.** The load window has an invoice number and three marks: "Invoice sent", "Customer paid", "Carrier paid". "Open invoice" opens a printable invoice (in the browser: Print → Save as PDF). "Analytics → Open money" shows what customers owe you and what you owe carriers. Only the admin and operations roles see this.
 - **Customer link.** In the load window "Customer tracking link": send the link to the customer; they open it without a password and see only where the load is (no price, phone or carrier name). A new link replaces the old one; "Remove link" deletes it completely.
-- **Backups.** A copy of the whole database is made every day and the last 7 are kept. **Important:** these copies sit on the server disk, so if the disk is lost they are lost too. Download them now and then with "Dashboard → Backups → Download" and keep them elsewhere (computer, cloud). Only the platform owner can do this, because the file holds every company's data.
+- **Backups.** With the default SQLite file, a copy of the whole database is made every day and the last 7 are kept (with PostgreSQL, the database provider makes the copies, and document files kept in R2 need the bucket's own backup). **Important:** these copies sit on the server disk, so if the disk is lost they are lost too. Download them now and then with "Dashboard → Backups → Download" and keep them elsewhere (computer, cloud). Only the platform owner can do this, because the file holds every company's data.
 - **Activity log.** The administrator sees in "Activity log" who changed accounts, passwords, settings, payments, customer links and backups.
 
 ## Quotes & Pricing
@@ -203,11 +208,67 @@ Use **Trips** when one truck carries part loads for several customers.
 - **Loads that can share one truck**: at the top of Trips (and as a task in Inbox & tasks) Veyra suggests loads on the same lane with pickups within a few days that fit one truck. Press **Plan this trip**, then choose the carrier and the price and book it.
 - When you book a trip, Veyra drafts one message to the carrier with every load listed, one to the driver with the stops, and one to each customer. You read and press Send yourself. If a trip goes quiet or has a problem you get one task for the whole truck.
 
+## Sea, air and rail legs: what to enter
+
+When you **Edit** a leg, the fields depend on its mode. VEYRA checks the numbers and refuses a wrong one with the reason (spaces and dashes are removed for you):
+
+- **Ocean:** shipping line, booking no., vessel, voyage, **container no.** (4 letters and 7 digits, with the check digit, for example `CSQU3054383`), container type (for example 40HC, 20RF), seal no., bill of lading, port of loading, port of discharge.
+- **Air:** airline, flight (for example `TK 1234`), **air waybill** (11 digits, for example `235-12345675`), airports as 3-letter codes (`TAS`, `IST`), pieces, gross weight (kg) and volume (m³). VEYRA works out the **chargeable weight** (the larger of the gross weight and the volume weight, rounded up to 0.5 kg) and shows it.
+- **Rail:** train no., **wagon no.** (8 or 12 digits with the check digit), consignment note type (CIM, SMGS or CIM/SMGS) and number, terminals, border station.
+
+These are format checks only: VEYRA does not look the numbers up anywhere.
+
+## Late legs
+
+On a multi-leg load, a leg that is late shows a red line, for example "Late: 51.3 h past the planned delivery". It means one of these: the planned pickup passed and the leg has not started; the planned delivery passed; the latest ETA is after the planned delivery; or the leg before will arrive after this leg's pickup (the handover is at risk). A difference of up to one hour is ignored, and a date with no time counts as the end of that day. NEXUS leaves one task per delay in **Inbox & tasks**; the task closes by itself when the leg is on time again, delivered or cancelled. It all depends on the dates and ETAs you enter.
+
+## Temperature (cold chain)
+
+In the load window, the **Temperature** section is for loads that must stay in a range (fruit, medicine, frozen goods).
+1. **Set range:** the lowest and highest allowed temperature in °C (Operations or Admin).
+2. **Add reading** each time you learn the temperature (for example when the driver reports it). Everyone who may log positions can add readings. Readings are typed by people: no sensor is connected.
+3. A reading outside the range turns red, and the section says "Now too warm / too cold". NEXUS leaves **one task per stretch** outside the range, not one per reading. When the temperature comes back and goes out again, that is a new task.
+
+## Warehouse legs
+
+A **warehouse leg** receives goods, stores them and hands them to the next leg (Operations or Admin).
+1. Book the warehouse leg. Press **Receive goods**: pieces expected, pieces received, damaged pieces, free storage days, the price per day (optional) and a note. The leg is now "in storage" and shows the days stored and the storage charge. Storage is charged per started day after the free days.
+2. If pieces are missing, extra or damaged, NEXUS leaves a task. If the goods stay longer than the free days, you get a task too ("charges are running"); it closes when you release the goods.
+3. Press **Release goods** (the number of pieces released starts at the good pieces). The leg is delivered and handed over to the next leg.
+
+## Last mile: stops and proof of delivery
+
+A **last-mile leg** can have many stops (Operations or Admin).
+1. **Add stop:** address, receiver, phone, pieces and a deliver-by time (in UTC).
+2. When the leg is **In Transit**, each stop has **Delivered** and **Not delivered**.
+   - **Delivered:** enter **who received it** (required) and a note. To attach the signed paper or a photo, first upload it in the load's **Documents**, then pick it in the list ("Proof of delivery file").
+   - **Not delivered:** enter the reason. NEXUS leaves a task. Press **Try again** to make the stop pending again.
+3. A pending stop can be **Removed**. When **every stop is delivered**, the leg is completed by itself and handed over to the next leg.
+4. A stop whose deliver-by time passed more than an hour ago gets a task; it closes when the stop is delivered.
+
+## Customs and dangerous goods
+
+In the load window, **Customs & dangerous goods** holds what the border and special cargo need (Operations or Admin can save it):
+- **Customs:** goods description, HS code (6 to 10 digits), the two country codes (for example `UZ`, `TR`), declared value, Incoterm, customs status (not started, documents requested, declared, held, cleared) and the declaration number once declared.
+- **Dangerous goods:** tick the box, then the UN number (`UN1263`), class, packing group and the proper shipping name.
+- VEYRA shows **warnings** (never decisions): for example dangerous goods on an air leg (check the airline accepts them), on a sea leg or on a road leg (driver training, plates), or a border crossing with no HS code, value or Incoterm. If customs **hold** the goods, NEXUS leaves a task until the status changes.
+- **Important:** these are format checks and reminders only. They are **not legal or dangerous-goods advice**, and no customs system is connected. Your customs broker and dangerous-goods adviser decide.
+
+## Keeping old data (administrators)
+
+In **Team & settings → Keeping old data** an administrator chooses how many days VEYRA keeps: positions, messages and files of **finished** loads (at least 30, 30 and 90 days), done NEXUS tasks (30) and the activity log (365). **An empty box keeps that kind of data for ever; everything starts empty.**
+- **Save** removes nothing. Beside each box you see how many items a removal would take now.
+- **Remove now** asks you to confirm, then removes them for good. You can also tick **Remove automatically once a day**.
+- **Never removed:** the loads themselves, money, status history, legs and trips. Tasks you dismissed stay, so their warning does not come back. Files kept in R2 are deleted from R2 too.
+- Removal cannot be undone, so keep regular backups.
+
 ## Not available yet
 
+- **No live connections** to shipping lines, airlines, railways, ports, couriers, customs, warehouse systems or temperature sensors. You type the data; the screens and checks are built around that.
 - Live border queues (no free open source; entered by hand for now).
 - Automatic market prices from the internet (entered by hand).
-- Gmail/Outlook, traffic and the map have not been tried with the real services yet: they were only checked with fake responses. At the first connection, check the result yourself.
+- **Not yet tried with the real services:** the AI model, SMS / WhatsApp, email, Gmail / Outlook, the map, traffic, card payments and Cloudflare R2 were only checked with fake responses. At the first connection, use a test account and check the result yourself. The current status of each one is in `docs/INTEGRATIONS.md`.
+- Security review status: see `docs/SECURITY.md`.
 
 ## Plans and pricing
 

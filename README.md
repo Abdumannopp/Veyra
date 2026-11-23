@@ -1,158 +1,125 @@
 # VEYRA Logistics Platform
 
-A production-style logistics dashboard and backend built with Express and SQLite.
+A multi-company logistics platform for freight forwarders and trucking companies. One customer order can travel by
+**road, ocean, air, rail, warehouse and last mile**, with a price, a carrier, documents and a status for every leg.
+Built with Express (Node 22); it stores data in a single SQLite file or, for production, in PostgreSQL.
+AI helpers prepare work (read an email, rank carriers, draft a message, compare a document); **people press every button
+that sends, books or changes something.**
 
-## Features
+> **Honest status.** Everything is entered by people. Veyra has **no live connection** to carriers, ports, airlines,
+> railways, couriers, customs, warehouse systems or temperature sensors. The outside services it can use (AI, SMS /
+> WhatsApp, mail, maps, card payments, Cloudflare R2) have so far been checked **only against fake responses**; see
+> [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). An **independent security review has not been done**; see
+> [docs/SECURITY.md](docs/SECURITY.md).
 
-- Dark premium logistics landing page
-- Authentication with JWT
-- SQLite persistence for users and shipments
-- Admin operations console with role-based access
-- Shipment intake with required customer, route, date, weight, and equipment details
-- Carrier assignment, quoted rate, and dispatch management
-- Validated shipment lifecycle with an auditable activity history
+## What it does
 
-## Shipment operations flow
+| Area | What you get |
+|---|---|
+| **Road loads (FTL)** | Create a load, find a carrier, dispatch with the carrier rate and customer price (live margin), log positions, deliver or report an exception, full history. |
+| **Multi-leg orders** | Road, ocean, air, rail, warehouse and last-mile legs in order, each with its own carrier, price, schedule, reference and tracking; handovers between legs; the load's status and price follow its legs; carriers are paid leg by leg. |
+| **LTL trips** | One truck carrying several loads: capacity in kg and pallets, the truck price shared by weight, one position for all loads, suggestions for loads that could share a truck. |
+| **Ocean, air, rail details** | Container, seal and booking; AWB, flight, airports, pieces and chargeable weight; wagon, consignment note and border station. Container, AWB and wagon numbers are checked with their check digits. |
+| **Delays** | Each leg shows if it is late or if the leg before will arrive after its pickup; one task per delay. |
+| **Cold chain** | A temperature range per load, readings typed by people, stretches outside the range, one task per stretch. |
+| **Warehouse** | Receiving (pieces, damage), storage days and charges, release to the next leg. |
+| **Last mile** | Several stops per leg, proof of delivery per stop (who received it, a note, a file), failed stops and retries. |
+| **Customs and dangerous goods** | HS code, countries, value, Incoterm, customs status; UN number, class, packing group. Format checks and warnings only, not legal advice. |
+| **Documents (VAULT)** | CMR, proof of delivery, bill of lading, air waybill and rail notes: stored per company, read by AI, compared with the load by plain rules. Kept in the database by default, or in an encrypted Cloudflare R2 bucket. |
+| **AI agents** | FLOW (read an order), SCOUT (rank carriers), RELAY (draft messages), NEXUS (tasks), VAULT (documents), ROUTE, PULSE, SENTINEL, TRACE (GPS). They only prepare; a person decides. |
+| **Companies and money** | Many companies, each isolated from the others (plus PostgreSQL row level security); roles; plans and card payments through Paddle; quotes; analytics; invoices; per-company currency, weight unit, time zone and locale. |
+| **Operations** | Durable background jobs, versioned database migrations, daily backups, a restore drill, a load test, a per-company retention setting, an activity log. |
 
-This is one truck (FTL) load from order to delivery:
+## Documentation
 
-1. Create a shipment with the New Shipment form (weight in the configured unit, optional customer price).
-2. Move the shipment from New to Sourcing, then optionally to Pending Approval.
-3. Dispatch: pick an available carrier, enter the carrier rate, the customer price (margin is shown live), truck plate and driver.
-4. While the truck is on the road, log location updates ("where is the truck now?", ETA, note) from the load's details. Trucks with no update for 12 hours appear in notifications.
-5. Move the load through In Transit to Delivered, or log an Exception. A dispatched load can still be cancelled before pickup.
-6. Use History on a shipment to review its recorded activity.
+Start with **[docs/INDEX.md](docs/INDEX.md)**: it says which file answers which question.
 
-Allowed progression is enforced by the API. Carriers assigned to dispatched loads are marked Busy and released when the shipment is Delivered or Cancelled.
-
-### Operations API
-
-- `POST /api/shipments` creates a validated shipment.
-- `PATCH /api/admin/shipments/:id/status` advances an allowed lifecycle state.
-- `POST /api/admin/shipments/:id/dispatch` assigns an available carrier and rate.
-- `GET /api/shipments/:id/events` returns shipment activity history.
-- `GET /api/shipments/:id/tracking` lists location updates; `POST` adds one (`location`, optional `eta` as `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, optional `note`) while the load is Dispatched, In Transit or Exception.
-- Dispatch also accepts optional `customerRate`, `driverName`, `driverPhone`, `truckPlate`; shipments return `customerRate`, `margin`, driver/truck fields, `lastLocation` and `eta`.
-- `GET /api/config` (public) returns `weightUnit`, `currency`, `equipment` and the sign-up mode.
-- `POST /api/admin/users` (admin) adds a team member; `PATCH /api/admin/users/:id` changes `role` and/or `active`. Changes sign the user out immediately.
-- `GET /api/shipments/search?page=&limit=&status=&q=&equipment=&sort=` returns one page (`items`, `total`, `pages`, `statusCounts`); `GET /api/alerts` returns the notification counts. Both are computed in SQL, so they stay correct at any volume.
-
-### AI agents and integrations
-
-| Agent | What it does | Needs |
-|---|---|---|
-| **FLOW** | `POST /api/agents/flow/parse` `{text}` turns a customer's email / WhatsApp message into a shipment draft (weight converted to the configured unit, missing fields listed, questions to ask). Nothing is saved: a person reviews the form and presses Create. | `OPENROUTER_API_KEY` |
-| **SCOUT** | `GET /api/agents/scout/:id` ranks available carriers by trailer fit, deliveries on the same lane and past problems, and suggests a rate from lane history. Rules, not a language model: free, instant, explainable. | nothing |
-| **RELAY** | `POST /api/shipments/:id/messages/draft` drafts a message to the driver, carrier or customer (English templates filled from the load's real data); `POST /api/shipments/:id/messages` sends it by SMS or WhatsApp. The number always comes from the load record. | Twilio settings to send; drafts and "Copy text" work without |
-| **NEXUS** | Reacts to events and leaves **tasks** for a person under *Inbox & tasks*: review an order that arrived by email, book a carrier (SCOUT's top picks), approve drafted messages (booking, pickup details, delivered, "where are you?" for quiet trucks), check a document that differs from the load. It only prepares: nothing is sent, booked or changed until a person presses the button. | nothing (AI only for reading emails) |
-| **VAULT** | `POST /api/shipments/:id/documents?type=cmr\|pod\|other&filename=` (raw PDF/JPEG/PNG/WebP body) stores a document; for CMR and proof of delivery an AI model reads it and plain rules compare weight (10% allowance), truck plate, loading and delivery place, customer and date with the load. Differences become a task; the load is never edited. Also `GET .../documents`, `GET .../documents/:docId/file` (always an attachment), `POST .../documents/:docId/extract`, `DELETE`. The file type is checked from the first bytes, size is capped, files are kept per company. | `OPENROUTER_API_KEY` and a model that can read images / PDFs |
-| **Email inbox** | `POST /api/integrations/inbox/<company token>` receives incoming email (Postmark JSON, Mailgun and SendGrid Inbound Parse forms incl. multipart with files, generic JSON). Attached PDF/JPEG/PNG/WebP files are kept (type checked from the first bytes, signature logos dropped, files from blocked senders never stored): an email that names a load (`SHP-12` or its reference) puts them on that load and VAULT reads them; otherwise they wait with the email (`GET /api/inbox/:id/attachments/:fileId/file`, `POST /api/inbox/:id/attach {shipmentId}`) and move to the load created from it. Senders can be restricted to an allow-list; duplicates (same Message-ID) are stored once; FLOW reads the email and a task appears. Nothing becomes a load until a person presses *Create load*. Daily cap per company. | an email service that can POST to a URL |
-| **ROUTE** | `GET /api/agents/route/:id`: typical transit time on the lane (median of the company's delivered loads), whether the promised dates are realistic, probable arrival, and trucks that unload near the pickup (return loads). Rules only; needs 3 delivered loads on the lane. No map service. | nothing |
-| **PULSE** | `GET /api/agents/pulse/:id?rate=&customerRate=`: usual carrier and customer prices on the lane, a suggested customer price, and warnings (price 30%+ off the usual, thin margin, loss). Shown live in the dispatch window; booking at a warned price leaves a task. | nothing |
-| **SENTINEL** | `GET /api/agents/sentinel`: open loads at risk (no truck and pickup near, pickup or delivery day passed, ETA after the promised day, missing driver phone / plate, silent truck, undelivered message). Runs every 10 minutes; one task per risk, closed automatically when the risk is gone. | nothing |
-| **Delivery reports** | Twilio posts to `/api/integrations/twilio/status/<per-message secret>`; the request must carry a valid `X-Twilio-Signature` for that company's account. Messages show sent / delivered / read / not delivered; a failed message leaves a task. | `PUBLIC_URL` (automatic on Render and Railway) |
-| **TRACE (GPS)** | `POST /api/integrations/gps` receives positions from a GPS provider (`Authorization: Bearer <company GPS token>`, body `{"positions":[{"truckPlate","lat","lng","speed","address"}]}`), matches them to the active load by truck plate and stores at most one point per `GPS_MIN_INTERVAL_MINUTES`. Admins create the token under Integrations. | a GPS provider that can POST JSON |
-
-The AI gateway (`ai/gateway.js`) is the only code that talks to a model: OpenRouter, no hard-coded model (`OPENROUTER_MODEL` empty = account default), no `HTTP-Referer` header, 20 s timeout, one retry, per-person hourly limit, and every call logged in `agent_tasks` (agent, model, tokens, time, result) — visible under Analytics → AI agents. Customer text is passed as untrusted data and the model's JSON is validated with the same rules as typed input. No new dependencies (built-in `fetch`).
-
-Tasks: `GET /api/tasks`, `POST /api/tasks/:id/dismiss`, `POST /api/tasks/:id/approve` (sends the drafted message once, optionally edited). Inbox: `GET /api/inbox`, `POST /api/inbox/:id/parse|dismiss`. Settings (admin): `PUT/DELETE /api/settings/messaging` (the company's own Twilio account, checked with Twilio, stored AES-256-GCM encrypted, never returned), `POST /api/settings/inbox/token`, `PUT /api/settings/inbox` (allowed senders).
-
-**Whose Twilio account sends?** A company that connected its own account always uses it. Otherwise only the first company may use the server-wide Twilio settings from the environment; other companies cannot send until they connect their own (or the owner sets `MESSAGING_SHARED_ALL_TENANTS=true`).
-
-### Multiple companies (multi-tenant)
-
-Every user, shipment and carrier belongs to one company (`tenant_id`); every query is scoped to the signed-in user's company and a missing company fails closed. Records of another company behave as if they do not exist (404). The platform owner (the first production admin) adds customer companies with their first administrator under **Companies** (`GET/POST /api/platform/tenants`); each company admin then adds their own team. Data from before this change belongs to company 1.
-
-- `GET /api/carriers` lists carriers with load statistics (loads, active, delivered, exceptions, booked revenue, current load).
-- `POST /api/carriers` adds a carrier (`name`, `mode`: Truckload, LTL, Expedited, Reefer, Flatbed, Intermodal; optional `phone`, `contactName`).
-- `PATCH /api/carriers/:id/status` sets a carrier `Available` or `Inactive` (refused while the carrier has an active load).
-- `GET /api/analytics?days=7|30|90` returns KPIs, daily volume, status pipeline, equipment mix, top lanes, top customers and carrier performance.
+| I want to... | Read |
+|---|---|
+| Use Veyra day to day | [USER_GUIDE.md](USER_GUIDE.md) |
+| Install it and put it online | [DEPLOYMENT.md](DEPLOYMENT.md) |
+| Understand the database, migrations and PostgreSQL | [docs/DATABASE.md](docs/DATABASE.md) |
+| Call the API | [docs/API_V1.md](docs/API_V1.md) and [docs/API_V2.md](docs/API_V2.md) |
+| Know which integrations really work | [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) |
+| See security controls and the external review | [docs/SECURITY.md](docs/SECURITY.md) |
+| Practise recovery and measure load | [docs/RECOVERY.md](docs/RECOVERY.md) |
+| See what is done and what is left | [docs/GLOBAL_ROADMAP.md](docs/GLOBAL_ROADMAP.md) |
 
 ## App pages
 
-The dashboard uses hash routes, so links can be bookmarked and shared:
+The dashboard uses hash routes, so links can be bookmarked and shared. What you see follows your role.
 
-- `#/dashboard` — overview, AI assistant and operations console.
-- `#/shipments` — all loads with status tabs, search, equipment filter, sorting, status changes, dispatch and CSV export. `#/shipments?status=Pending%20Approval` is the Approvals queue.
-- `#/carriers` — carrier network with availability, load history, add carrier and activate/deactivate.
-- `#/analytics` — 7/30/90-day analytics.
+| Page | What it is |
+|---|---|
+| `#/dashboard` | Overview, AI assistant, operations console |
+| `#/shipments` | All loads: status tabs, search, filters, CSV export, dispatch, multi-leg planner. `#/shipments?status=Pending%20Approval` is the Approvals queue |
+| `#/trips` | LTL trips and loads that could share a truck |
+| `#/tracking` | Global tracking of booked loads |
+| `#/quotes` | Quotes and pricing |
+| `#/inbox` | Inbox and tasks (what NEXUS prepared for a person) |
+| `#/command` | AI Command Center: what the agents did, switches for the automatic jobs |
+| `#/automation` | Automation Studio: your own rules |
+| `#/carriers` | Carrier network |
+| `#/agents` | The AI agents |
+| `#/analytics` | 7 / 30 / 90-day analytics |
+| `#/billing` | Plan, usage, payments, carriers owed per leg |
+| `#/settings` | Team, company, integrations, backups, keeping old data |
 
-Pages and actions follow the signed-in role; the API remains the security boundary.
+## Quick start (development)
 
-All operations endpoints require a valid JWT; admin shipment controls require an admin or operations role.
+```bash
+npm install
+cp .env.example .env      # on Windows: copy .env.example .env
+npm run dev               # http://127.0.0.1:3000, demo accounts, SQLite file in ./data
+```
 
-## Role permissions
+- Frontend files live in `public/`; only that folder is served statically.
+- `npm run dev` listens on 127.0.0.1 only and creates demo users. `npm start` and `npm run prod` run in **production mode**:
+  they refuse to start without `JWT_SECRET` and the `INITIAL_ADMIN_*` variables, and never create demo users.
+- The database is a SQLite file (`DATABASE_PATH`) unless `DATABASE_URL` points to PostgreSQL. Which to use and how data moves
+  between them: [docs/DATABASE.md](docs/DATABASE.md).
+- Hosting on Render, Railway or a VPS, every setting and the go-live checklist: [DEPLOYMENT.md](DEPLOYMENT.md).
 
-- `admin`: full access, including adding users, changing roles and disabling accounts.
-- `operations`: dashboard/analytics access, team and shipment reads, shipment creation, status changes, carrier dispatch, location updates, and carrier reads and management.
-- `operator` (dispatcher): shipment/dashboard reads, shipment creation, location updates and carrier reads. Analytics, team access, dispatch, and status changes are denied by the API.
+### Demo users (development only)
 
-Permissions are enforced server-side, and the role is read from the database on every request, so an admin's change applies immediately; hiding a UI panel is not the security boundary.
-
-## Quick start
-
-0. Frontend files live in `public/`; only that folder is served statically.
-1. Install dependencies:
-   npm install
-2. Copy environment variables:
-   copy .env.example .env
-3. Configure production values in .env:
-   - PORT=3000
-   - JWT_SECRET=your-real-secret
-   - NODE_ENV=production
-   - DATABASE_PATH=./data/veyra.db (use persistent storage for cloud hosting)
-4. Start the app locally:
-   npm start
-5. Start the app in production mode (default for `npm start`):
-   npm run prod
-
-`npm start` and `npm run prod` run in production mode and require `JWT_SECRET` plus the `INITIAL_ADMIN_*` variables. Use `npm run dev` for local development; only that mode seeds the demo users.
-
-## Production deployment checklist
-
-- Use a strong JWT secret in production
-- Run behind HTTPS / a reverse proxy
-- Set NODE_ENV=production
-- Mount persistent storage for SQLite; use PostgreSQL before adding app replicas
-- Add monitoring, logs, and backups
-- Keep admin credentials out of source control
-
-Render, Railway, and VPS deployment files and setup steps are in [DEPLOYMENT.md](DEPLOYMENT.md).
-
-## Demo users
-
-- Created only with `npm run dev` (NODE_ENV=development); never in production.
 - admin@veyra.ai / admin123
 - ops@veyra.ai / ops123
 - demo@veyra.ai / demo123
 
-## Production notes
+They exist only with `npm run dev` and never in production. Never expose a development server to the internet.
 
-- Change JWT_SECRET before deployment.
-- Set NODE_ENV=production using npm run prod.
-- Add HTTPS and proper hosting configuration for production use.
-- For cloud deployments, keep secrets in environment variables, not in code.
+## Roles
 
-## Registration and team
+- **admin**: everything, including adding users, changing roles, settings and integrations.
+- **operations**: loads, dispatch and booking, status changes, positions, carriers, analytics.
+- **operator** (dispatcher): create loads, log positions, read lists, message drivers; no booking or status changes.
 
-In production sign-up is closed: the administrator adds people under Team Access → Add user. Set `REGISTRATION_INVITE_CODE` to let people sign up with a code, or `ALLOW_OPEN_REGISTRATION=true` for demos. Self-registered accounts are `operator`. In development (`npm run dev`) sign-up stays open.
+Permissions are checked on the server and the role is read from the database on every request. The full list is in
+[docs/API_V1.md](docs/API_V1.md#permissions).
 
-## Region settings
+## Sign-up and region settings
 
-`WEIGHT_UNIT` (`kg` default, or `lb`), `CURRENCY` (ISO code, default `USD`) and `MAX_RATE` (largest allowed price) configure one deployment for its market. Equipment types include Tent / Curtainsider, common outside North America.
+In production sign-up is closed: the administrator adds people under Team Access → Add user. `REGISTRATION_INVITE_CODE` lets
+people sign up with a code, `ALLOW_OPEN_REGISTRATION=true` is for demos. With card payments set up, new companies can sign up
+themselves from the pricing page (see [USER_GUIDE.md](USER_GUIDE.md)). `WEIGHT_UNIT`, `CURRENCY`, `MAX_RATE`, `TIMEZONE` and
+`LOCALE` are server defaults; each company can choose its own.
 
-## Security & production notes
+## Tests
 
-- **XSS**: the frontend builds DOM with `textContent`/`createElement` only (no `innerHTML`, `eval`, inline scripts or inline handlers); a test scans the sources for these sinks. CSP is `script-src 'self'`.
-- **Auth**: JWT lives only in an HttpOnly, SameSite=Lax cookie (`Secure` in production); sessions are revocable server-side and are revoked when an admin changes or disables the account; login is rate-limited per IP, per account per IP, and per account across all IPs; one bcrypt cost for all hashes (no timing difference between accounts); production never seeds demo users and development listens on 127.0.0.1 only.
-- **Dispatch**: assignment and status changes run in a single SQLite transaction, so two operators cannot book the same carrier or load.
-- **Validation**: strict IDs, ISO dates, positive bounded numbers, 50 kb JSON limit; malformed input returns 400, never a 500.
-- **Errors**: a global handler returns generic messages; details are logged server-side only.
-- **Database**: foreign keys enforced, indexes on hot queries, `npm run db:check` runs `PRAGMA integrity_check` and `foreign_key_check`.
-- **Production start**: `NODE_ENV=production`, `JWT_SECRET` and (first start only) `INITIAL_ADMIN_NAME/EMAIL/PASSWORD` (12+ chars) are required; the server refuses to start without them.
-- **Accounts and records**: own password change and admin reset (all sessions revoked), load corrections written to the load history, payment tracking with a printable invoice, a hashed customer tracking link that exposes status only, daily database backups (platform owner only), and a per-company activity log.
-- **Tests**: `npm test` (133 tests; the list below is partial: auth, rate limits, transactions, validation, security headers, carriers, analytics, XSS, truck workflow, team management, production mode, company isolation, FLOW / SCOUT / RELAY with fake providers, GPS, paging, NEXUS tasks and approvals, email inbox, document upload and reading, per-company Twilio and secret encryption).
-- **Dependencies**: `npm audit` reports 0 vulnerabilities at the time of release.
+```bash
+npm test
+```
+
+The suite runs on SQLite; a few tests (row level security and the data copy) need PostgreSQL and are skipped on SQLite. CI runs
+the full suite on both engines for every pull request. The number of tests is deliberately not written here, so this page
+cannot go out of date: `npm test` prints it. `npm run db:check` checks a SQLite file; `npm run restore:drill` and `npm run load:test`
+are described in [docs/RECOVERY.md](docs/RECOVERY.md).
+
+## Security in one paragraph
+
+HttpOnly cookie sessions, rate-limited sign-in, server-side permissions, company isolation in the app and (on PostgreSQL) in
+the database, validated input, signed webhooks, encrypted secrets and optionally encrypted documents, an activity log.
+The full list, what the project checks itself and the **open external review** are in [docs/SECURITY.md](docs/SECURITY.md).
 
 ## License
 
