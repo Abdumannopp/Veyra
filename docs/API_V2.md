@@ -147,3 +147,16 @@ An excursion is a stretch of readings outside the range: it starts at the first 
 
 A warehouse leg in `GET /api/v2/shipments/:id` has `warehouse`: the receipt, the release and `storage` (`days` per started 24 h, `freeDays`, `chargeableDays`, `charge` = chargeable days × price per day in the load's currency, `shortPieces`, `overPieces`, `damagedPieces`).
 NEXUS (with "Warn about loads at risk" on) makes one task when goods arrive short, extra or damaged, and one task while goods are stored past their free days (closed on release). Quiet-truck checks skip warehouse legs. Entered by warehouse staff; no warehouse system is connected.
+
+## Last-mile stops
+
+| Call | What |
+|---|---|
+| `POST /api/v2/legs/:id/stops` | A LAST_MILE leg that is not finished: `{ address, contactName?, contactPhone?, pieces?, windowFrom?, windowTo?, note? }` |
+| `POST /api/v2/stops/:id/deliver` | The leg must be In Transit: `{ receivedBy, note?, deliveredAt?, documentId? }` (a document of the same load as proof of delivery). When every stop is delivered the leg becomes Delivered (`legDelivered: true`). |
+| `POST /api/v2/stops/:id/fail` | `{ reason }` |
+| `POST /api/v2/stops/:id/retry` | A failed stop becomes pending again |
+| `DELETE /api/v2/stops/:id` | A pending stop only |
+
+Last-mile legs in `GET /api/v2/shipments/:id` have `stops` (each with `missedWindow`) and `stopSummary` (`total`, `pending`, `delivered`, `failed`, `done`, `complete`).
+NEXUS (with "Warn about loads at risk" on) makes one task per failed attempt and one per stop whose deliver-by time passed more than an hour ago (closed when the stop is delivered or fails). Entered by dispatchers and drivers; no courier system is connected.

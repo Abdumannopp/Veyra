@@ -225,6 +225,10 @@ Migration 0010 adds a temperature range to loads and a table of temperature read
 
 Migration 0011 adds the table of warehouse receipts and releases. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.**
 
+## Last-mile stops
+
+Migration 0012 adds the table of last-mile stops. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.**
+
 ## Trips (LTL)
 
 One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migration `0008_trips` adds the trip tables (protected by row level security on PostgreSQL) and `shipments.trip_id`; it cannot be reversed, so take a backup before upgrading.
