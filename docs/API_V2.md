@@ -1,5 +1,14 @@
 # API v2: shipments made of legs
 
+The classic `/api` endpoints are in [API_V1.md](API_V1.md); who may call what is in its Permissions section. This page covers
+`/api/v2`. The status of outside connections is in [INTEGRATIONS.md](INTEGRATIONS.md).
+
+**Contents:** [A leg](#a-leg) · [Leg status](#leg-status) · [NEXUS and Finance for multi-leg loads](#nexus-and-finance-for-multi-leg-loads) ·
+[Trips (LTL)](#trips-ltl-one-truck-several-shipments) · [NEXUS and pooling for trips](#nexus-and-pooling-for-trips) ·
+[Schedules and delays](#schedules-and-delays) · [Ocean, air and rail papers](#ocean-air-and-rail-papers) ·
+[Cold chain](#cold-chain-temperature) · [Warehouse legs](#warehouse-legs) · [Last-mile stops](#last-mile-stops) ·
+[Customs and dangerous goods](#customs-and-dangerous-goods) · [Retention](#retention-keeping-old-data)
+
 A **shipment** is the customer's order. It moves in one or more **legs**, each by its own mode:
 `ROAD`, `OCEAN`, `AIR`, `RAIL`, `WAREHOUSE`, `LAST_MILE`.
 
