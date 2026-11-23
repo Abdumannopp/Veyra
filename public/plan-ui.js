@@ -1,6 +1,6 @@
 /* =========================================================
    VEYRA — what the company's plan lets the screens show (AI controls)
-   Loaded before script.js. Keeps the plan and hides the controls of the AI agents (the "Veyra AI" card on the dashboard,
+   Loaded before script.js. Keeps the plan and hides the controls of the AI agents (the "Quick Shipment Draft" card on the dashboard,
    the order-reading panel, the AI row in Integrations, the FLOW / VAULT buttons) for plans without the AI capability.
 
    This only decides what is SHOWN. The server still closes every AI route to such plans (needsPlan('ai') answers 402),

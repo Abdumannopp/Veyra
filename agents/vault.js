@@ -6,7 +6,15 @@
 // 2. Comparing: plain code checks the fields against the load (weight, truck plate, places,
 //    customer, date). A mismatch only raises a task for a person; VAULT never edits a load.
 const { completeJson } = require('../ai/gateway');
+const { CMR_SCHEMA, TRANSPORT_SCHEMA, validateShape } = require('../ai/schema');
+const { parsePositiveAmount } = require('../lib/numbers');
 const { parseIsoDate, normalizePlate } = require('../lib/validation');
+
+// Units a document may state. Anything else (or no unit) is NOT assumed to be kg: the weight is left for a person.
+const KNOWN_UNITS = ['kg', 'kgs', 'lb', 'lbs', 't', 'ton', 'tons', 'tonne', 'tonnes'];
+const knownUnit = (unit) => KNOWN_UNITS.includes(String(unit || '').trim().toLowerCase());
+// Document types on which the receiver's signature is the point of the paper.
+const SIGNATURE_REQUIRED = ['pod'];
 
 const KG_PER_LB = 0.45359237;
 const WEIGHT_TOLERANCE = 0.1; // gross weight on a CMR includes packaging, so allow 10%
@@ -47,11 +55,21 @@ function cleanText(value, max) {
   return text ? text.slice(0, max) : null;
 }
 
+// Only for a known unit (see knownUnit); callers never pass an unknown one.
 function toKg(weight, unit) {
-  const u = String(unit || '').toLowerCase();
-  if (u === 't' || u === 'tonne' || u === 'tonnes' || u === 'ton') return weight * 1000;
+  const u = String(unit || '').trim().toLowerCase();
+  if (['t', 'ton', 'tons', 'tonne', 'tonnes'].includes(u)) return weight * 1000;
   if (u === 'lb' || u === 'lbs') return weight * KG_PER_LB;
-  return weight; // kg, or unit unknown (assumed kg)
+  return weight;
+}
+
+// The weight as written on a paper: { value } in the unit given, or why it cannot be used.
+function readDocumentWeight(rawWeight, rawUnit) {
+  if (rawWeight === null || rawWeight === undefined || rawWeight === '') return { missing: true };
+  const amount = parsePositiveAmount(rawWeight, { max: 10000000 });
+  if (!amount.ok) return { problem: amount.ambiguous ? `the weight ${amount.reason}` : `the weight "${String(rawWeight).slice(0, 30)}" could not be read` };
+  if (!knownUnit(rawUnit)) return { asWritten: amount.value, unitMissing: true, problem: `the weight ${amount.value} has no clear unit` };
+  return { value: amount.value, unit: String(rawUnit).trim().toLowerCase() };
 }
 
 function validateExtraction(raw, { weightUnit }) {
@@ -60,19 +78,22 @@ function validateExtraction(raw, { weightUnit }) {
   fields.notes = cleanText(raw.notes, 300);
   fields.truckPlate = typeof raw.truckPlate === 'string' && normalizePlate(raw.truckPlate).length >= 3 && raw.truckPlate.length <= 30 ? raw.truckPlate.trim() : null;
   fields.date = typeof raw.date === 'string' && parseIsoDate(raw.date) ? raw.date : null;
-  const weight = Number(String(raw.grossWeight ?? '').replace(/[\s,]/g, ''));
-  if (Number.isFinite(weight) && weight > 0 && weight < 10000000) {
-    const kg = toKg(weight, raw.weightUnit);
+  const weight = readDocumentWeight(raw.grossWeight, raw.weightUnit);
+  // weightUnitAssumed is kept for older readers: it is true whenever the paper gave no clear unit. Such a weight is
+  // never converted or compared; it is shown "as written" for a person to check.
+  fields.weightUnitAssumed = Boolean(weight.unitMissing);
+  fields.grossWeightAsWritten = weight.asWritten ?? null;
+  fields.weightProblem = weight.problem || null;
+  if (weight.value !== undefined) {
+    const kg = toKg(weight.value, weight.unit);
     fields.grossWeight = Math.round(weightUnit === 'lb' ? kg / KG_PER_LB : kg);
     fields.weightUnit = weightUnit;
-    fields.weightUnitAssumed = !['kg', 'kgs', 'lb', 'lbs', 't', 'ton', 'tonne', 'tonnes'].includes(String(raw.weightUnit || '').toLowerCase());
   } else {
     fields.grossWeight = null;
     fields.weightUnit = null;
-    fields.weightUnitAssumed = false;
   }
-  const packages = Number(raw.packages);
-  fields.packages = Number.isInteger(packages) && packages > 0 && packages < 1000000 ? packages : null;
+  const packages = parsePositiveAmount(raw.packages ?? '', { max: 999999 });
+  fields.packages = packages.ok && Number.isInteger(packages.value) ? packages.value : null;
   fields.signedByConsignee = typeof raw.signedByConsignee === 'boolean' ? raw.signedByConsignee : null;
   return fields;
 }
@@ -86,16 +107,18 @@ function documentParts({ content, mime, filename }) {
   return [{ type: 'text', text: 'Read this document.' }, file];
 }
 
-async function extractFields(document, settings, log) {
+async function extractFields(document, settings, { log, usage } = {}) {
   const raw = await completeJson({
     agent: 'VAULT',
     system: systemPrompt({ weightUnit: settings.weightUnit, today: new Date().toISOString().slice(0, 10) }),
     user: documentParts(document),
     maxTokens: 700,
     timeoutMs: 45000,
-    log
+    log,
+    usage,
+    validate: (answer) => validateShape(answer, CMR_SCHEMA)
   });
-  return validateExtraction(raw || {}, settings);
+  return validateExtraction(raw, settings);
 }
 
 /* ---------------- comparing with the load (no AI) ---------------- */
@@ -128,14 +151,18 @@ function addDays(isoDate, days) {
   return date.toISOString().slice(0, 10);
 }
 
-// shipment: a row from getShipment. Returns { checks: [{ field, label, document, load, status, hint }], mismatches }.
-function compareWithShipment(fields, shipment) {
+// shipment: a row from getShipment. options.type: the document type ("pod" needs the receiver's signature).
+// Returns { checks: [{ field, label, document, load, status, hint }], mismatches, needsReview }.
+function compareWithShipment(fields, shipment, { type = null } = {}) {
   const checks = [];
   const add = (field, label, documentValue, loadValue, status, hint) => checks.push({ field, label, document: documentValue ?? null, load: loadValue ?? null, status, hint: hint || null });
 
   const docKg = fields.grossWeight ? toKg(fields.grossWeight, fields.weightUnit) : null;
   const loadKg = loadWeightKg(shipment.weight);
-  if (docKg && loadKg) {
+  if (fields.weightProblem) {
+    // No unit, or a number that can be read two ways: never compared, never "ok".
+    add('weight', 'Weight', fields.grossWeightAsWritten !== null && fields.grossWeightAsWritten !== undefined ? `${fields.grossWeightAsWritten} (no unit)` : null, shipment.weight, 'unknown', `Check by hand: ${fields.weightProblem}.`);
+  } else if (docKg && loadKg) {
     const difference = Math.abs(docKg - loadKg) / loadKg;
     add('weight', 'Weight', `${fields.grossWeight} ${fields.weightUnit}`, shipment.weight, difference <= WEIGHT_TOLERANCE ? 'ok' : 'mismatch',
       difference <= WEIGHT_TOLERANCE ? null : `Differs by ${Math.round(difference * 100)}% (more than ${WEIGHT_TOLERANCE * 100}% allowed).`);
@@ -179,7 +206,15 @@ function compareWithShipment(fields, shipment) {
     add('date', 'Date', fields.date, shipment.pickup ? `${shipment.pickup} → ${shipment.delivery}` : null, 'unknown', 'Could not compare.');
   }
 
-  return { checks, mismatches: checks.filter((check) => check.status === 'mismatch').length };
+  // The receiver's signature: only where the paper needs it. false = clearly not signed (a problem); null = not
+  // readable (a person checks); a CMR at loading is not expected to carry the receiver's signature, so no warning.
+  if (SIGNATURE_REQUIRED.includes(type)) {
+    if (fields.signedByConsignee === true) add('signature', 'Receiver signature', 'signed', 'needed', 'ok', null);
+    else if (fields.signedByConsignee === false) add('signature', 'Receiver signature', 'not signed', 'needed', 'mismatch', 'The proof of delivery has no receiver signature or stamp. Ask for a signed copy before invoicing.');
+    else add('signature', 'Receiver signature', null, 'needed', 'unknown', 'Could not see whether the receiver signed. Please check the paper.');
+  }
+
+  return { checks, mismatches: checks.filter((check) => check.status === 'mismatch').length, needsReview: checks.some((check) => check.status === 'unknown' && /^Check by hand|Could not see/.test(check.hint || '')) };
 }
 
 /* ---------------- ocean, air and rail papers (Phase 4.3) ---------------- */
@@ -248,24 +283,29 @@ function validateTransport(raw, type) {
   const typedWagons = (Array.isArray(raw.wagonNumbers) ? raw.wagonNumbers : []).length;
   if (typedContainers > fields.containerNumbers.length) unreadable.push('a container number with a wrong check digit');
   if (typedWagons > fields.wagonNumbers.length) unreadable.push('a wagon number with a wrong check digit');
-  const weight = Number(String(raw.grossWeight ?? '').replace(/[\s,]/g, ''));
-  fields.grossWeightKg = Number.isFinite(weight) && weight > 0 && weight < 10000000 ? Math.round(toKg(weight, raw.weightUnit) * 10) / 10 : null;
-  const pieces = Number(raw.pieces);
-  fields.pieces = Number.isInteger(pieces) && pieces > 0 && pieces < 1000000 ? pieces : null;
+  const weight = readDocumentWeight(raw.grossWeight, raw.weightUnit);
+  fields.grossWeightKg = weight.value !== undefined ? Math.round(toKg(weight.value, weight.unit) * 10) / 10 : null;
+  fields.grossWeightAsWritten = weight.asWritten ?? null;
+  fields.weightUnitAssumed = Boolean(weight.unitMissing);
+  fields.weightProblem = weight.problem || null;
+  const pieces = parsePositiveAmount(raw.pieces ?? '', { max: 999999 });
+  fields.pieces = pieces.ok && Number.isInteger(pieces.value) ? pieces.value : null;
   fields.unreadable = unreadable;
   return fields;
 }
 
-async function extractTransport(document, type, log) {
+async function extractTransport(document, type, { log, usage } = {}) {
   const raw = await completeJson({
     agent: 'VAULT',
     system: transportPrompt(type, { today: new Date().toISOString().slice(0, 10) }),
     user: documentParts(document),
     maxTokens: 900,
     timeoutMs: 45000,
-    log
+    log,
+    usage,
+    validate: (answer) => validateShape(answer, TRANSPORT_SCHEMA)
   });
-  return validateTransport(raw || {}, type);
+  return validateTransport(raw, type);
 }
 
 const same = (a, b) => String(a || '').replace(/[\s-]/g, '').toUpperCase() === String(b || '').replace(/[\s-]/g, '').toUpperCase();
@@ -313,14 +353,16 @@ function compareWithLeg(fields, leg, shipment) {
   }
 
   const legKg = Number(details.grossWeightKg) || loadWeightKg(shipment?.weight);
-  if (fields.grossWeightKg && legKg) {
+  if (fields.weightProblem) {
+    add('weight', 'Weight', fields.grossWeightAsWritten !== null && fields.grossWeightAsWritten !== undefined ? `${fields.grossWeightAsWritten} (no unit)` : null, legKg ? `${Math.round(legKg)} kg` : null, 'unknown', `Check by hand: ${fields.weightProblem}.`);
+  } else if (fields.grossWeightKg && legKg) {
     const difference = Math.abs(fields.grossWeightKg - legKg) / legKg;
     add('weight', 'Weight', `${fields.grossWeightKg} kg`, `${Math.round(legKg)} kg`, difference <= WEIGHT_TOLERANCE ? 'ok' : 'mismatch',
       difference <= WEIGHT_TOLERANCE ? null : `Differs by ${Math.round(difference * 100)}% (more than ${WEIGHT_TOLERANCE * 100}% allowed).`);
   } else add('weight', 'Weight', fields.grossWeightKg ? `${fields.grossWeightKg} kg` : null, legKg ? `${Math.round(legKg)} kg` : null, 'unknown', 'Could not compare.');
 
   for (const text of fields.unreadable || []) add('unreadable', 'Unreadable number', text, null, 'mismatch', 'The number on the paper fails its check digit: read it again or check the paper.');
-  return { checks, mismatches: checks.filter((check) => check.status === 'mismatch').length };
+  return { checks, mismatches: checks.filter((check) => check.status === 'mismatch').length, needsReview: checks.some((check) => check.status === 'unknown' && /^Check by hand/.test(check.hint || '')) };
 }
 
 module.exports = {

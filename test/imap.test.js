@@ -98,7 +98,7 @@ before(async () => {
   fake = await startFakeImap();
   process.env.IMAP_ALLOW_PRIVATE = 'true';
   imap.setConnector(async () => net.connect(fake.port, '127.0.0.1'));
-  aiGateway.setTransport(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ customer: 'Navoiy', origin: 'Tashkent, UZ', destination: 'Almaty, KZ', pickup: '2030-05-10', delivery: '2030-05-12', weight: 18, weightUnit: 't', equipment: 'Reefer', questions: [], confidence: 0.9 }) } }] }), { status: 200 }));
+  aiGateway.setTransport(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ customer: 'Navoiy', customerPhone: null, reference: null, origin: 'Tashkent, UZ', destination: 'Almaty, KZ', pickup: '2030-05-10', delivery: '2030-05-12', weight: 18, weightUnit: 't', equipment: 'Reefer', customerRate: null, customerRateCurrency: null, questions: [], confidence: 0.9 }) } }] }), { status: 200 }));
 });
 after(async () => {
   await nexus.idle();

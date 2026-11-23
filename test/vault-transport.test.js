@@ -27,7 +27,7 @@ const upload = (type, marker) => fetch(`${base}/api/shipments/${load.id}/documen
 const fakeModel = (reply) => aiGateway.setTransport(async () => new Response(JSON.stringify({ model: 'test/vision', choices: [{ message: { content: JSON.stringify(reply) } }], usage: { prompt_tokens: 900, completion_tokens: 120 } }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
 const bl = {
-  documentNumber: 'MSCUBL7788', shipper: 'Silk Road Foods', consignee: 'Hamburg Imports', carrier: 'MSC', vessel: 'MSC Aurora', voyage: 'AU123',
+  documentNumber: 'MSCUBL7788', shipper: 'Silk Road Foods', consignee: 'Hamburg Imports', carrier: 'MSC', vessel: 'MSC Aurora', voyage: 'AU123', flightNumber: null, trainNo: null,
   from: 'Poti, Georgia', to: 'Hamburg, Germany', date: '2026-12-08', containerNumbers: ['CSQU 305438-3'], wagonNumbers: [], pieces: 20, grossWeight: 18.2, weightUnit: 't', goods: 'Dried fruit', notes: null
 };
 
@@ -102,7 +102,7 @@ test('a B/L for another container and vessel raises one task naming the leg', as
 });
 
 test('an AWB on a load with no air leg is read but has nothing to compare with', async () => {
-  fakeModel({ documentNumber: '235-12345675', from: 'TAS', to: 'HAM' });
+  fakeModel({ ...Object.fromEntries(Object.keys(bl).map((key) => [key, null])), containerNumbers: [], wagonNumbers: [], documentNumber: '235-12345675', from: 'TAS', to: 'HAM' });
   const doc = (await (await upload('air_waybill', 'noleg')).json()).document;
   await nexus.idle();
   const read = (await json('GET', `/api/shipments/${load.id}/documents`)).body.documents.find((item) => item.id === doc.id);

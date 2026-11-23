@@ -29,6 +29,7 @@ truth* below wins, and the other should only link to it.
 | Document | What it is for |
 |---|---|
 | [docs/API_V1.md](API_V1.md) | The classic `/api` endpoints: loads, carriers, tasks, agents, companies, and the permission table. |
+| [docs/AI.md](AI.md) | **Source of truth** for the AI rules: consent, quota, ledger, data sent, answer checks, numbers, dates and error codes. |
 | [docs/API_V2.md](API_V2.md) | `/api/v2`: legs, trips, delays, documents per mode, cold chain, warehouse, last mile, customs, retention. |
 
 ## 5. Database and migrations

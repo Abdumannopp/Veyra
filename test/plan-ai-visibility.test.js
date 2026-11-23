@@ -1,4 +1,4 @@
-// The AI card and the AI controls follow the plan. Starter has no AI agents: it must not see the "Veyra AI" card on the
+// The AI card and the AI controls follow the plan. Starter has no AI agents: it must not see the "Quick Shipment Draft" card on the
 // dashboard or the controls of FLOW / VAULT, and the server must still refuse every AI call. Growth, Scale and
 // Enterprise keep everything. Each plan is checked through the real server answers and the real screen code
 // (public/plan-ui.js, run here against a small fake page).
@@ -69,7 +69,7 @@ test('every plan: the card, the AI intake and the sidebar text follow what /api/
     const { ai, card, promo, intake } = screen();
     ai.set(me.plan);
     ai.apply();
-    assert.equal(card.classList.contains('hidden'), !hasAi(key), `${key}: the "Veyra AI" card is ${hasAi(key) ? 'shown' : 'hidden'}`);
+    assert.equal(card.classList.contains('hidden'), !hasAi(key), `${key}: the "Quick Shipment Draft" card is ${hasAi(key) ? 'shown' : 'hidden'}`);
     assert.equal(intake.classList.contains('hidden'), !hasAi(key), `${key}: the order-reading panel`);
     assert.equal(/reads orders/.test(promo.text), hasAi(key), `${key}: the sidebar text only says "reads orders" where the plan can`);
     assert.match(promo.text, /ranks carriers/, `${key}: the sidebar text stays`);

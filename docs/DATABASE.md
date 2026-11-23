@@ -85,6 +85,7 @@ npm run migrate -- down 1
 | `0012_last_mile_stops` | Last-mile stops and proof of delivery | Yes, while empty |
 | `0013_shipment_compliance` | Customs and dangerous-goods record | Yes, while empty |
 | `0014_retention_settings` | Retention settings on companies | Yes |
+| `0015_ai_quota_ledger_consent` | AI quota counters, AI call ledger, AI data-sharing consent on companies | Only while `ai_calls` is empty |
 
 "Yes, while empty" means the migration can be undone only until the first record is saved; after that the only way back is
 the backup taken before the upgrade.

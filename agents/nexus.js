@@ -20,6 +20,7 @@ const jobQueue = require('../lib/job-queue');
 const studio = require('./studio');
 const plans = require('../lib/plans');
 const aiGateway = require('../ai/gateway');
+const { logEvent } = require('../lib/log');
 const flowAgent = require('./flow');
 const scoutAgent = require('./scout');
 const relayAgent = require('./relay');
@@ -48,7 +49,8 @@ async function regionFor(tenantId) {
   const tenant = await db.getTenant(tenantId);
   const currency = /^[A-Z]{3}$/.test(String(tenant?.currency || '')) ? tenant.currency : settings.flow.currency;
   const weightUnit = ['kg', 'lb'].includes(tenant?.weightUnit) ? tenant.weightUnit : settings.flow.weightUnit;
-  return { currency, weightUnit };
+  // FLOW resolves "tomorrow" in the company's own day; no zone set = UTC (documented in docs/AI.md).
+  return { currency, weightUnit, timeZone: tenant?.timeZone || null };
 }
 const moneyFor = (currency) => (value) => {
   try {
@@ -105,17 +107,20 @@ async function idle() {
   await jobQueue.idle();
 }
 
+// The agent_tasks row (analytics). A failure is logged as a structured line, never swallowed silently; the gateway's
+// own ledger (ai_calls) and quota counters do not depend on it.
 const logger = (tenantId, shipmentId = null) => (task) => db.recordAgentTask(tenantId, { ...task, shipmentId, actorId: null })
-  .catch((error) => console.error('[NEXUS] agent log failed:', error.message));
+  .catch((error) => logEvent('error', 'ai_audit_log_failed', { tenantId, agent: task.agent, source: 'nexus', error: error.message }));
+const aiContext = (tenantId, shipmentId = null) => ({ log: logger(tenantId, shipmentId), usage: { tenantId } });
 
-// Automatic AI work stops at a daily cap per company, so a flood of emails cannot run up a bill.
+// Automatic AI work needs the plan, the company's consent and quota left today (one shared budget with the people
+// of the company). The gateway checks consent and quota again and takes the unit; this only avoids queuing work.
 async function aiAvailable(tenantId) {
   if (!aiGateway.isEnabled()) return { ok: false, reason: 'AI is off.' };
   const plan = plans.resolvePlan(await db.getTenant(tenantId));
   if (plan.locked || !plan.capabilities.includes('ai')) return { ok: false, reason: `AI agents are not part of the ${plan.name} plan${plan.locked ? ' right now' : ''}.` };
-  if ((await db.countAgentTasksToday(tenantId)) >= settings.aiDailyLimit) {
-    return { ok: false, reason: 'The daily AI limit for this company was reached.' };
-  }
+  const available = await aiGateway.availability(tenantId);
+  if (!available.ok) return { ok: false, reason: available.reason };
   return { ok: true };
 }
 
@@ -207,10 +212,12 @@ async function onInboxReceived({ tenantId, inboxId }) {
       note = ai.reason;
     } else {
       try {
-        parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, { ...settings.flow, ...(await regionFor(tenantId)) }, logger(tenantId));
+        parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, { ...settings.flow, ...(await regionFor(tenantId)) }, aiContext(tenantId));
         await db.updateInboxItem(tenantId, inboxId, { status: 'parsed', parsed });
+        if (parsed.needsReview) note = `Check by hand before creating the load: ${parsed.review.join(' ')}`;
       } catch (error) {
-        note = 'FLOW could not read this email automatically.';
+        // Too long, no consent, no quota left, or an answer that failed the checks: a person reads the email.
+        note = error.code ? error.message : 'FLOW could not read this email automatically.';
         await db.updateInboxItem(tenantId, inboxId, { status: 'failed', error: error.message });
       }
     }
@@ -474,8 +481,8 @@ async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = f
   const mode = vaultAgent.TRANSPORT_DOC_MODES[document.type];
   if (mode) return readTransportDocument({ tenantId, shipmentId, document, file, shipment, mode });
   try {
-    const fields = await vaultAgent.extractFields({ content: file.content, mime: file.mime, filename: file.filename }, { ...settings.flow, ...(await regionFor(tenantId)) }, logger(tenantId, shipmentId));
-    const comparison = vaultAgent.compareWithShipment(fields, shipment);
+    const fields = await vaultAgent.extractFields({ content: file.content, mime: file.mime, filename: file.filename }, { ...settings.flow, ...(await regionFor(tenantId)) }, aiContext(tenantId, shipmentId));
+    const comparison = vaultAgent.compareWithShipment(fields, shipment, { type: document.type });
     await db.updateDocumentExtraction(tenantId, documentId, { status: 'done', extracted: fields, comparison });
     if (comparison.mismatches > 0) {
       await db.createTask(tenantId, {
@@ -497,7 +504,7 @@ async function readTransportDocument({ tenantId, shipmentId, document, file, shi
   try {
     const legs = (await db.getShipmentLegs(tenantId, shipmentId))?.legs || [];
     const leg = legs.find((item) => item.id && item.id === document.legId) || legs.find((item) => item.id && item.mode === mode) || null;
-    const fields = await vaultAgent.extractTransport({ content: file.content, mime: file.mime, filename: file.filename }, document.type, logger(tenantId, shipmentId));
+    const fields = await vaultAgent.extractTransport({ content: file.content, mime: file.mime, filename: file.filename }, document.type, aiContext(tenantId, shipmentId));
     const comparison = leg
       ? vaultAgent.compareWithLeg(fields, leg, shipment)
       : { checks: [{ field: 'leg', label: 'Leg', document: mode, load: null, status: 'unknown', hint: `This load has no ${MODE_NAMES[mode] || mode} leg to compare with.` }], mismatches: 0 };
@@ -679,6 +686,8 @@ async function onTemperatureReading({ tenantId, shipmentId, readingId }) {
 // Looks at every company's booked trucks. One task per truck per "silence": a new task appears only
 // after the truck has reported again and then gone quiet again.
 async function sweep() {
+  // Old quota windows are removed after a few days (the ledger in ai_calls is kept).
+  await runAsSystem(() => db.pruneAiQuota()).catch((error) => logEvent('error', 'ai_quota_prune_failed', { error: error.message }));
   return runAsSystem(sweepAllCompanies);
 }
 

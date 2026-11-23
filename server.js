@@ -131,6 +131,8 @@ const {
   createMessage,
   listMessages,
   recordAgentTask,
+  getAiConsent,
+  setAiConsent,
   getAgentUsage,
   listCarriersWithStats,
   getScoutData,
@@ -177,6 +179,7 @@ const { runAsSystem, runAsTenant } = require('./lib/tenant-context');
 const { addMoney } = require('./lib/money');
 const timeLib = require('./lib/time');
 const legsLib = require('./lib/legs');
+const { logEvent } = require('./lib/log');
 const coldChain = require('./lib/cold-chain');
 const warehouseLib = require('./lib/warehouse');
 const lastMileLib = require('./lib/last-mile');
@@ -574,13 +577,9 @@ const normalApiLimiter = createRateLimiter({
   message: 'Too many API requests. Please try again later.'
 });
 
-// AI calls cost money: each person gets a fair hourly budget.
-const aiLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000,
-  max: readPositiveInteger(process.env.AI_RATE_LIMIT_PER_HOUR, 60),
-  keyGenerator: (req) => `ai:${req.user?.id}`,
-  message: 'AI hourly limit reached. Please fill the form by hand or try again later.'
-});
+// AI budgets (a daily one per company, an hourly one per person) are NOT kept here in memory: they live in the
+// database and are taken by ai/gateway.js for every model call, so they survive restarts, hold across several server
+// instances and cover automatic NEXUS work too. Settings: AI_DAILY_LIMIT_PER_TENANT, AI_RATE_LIMIT_PER_HOUR.
 
 // Text messages cost money and can annoy drivers: an hourly cap per person.
 const messageLimiter = createRateLimiter({
@@ -794,11 +793,15 @@ function sanitizeUser(user) {
   };
 }
 
-// Writes an agent_tasks row for every AI call (success or failure).
+// Writes an agent_tasks row for every AI call (success or failure). A failure is a structured log line, never
+// swallowed silently; the gateway's ledger (ai_calls) and quota counters do not depend on this row.
 function agentLogger(req, shipmentId = null) {
   return (task) => recordAgentTask(req.user.tenantId, { ...task, shipmentId, actorId: req.user.id })
-    .catch((error) => console.error('[agent log] failed:', error.message));
+    .catch((error) => logEvent('error', 'ai_audit_log_failed', { tenantId: req.user.tenantId, agent: task.agent, source: 'api', error: error.message }));
 }
+
+// What every AI call from a person needs: who pays (the company), who asked (the person's hourly budget), the log.
+const aiContext = (req, shipmentId = null) => ({ log: agentLogger(req, shipmentId), usage: { tenantId: req.user.tenantId, userId: req.user.id } });
 
 // Writes one line to the company's activity log. Never blocks or fails the request it describes.
 function audit(req, action, detail = null) {
@@ -807,7 +810,11 @@ function audit(req, action, detail = null) {
 }
 
 function sendError(res, error, fallbackMessage, logLabel) {
-  if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+  if (error.statusCode) {
+    // AI errors carry a stable code (AI_QUOTA_EXCEEDED, AI_CONSENT_REQUIRED, AI_INPUT_TOO_LONG, AI_INVALID_OUTPUT, ...).
+    if (error.retryAfterSeconds) res.setHeader('Retry-After', String(error.retryAfterSeconds));
+    return res.status(error.statusCode).json({ success: false, message: error.message, ...(error.code ? { code: error.code } : {}), ...(error.details ? { details: error.details } : {}) });
+  }
   console.error(`[${logLabel}] failed:`, error.message);
   return res.status(500).json({ success: false, message: fallbackMessage });
 }
@@ -1647,6 +1654,28 @@ app.get('/api/ai/command-center', authMiddleware, requirePermission('shipments:r
   }
 });
 
+/* ---------- AI data sharing: a company's consent to send data to the AI provider ---------- */
+// Off until an administrator switches it on. Every change is written to the activity log (who and when), and the
+// latest change is shown with the setting. The gateway refuses every model call while it is off.
+app.get('/api/settings/ai-consent', authMiddleware, requirePermission('users:read'), async (req, res) => {
+  try {
+    return res.json({ success: true, ...(await getAiConsent(req.user.tenantId)), provider: 'OpenRouter', canChange: hasPermission(req.user, 'settings:write') });
+  } catch (error) {
+    return sendError(res, error, 'AI data sharing setting unavailable.', 'ai consent');
+  }
+});
+
+app.put('/api/settings/ai-consent', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    if (typeof req.body?.consent !== 'boolean') return res.status(400).json({ success: false, message: 'Send { "consent": true } or { "consent": false }.' });
+    const saved = await setAiConsent(req.user.tenantId, req.body.consent, req.user.id);
+    audit(req, 'ai.consent', req.body.consent ? 'Sending data to the AI provider (OpenRouter): ON' : 'Sending data to the AI provider (OpenRouter): OFF');
+    return res.json({ success: true, ...saved, provider: 'OpenRouter', canChange: true });
+  } catch (error) {
+    return sendError(res, error, 'AI data sharing setting could not be saved.', 'ai consent save');
+  }
+});
+
 /* ---------- retention (Phase 6.2): how long old detail is kept ---------- */
 async function sendRetention(res, tenantId, extra = {}) {
   const { settings, lastRun } = await coldChainDb.getRetention(tenantId);
@@ -2264,14 +2293,14 @@ app.post('/api/inbox/:id/dismiss', authMiddleware, requirePermission('shipments:
 });
 
 // Read a stored email with FLOW on demand (when it was not read automatically).
-app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:create'), aiLimiter, needsPlan('ai'), async (req, res) => {
+app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:create'), needsPlan('ai'), async (req, res) => {
   const itemId = Number(req.params.id);
   if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ success: false, message: 'Valid inbox ID is required.' });
   try {
     const item = await getInboxItem(req.user.tenantId, itemId);
     if (!item) return res.status(404).json({ success: false, message: 'Message not found.' });
     if (['converted', 'dismissed'].includes(item.status)) return res.status(409).json({ success: false, message: 'This message was already handled.' });
-    const parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, flowSettings(req.user.region), agentLogger(req));
+    const parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, flowSettings(req.user.region), aiContext(req));
     await updateInboxItem(req.user.tenantId, itemId, { status: 'parsed', parsed, error: null });
     return res.json({ success: true, ...parsed });
   } catch (error) {
@@ -2280,7 +2309,7 @@ app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:cr
 });
 
 function flowSettings(region = regionFrom()) {
-  return { weightUnit: region.weightUnit, currency: region.currency, equipment: EQUIPMENT, maxRate: MAX_RATE, maxWeight: MAX_WEIGHT };
+  return { weightUnit: region.weightUnit, currency: region.currency, timeZone: region.timeZone, equipment: EQUIPMENT, maxRate: MAX_RATE, maxWeight: MAX_WEIGHT };
 }
 
 // Which load is an email about? Its number (SHP-12) or, failing that, the load's own reference in the text.
@@ -2733,7 +2762,7 @@ app.get('/api/shipments/:id/documents/:docId/file', authMiddleware, requirePermi
 });
 
 // Read (or re-read) a document with VAULT. Runs in the background; the list shows the result.
-app.post('/api/shipments/:id/documents/:docId/extract', authMiddleware, requirePermission('shipments:document'), aiLimiter, needsPlan('ai'), async (req, res) => {
+app.post('/api/shipments/:id/documents/:docId/extract', authMiddleware, requirePermission('shipments:document'), needsPlan('ai'), async (req, res) => {
   const shipmentId = parseShipmentId(req.params.id);
   const docId = Number(req.params.docId);
   if (!shipmentId || !Number.isInteger(docId) || docId <= 0) return res.status(400).json({ success: false, message: 'Valid IDs are required.' });
@@ -2741,6 +2770,14 @@ app.post('/api/shipments/:id/documents/:docId/extract', authMiddleware, requireP
     const document = await getDocument(req.user.tenantId, shipmentId, docId);
     if (!document) return res.status(404).json({ success: false, message: 'Document not found.' });
     if (!aiGateway.isEnabled()) return res.status(503).json({ success: false, message: 'AI is not configured. Add OPENROUTER_API_KEY to the server settings.' });
+    // The reading runs in the background, so consent and quota are checked now and answered like the other AI routes.
+    // The background job takes the quota unit itself (the gateway); this check only avoids queuing hopeless work.
+    const available = await aiGateway.availability(req.user.tenantId, { userId: req.user.id });
+    if (!available.ok) {
+      if (available.code === 'AI_CONSENT_REQUIRED') return res.status(403).json({ success: false, code: available.code, message: available.reason });
+      if (available.code === 'AI_QUOTA_EXCEEDED') return sendError(res, available.error, 'AI limit reached.', 'document extract');
+      return res.status(503).json({ success: false, code: available.code, message: available.reason });
+    }
     await updateDocumentExtraction(req.user.tenantId, docId, { status: 'pending' });
     nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId: docId, manual: true });
     return res.status(202).json({ success: true, status: 'pending' });
@@ -2894,19 +2931,14 @@ app.delete('/api/border-waits/:id', authMiddleware, requirePermission('carriers:
    AI AGENTS
    ========================================================= */
 // FLOW: order text -> shipment draft for a person to review. Nothing is saved here.
-app.post('/api/agents/flow/parse', authMiddleware, requirePermission('shipments:create'), aiLimiter, needsPlan('ai'), async (req, res) => {
+app.post('/api/agents/flow/parse', authMiddleware, requirePermission('shipments:create'), needsPlan('ai'), async (req, res) => {
   const text = req.body?.text;
-  if (typeof text !== 'string' || !text.trim() || text.length > flowAgent.MAX_INPUT_CHARS) {
+  if (typeof text !== 'string' || !text.trim()) {
     return res.status(400).json({ success: false, message: `Paste the order text (at most ${flowAgent.MAX_INPUT_CHARS} characters).` });
   }
   try {
-    const result = await flowAgent.parseOrder(text, {
-      weightUnit: req.user.region.weightUnit,
-      currency: req.user.region.currency,
-      equipment: EQUIPMENT,
-      maxRate: MAX_RATE,
-      maxWeight: MAX_WEIGHT
-    }, agentLogger(req));
+    // A longer text is refused with 413 / AI_INPUT_TOO_LONG by FLOW itself: it is never cut and read in part.
+    const result = await flowAgent.parseOrder(text, flowSettings(req.user.region), aiContext(req));
     return res.json({ success: true, ...result });
   } catch (error) {
     return sendError(res, error, 'The AI assistant is unavailable.', 'flow');
@@ -3223,7 +3255,7 @@ app.get('/api/integrations/status', authMiddleware, requirePermission('users:rea
     const tenant = await getTenant(req.user.tenantId);
     res.json({
       success: true,
-      ai: { enabled: aiGateway.isEnabled(), model: process.env.OPENROUTER_MODEL || null },
+      ai: { enabled: aiGateway.isEnabled(), model: process.env.OPENROUTER_MODEL || null, modelWarning: aiGateway.checkModelConfig({ production: false }).warning, consent: (await getAiConsent(req.user.tenantId)).consent },
       messaging: { ...messaging.publicStatus(tenant, DEFAULT_TENANT_ID), deliveryReports: Boolean(PUBLIC_URL) },
       gps: { configured: Boolean(tenant?.gpsTokenHash), webhookPath: GPS_WEBHOOK_PATH, minIntervalMinutes: GPS_MIN_INTERVAL_MINUTES },
       inbox: { configured: Boolean(tenant?.inboxTokenHash), pathPrefix: INBOX_WEBHOOK_PREFIX, allowedSenders: tenant?.allowedSenders || [], dailyLimit: INBOX_DAILY_LIMIT,
@@ -4301,6 +4333,8 @@ app.use((error, req, res, next) => {
 function startServer() {
   // A wrong storage or encryption setting stops the server here, not on the first upload.
   const storage = require('./lib/blob-store').checkConfig();
+  // AI on without a named model: a warning line (the account default model can change without notice).
+  aiGateway.checkModelConfig();
   return initialize()
     .then(() => new Promise((resolve) => {
       const server = app.listen(PORT, HOST, () => {

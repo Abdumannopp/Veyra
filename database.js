@@ -1099,6 +1099,59 @@ const MIGRATIONS = [
       await run('ALTER TABLE tenants DROP COLUMN retention_last_run');
       await run('ALTER TABLE tenants DROP COLUMN retention_settings');
     }
+  },
+  {
+    id: '0015_ai_quota_ledger_consent',
+    name: 'AI: durable quota counters, a ledger of every model call, and each company\'s consent to send data to the AI provider',
+    transactional: false,
+    up: async (tx) => {
+      // One row per company and window ("day:2026-11-23", "user:7:hour:2026-11-23T19"). A conditional
+      // UPDATE ... WHERE used < limit is atomic on SQLite and PostgreSQL, so parallel requests cannot pass the limit.
+      await run(`
+        CREATE TABLE IF NOT EXISTS ai_quota (
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          scope_key TEXT NOT NULL,
+          used INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (tenant_id, scope_key)
+        )
+      `);
+      // One row per model call, written BEFORE the provider is called and completed afterwards (tokens, status).
+      // No prompt, document text or key is ever stored here.
+      await run(`
+        CREATE TABLE IF NOT EXISTS ai_calls (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          user_id INTEGER REFERENCES users(id),
+          agent TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'started',
+          model TEXT,
+          input_tokens INTEGER,
+          output_tokens INTEGER,
+          latency_ms INTEGER,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          error_kind TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          finished_at TEXT
+        )
+      `);
+      await run('CREATE INDEX IF NOT EXISTS idx_ai_calls_tenant ON ai_calls (tenant_id, created_at)');
+      // Off by default: a company's data goes to the outside AI provider only after an administrator agrees.
+      await ensureColumns('tenants', [['ai_external_consent', 'INTEGER NOT NULL DEFAULT 0'], ['ai_consent_changed_by', 'INTEGER'], ['ai_consent_changed_at', 'TEXT']]);
+      if (isPostgres) {
+        await protectTenantTable(tx, 'ai_quota');
+        await protectTenantTable(tx, 'ai_calls');
+      }
+    },
+    down: async () => {
+      const calls = await get('SELECT COUNT(*) AS total FROM ai_calls');
+      if (Number(calls?.total) > 0) throw new Error('0015_ai_quota_ledger_consent cannot be reversed while AI calls are recorded. Restore the backup taken before the upgrade.');
+      await run('DROP TABLE IF EXISTS ai_quota');
+      await run('DROP TABLE IF EXISTS ai_calls');
+      await run('ALTER TABLE tenants DROP COLUMN ai_consent_changed_at');
+      await run('ALTER TABLE tenants DROP COLUMN ai_consent_changed_by');
+      await run('ALTER TABLE tenants DROP COLUMN ai_external_consent');
+    }
   }
 ];
 
@@ -1163,6 +1216,10 @@ async function seedAndVerify(isProduction) {
         );
       }
     }
+
+    // Development only: the demo company agrees to the AI provider so the demo works. Production companies start
+    // with it off and an administrator must switch it on (Team & settings).
+    await run('UPDATE tenants SET ai_external_consent = 1 WHERE id = ? AND ai_consent_changed_at IS NULL', [DEFAULT_TENANT_ID]);
 
     const carrierCount = await get('SELECT COUNT(*) AS total FROM carriers');
     if (!carrierCount || Number(carrierCount.total) === 0) {
@@ -3702,6 +3759,79 @@ async function listOpenMultiLegShipmentsAllTenants() {
   return all("SELECT id, tenant_id AS tenantId FROM shipments WHERE leg_mode = 'multi' AND status NOT IN ('Delivered', 'Cancelled') ORDER BY id");
 }
 
+/* ---------- AI quota, ledger and consent ---------- */
+
+// Takes one unit from a window if it is below the limit. Returns true when it was taken. Atomic: the conditional
+// UPDATE is one statement, so two requests at the same moment cannot both take the last unit.
+async function takeAiQuota(tenantId, scopeKey, limit) {
+  assertTenant(tenantId);
+  await run('INSERT OR IGNORE INTO ai_quota (tenant_id, scope_key, used) VALUES (?, ?, 0)', [tenantId, scopeKey]);
+  const result = await run(
+    "UPDATE ai_quota SET used = used + 1, updated_at = datetime('now') WHERE tenant_id = ? AND scope_key = ? AND used < ?",
+    [tenantId, scopeKey, limit]
+  );
+  return result.changes === 1;
+}
+
+// Gives a unit back (only when the provider was never called, e.g. the second window was full).
+async function returnAiQuota(tenantId, scopeKey) {
+  assertTenant(tenantId);
+  await run("UPDATE ai_quota SET used = used - 1, updated_at = datetime('now') WHERE tenant_id = ? AND scope_key = ? AND used > 0", [tenantId, scopeKey]);
+}
+
+async function aiQuotaUsed(tenantId, scopeKey) {
+  assertTenant(tenantId);
+  const row = await get('SELECT used FROM ai_quota WHERE tenant_id = ? AND scope_key = ?', [tenantId, scopeKey]);
+  return Number(row?.used) || 0;
+}
+
+// Old windows are kept a few days for support questions, then removed (system context).
+async function pruneAiQuota(days = 3) {
+  const result = await run("DELETE FROM ai_quota WHERE updated_at < datetime('now', ?)", [`-${Number(days)} days`]);
+  return result.changes || 0;
+}
+
+async function startAiCall(tenantId, { userId = null, agent }) {
+  assertTenant(tenantId);
+  const result = await run('INSERT INTO ai_calls (tenant_id, user_id, agent, status) VALUES (?, ?, ?, ?)', [tenantId, userId || null, agent, 'started']);
+  return result.id;
+}
+
+async function finishAiCall(tenantId, id, { status, model, inputTokens, outputTokens, latencyMs, attempts, errorKind }) {
+  assertTenant(tenantId);
+  await run(
+    `UPDATE ai_calls SET status = ?, model = ?, input_tokens = ?, output_tokens = ?, latency_ms = ?, attempts = ?, error_kind = ?, finished_at = datetime('now')
+     WHERE id = ? AND tenant_id = ?`,
+    [status, model || null, inputTokens ?? null, outputTokens ?? null, latencyMs ?? null, attempts ?? 0, errorKind || null, id, tenantId]
+  );
+}
+
+async function listAiCalls(tenantId, { limit = 50 } = {}) {
+  assertTenant(tenantId);
+  return all(
+    `SELECT id, user_id AS userId, agent, status, model, input_tokens AS inputTokens, output_tokens AS outputTokens, latency_ms AS latencyMs,
+       attempts, error_kind AS errorKind, created_at AS createdAt, finished_at AS finishedAt
+     FROM ai_calls WHERE tenant_id = ? ORDER BY id DESC LIMIT ?`,
+    [tenantId, limit]
+  );
+}
+
+async function getAiConsent(tenantId) {
+  assertTenant(tenantId);
+  const row = await get(
+    `SELECT t.ai_external_consent AS consent, t.ai_consent_changed_at AS changedAt, users.name AS changedBy
+     FROM tenants t LEFT JOIN users ON users.id = t.ai_consent_changed_by WHERE t.id = ?`,
+    [tenantId]
+  );
+  return { consent: Boolean(Number(row?.consent)), changedAt: row?.changedAt || null, changedBy: row?.changedBy || null };
+}
+
+async function setAiConsent(tenantId, consent, actorId) {
+  assertTenant(tenantId);
+  await run("UPDATE tenants SET ai_external_consent = ?, ai_consent_changed_by = ?, ai_consent_changed_at = datetime('now') WHERE id = ?", [consent ? 1 : 0, actorId || null, tenantId]);
+  return getAiConsent(tenantId);
+}
+
 /* ---------- retention (Phase 6.2) ---------- */
 
 async function getRetention(tenantId) {
@@ -4648,6 +4778,15 @@ module.exports = {
   getDocument,
   listDocuments,
   getDocumentFile,
+  takeAiQuota,
+  returnAiQuota,
+  aiQuotaUsed,
+  pruneAiQuota,
+  startAiCall,
+  finishAiCall,
+  listAiCalls,
+  getAiConsent,
+  setAiConsent,
   getRetention,
   saveRetention,
   runRetention,

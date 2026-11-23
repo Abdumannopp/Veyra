@@ -60,15 +60,17 @@ test('new migrations apply in order; a failing one is rolled back and not record
 test('down reverses the newest migration; the baseline refuses with a recovery note', async () => {
   assert.deepEqual(await migrationRunner.down(extra, { steps: 1 }), ['0900_test_widgets']);
   assert.equal(await tableExists('test_widgets'), false);
-  // 0014 (retention), 0013 (customs), 0012 (last mile), 0011 (warehouse), 0010 (cold chain) and 0009 (document storage key) are reversed while they hold no data, then applied again.
+  // 0015 (AI quota, ledger, consent), 0014 (retention), 0013 (customs), 0012 (last mile), 0011 (warehouse), 0010 (cold chain) and 0009 (document storage key) are reversed while they hold no data, then applied again.
   const hasStorageKey = async () => (await query('all', 'PRAGMA table_info(documents)')).some((column) => column.name === 'storage_key');
-  assert.deepEqual(await migrationRunner.down(extra, { steps: 6 }), ['0014_retention_settings', '0013_shipment_compliance', '0012_last_mile_stops', '0011_warehouse_stays', '0010_cold_chain', '0009_document_storage_key']);
+  assert.deepEqual(await migrationRunner.down(extra, { steps: 7 }), ['0015_ai_quota_ledger_consent', '0014_retention_settings', '0013_shipment_compliance', '0012_last_mile_stops', '0011_warehouse_stays', '0010_cold_chain', '0009_document_storage_key']);
   assert.equal(await hasStorageKey(), false);
   assert.equal(await tableExists('temperature_readings'), false);
+  assert.equal(await tableExists('ai_quota'), false);
+  assert.equal(await tableExists('ai_calls'), false);
   await migrate();
   assert.equal(await hasStorageKey(), true);
   // 0008 (trips) and older cannot be reversed: they refuse with a recovery note and stay applied.
-  await assert.rejects(migrationRunner.down(MIGRATIONS, { steps: 7 }), /0008_trips cannot be reversed.*restore the database backup/);
+  await assert.rejects(migrationRunner.down(MIGRATIONS, { steps: 8 }), /0008_trips cannot be reversed.*restore the database backup/);
   await migrate();
   assert.deepEqual((await migrationRunner.applied()).map((row) => row.id), MIGRATIONS.map((m) => m.id));
 });

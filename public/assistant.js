@@ -1,6 +1,7 @@
 /* =========================================================
-   VEYRA — AI Assistant card + Map & Tracking card
-   The card proposes a draft shipment based on the latest load.
+   VEYRA — "Quick Shipment Draft" card + Map & Tracking card
+   The card proposes a draft shipment copied from the latest load. It does NOT call an AI model:
+   plain code fills it in, so it makes no AI claims. Shown on plans with AI agents (see plan-ui.js).
    "Edit Details" edits the draft; "Create Shipment" opens the
    order-intake form pre-filled with it. Depends on script.js
    (createTextElement, formatDay, isSignedIn, notify,
