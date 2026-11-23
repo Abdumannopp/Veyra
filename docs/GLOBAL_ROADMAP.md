@@ -15,9 +15,23 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 | 5 Multimodal, cold chain, warehouse, last mile | Done (typed by people; no sensor, WMS or courier connection) |
 | 6 Compliance and production readiness | 6.1 to 6.3 done; **6.4 open**: the independent external security review has not been done |
 
-Open items: 6.4 (needs an outside reviewer, see [SECURITY.md](SECURITY.md)); trying each outside service with a real
-test account ([INTEGRATIONS.md](INTEGRATIONS.md)); running the restore drill and the load test on a real hosted copy
-([RECOVERY.md](RECOVERY.md)). Nothing is being built right now. All documents: [INDEX.md](INDEX.md).
+All documents: [INDEX.md](INDEX.md).
+
+## Open items
+
+This table is the **only** list of unfinished work; other documents link here instead of counting open items. An item
+becomes "Done" only when the evidence named in its row exists (a test log, a drill log or a review report), never because a
+document was reworded. `test/docs.test.js` checks each status against that evidence.
+
+| ID | Item | Status | Who can do it | Evidence that closes it |
+|---|---|---|---|---|
+| O-1 | Independent external security review (step 6.4) | Not started | An outside reviewer | The review report, and no open Critical or High finding in [SECURITY.md](SECURITY.md) |
+| O-2 | Try every outside service with a real test or sandbox account (AI model, Twilio, email, IMAP, Gmail / Outlook, map, traffic, GPS, Paddle, Cloudflare R2) | Not started | The platform owner (accounts and keys) | A "Passed" row per service in the trial log of [INTEGRATIONS.md](INTEGRATIONS.md) |
+| O-3 | Restore drill on a copy of the real hosted database | Not started | The platform owner | A row with "Real hosted copy? Yes" and "Passed" in the drill log of [RECOVERY.md](RECOVERY.md) |
+| O-4 | Load test against a hosted staging copy | Not started | The platform owner | A row with "Real hosted copy? Yes" in the load-test log of [RECOVERY.md](RECOVERY.md) |
+
+No code is being written for these: each needs real accounts, a real hosted copy or an outside reviewer, which the
+development environment does not have. New development work is added to this table when it starts.
 
 ## Phase 1 — PostgreSQL and production foundation
 | Step | What | Status |

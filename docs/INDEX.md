@@ -60,7 +60,7 @@ truth* below wins, and the other should only link to it.
 
 | Folder | What it is for |
 |---|---|
-| [docs/design/](design/README.md) | Editable SVG drawings of the 12 main screens (in Uzbek). |
+| [docs/design/](design/README.md) | Editable SVG drawings of the 12 main screens. The text on the screens is in **English**, like the application; the folder's own README is in Uzbek. They are concept drawings, not the live screens. |
 
 ## Which document is the truth for what
 
