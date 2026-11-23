@@ -1497,7 +1497,7 @@ app.get('/api/automation/studio', authMiddleware, requirePermission('shipments:r
     const [tenant, workflows, runs, stats] = await Promise.all([
       getTenant(req.user.tenantId), listWorkflows(req.user.tenantId), listWorkflowRuns(req.user.tenantId, 50), getWorkflowStats(req.user.tenantId)
     ]);
-    const builtIn = studio.BUILT_IN.map((item) => ({ ...item, on: tenant.automationSettings?.[item.key] !== false }));
+    const builtIn = studio.BUILT_IN.map((item) => ({ ...item, on: tenant.automationSettings?.[item.key] !== false, needsAi: nexus.AI_AUTOMATIONS.includes(item.key) }));
     const active = workflows.filter((workflow) => workflow.enabled).length + builtIn.filter((item) => item.on).length;
     return res.json({
       success: true,
@@ -1616,7 +1616,7 @@ app.get('/api/ai/command-center', authMiddleware, requirePermission('shipments:r
     const risks = sentinelAgent.assess(await geo.annotateOffRoute(loads), { staleHours: STALE_TRACKING_HOURS, offRouteKm: geo.offRouteKm() });
     const messagingOn = messaging.channelsOf(messaging.resolveConfig(tenant, DEFAULT_TENANT_ID).config).length > 0;
     const nexusOn = process.env.NEXUS_ENABLED !== 'false';
-    const automations = Object.entries(nexus.AUTOMATIONS).map(([key, label]) => ({ key, label, on: tenant.automationSettings?.[key] !== false }));
+    const automations = Object.entries(nexus.AUTOMATIONS).map(([key, label]) => ({ key, label, on: tenant.automationSettings?.[key] !== false, needsAi: nexus.AI_AUTOMATIONS.includes(key) }));
     return res.json({
       success: true,
       nexus: { enabled: nexusOn },
@@ -2678,7 +2678,9 @@ app.get('/api/shipments/:id/documents', authMiddleware, requirePermission('shipm
   if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
   try {
     if (!(await getShipment(req.user.tenantId, shipmentId))) return res.status(404).json({ success: false, message: 'Shipment not found.' });
-    return res.json({ success: true, documents: await listDocuments(req.user.tenantId, shipmentId), readsDocuments: aiGateway.isEnabled() });
+    // "Reading" is on only when the model is set up AND the company's plan includes the AI agents (same rule as the extract route).
+    const reads = aiGateway.isEnabled() && (await planOf(req.user.tenantId)).capabilities.includes('ai');
+    return res.json({ success: true, documents: await listDocuments(req.user.tenantId, shipmentId), readsDocuments: reads });
   } catch (error) {
     return sendError(res, error, 'Documents unavailable.', 'documents list');
   }
@@ -3035,10 +3037,20 @@ app.patch('/api/carriers/:id/status', authMiddleware, requirePermission('carrier
 /* =========================================================
    ACCOUNT AND TEAM
    ========================================================= */
-app.get('/api/me', authMiddleware, (req, res) => {
+// The plan's capabilities let the screens hide what the plan does not include (for example the AI card on Starter).
+// This is only a hint for the screens: every AI route is still closed by needsPlan('ai') on the server.
+app.get('/api/me', authMiddleware, async (req, res) => {
+  let plan = null;
+  try {
+    const current = await planOf(req.user.tenantId);
+    plan = { key: current.key, name: current.name, status: current.status, locked: current.locked, capabilities: current.capabilities };
+  } catch (error) {
+    console.error('[me] plan unavailable:', error.message);
+  }
   res.json({
     success: true,
     region: req.user.region,
+    plan,
     user: {
       id: req.user.id,
       email: req.user.email,

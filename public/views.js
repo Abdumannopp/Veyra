@@ -1694,7 +1694,8 @@
     }
     if (state.view !== 'command') return;
 
-    const agentOn = { FLOW: data.agents.ai, VAULT: data.agents.ai, RELAY: true, NEXUS: data.nexus.enabled, SCOUT: true, ROUTE: true, PULSE: true, SENTINEL: true };
+    const planAi = window.VeyraAi?.allowed() !== false;
+    const agentOn = { FLOW: data.agents.ai && planAi, VAULT: data.agents.ai && planAi, RELAY: true, NEXUS: data.nexus.enabled, SCOUT: true, ROUTE: true, PULSE: true, SENTINEL: true };
     const agentsCard = el('div', { class: 'card cc-agents' }, [
       el('div', { class: 'mini-head' }, el('span', {}, [
         el('strong', { text: `AI agents · ${Object.values(agentOn).filter(Boolean).length} active` }),
@@ -1711,7 +1712,7 @@
     const actions = [
       ['Plan', 'target', 'Dates and return trucks (ROUTE)', () => navigate('shipments', { status: 'Sourcing' })],
       ['Price', 'chart', 'Quotes and lane prices (PULSE)', () => navigate('quotes')],
-      ['Read', 'doc', 'Turn an order message into a load (FLOW)', () => window.openShipmentModal?.({})],
+      ...(planAi ? [['Read', 'doc', 'Turn an order message into a load (FLOW)', () => window.openShipmentModal?.({})]] : []),
       ['Approve', 'check-square', 'Prepared work waiting for you', () => navigate('inbox')],
       ['Watch', 'alert', 'Loads at risk (SENTINEL)', () => navigate('inbox')],
       ['Analyze', 'bolt', 'Volume, lanes, margins', () => navigate('analytics')]
@@ -1753,7 +1754,8 @@
     const autoCard = el('div', { class: 'card cc-auto' }, [
       el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'Automations' }), el('small', { text: data.canChange ? 'What the agents do on their own. They only prepare; people send and book.' : 'Only an administrator can change these.' })])),
       data.nexus.enabled ? null : el('p', { class: 'warn-line', text: 'NEXUS is switched off on the server (NEXUS_ENABLED=false), so none of these run.' }),
-      el('ul', { class: 'cc-switch-list' }, data.automations.map((item) => {
+      // A plan without the AI agents does not see the switches of the automations that need AI.
+      el('ul', { class: 'cc-switch-list' }, data.automations.filter((item) => planAi || !item.needsAi).map((item) => {
         const input = el('input', { type: 'checkbox', role: 'switch', 'aria-label': item.label, disabled: !data.canChange });
         input.checked = item.on;
         input.addEventListener('change', async () => {
@@ -1829,6 +1831,8 @@
     }
     if (state.view !== 'automation') return;
     const data = studioState.data;
+    // A plan without the AI agents does not see the built-in automations that need AI.
+    if (window.VeyraAi?.allowed() === false) data.builtIn = data.builtIn.filter((item) => !item.needsAi);
     const exists = (key) => (key?.startsWith('w:') ? data.workflows.some((w) => `w:${w.id}` === key) : key?.startsWith('b:') ? data.builtIn.some((b) => `b:${b.key}` === key) : key === 'new');
     if (!exists(studioState.selected)) {
       studioState.selected = data.workflows[0] ? `w:${data.workflows[0].id}` : `b:${data.builtIn[0].key}`;
@@ -2127,6 +2131,7 @@
     if (state.view !== 'agents') return;
     const config = window.VeyraConfig || {};
     const isOn = (needs) => {
+      if (needs === 'ai' && !window.VeyraAi?.allowed()) return { on: false, off: 'Part of the Growth plan and above' };
       if (needs === 'ai') return { on: Boolean(config.ai?.enabled), off: 'Off · needs an AI key on the server' };
       if (needs === 'messaging') return { on: (messaging.channels || []).length > 0, off: 'Drafts only · connect Twilio to send' };
       if (needs === 'nexus') return { on: config.nexus?.enabled !== false, off: 'Switched off on the server' };
@@ -2156,7 +2161,8 @@
         status.on ? null : el('p', { class: 'warn-line', text: status.off }),
         el('footer', {}, [
           el('small', { class: 'muted', text: agent.needs === 'ai' ? `${used} AI call${used === 1 ? '' : 's'} in 30 days` : (agent.needs === null ? 'Built in · no key needed' : '') }),
-          agent.action ? el('button', { class: 'btn btn-ghost small', type: 'button', onclick: agent.action[1] }, agent.action[0]) : null
+          // An agent that needs AI shows no button on a plan without AI.
+          agent.action && !(agent.needs === 'ai' && !window.VeyraAi?.allowed()) ? el('button', { class: 'btn btn-ghost small', type: 'button', onclick: agent.action[1] }, agent.action[0]) : null
         ])
       ]);
     }));
@@ -2198,6 +2204,8 @@
     let finance; let billing = null;
     try {
       [finance, billing] = await Promise.all([api('/api/finance/summary'), api('/api/billing/plan').catch(() => null)]);
+      // A plan change (for example after paying) shows up at once on the dashboard card and the AI controls.
+      if (billing?.plan) window.VeyraAi?.setPlan(billing.plan);
     } catch (error) {
       return errorState(container, error.message, renderBilling);
     }
