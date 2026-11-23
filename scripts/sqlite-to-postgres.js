@@ -18,7 +18,7 @@ const dryRun = process.argv.includes('--dry-run');
 const SQLITE_PATH = path.resolve(process.env.SQLITE_PATH || process.env.DATABASE_PATH || './data/veyra.db');
 const DATABASE_URL = String(process.env.DATABASE_URL || '');
 const BATCH = 300;
-const MONEY_COLUMNS = { shipments: ['rate', 'customer_rate'], quotes: ['price', 'carrier_cost'], market_rates: ['rate'], shipment_legs: ['price'], trips: ['cost'], trip_shipments: ['cost_share'] };
+const MONEY_COLUMNS = { shipments: ['rate', 'customer_rate'], quotes: ['price', 'carrier_cost'], market_rates: ['rate'], shipment_legs: ['price'], trips: ['cost'], trip_shipments: ['cost_share'], warehouse_stays: ['daily_rate'] };
 
 function fail(message) {
   console.error(`Copy stopped: ${message}`);

@@ -178,6 +178,7 @@ const { addMoney } = require('./lib/money');
 const timeLib = require('./lib/time');
 const legsLib = require('./lib/legs');
 const coldChain = require('./lib/cold-chain');
+const warehouseLib = require('./lib/warehouse');
 const coldChainDb = require('./database');
 const tripsLib = require('./lib/trips');
 const jobQueue = require('./lib/job-queue');
@@ -3364,6 +3365,14 @@ async function sendShipmentLegs(res, tenantId, shipmentId, status = 200, extra =
   const data = await getShipmentLegs(tenantId, shipmentId);
   if (!data) return res.status(404).json({ success: false, message: 'Shipment not found.' });
   const { shipmentId: id, ...rest } = data;
+  // Warehouse legs carry what was received, stored and released (Phase 5.2).
+  if (data.multi && data.legs.some((leg) => leg.mode === 'WAREHOUSE')) {
+    const stays = await coldChainDb.listWarehouseStays(tenantId, shipmentId);
+    rest.legs = data.legs.map((leg) => {
+      const stay = stays.find((item) => item.legId === leg.id);
+      return stay ? { ...leg, warehouse: { ...stay, storage: warehouseLib.storage(stay) } } : leg;
+    });
+  }
   return res.status(status).json({ success: true, shipment: { id: `SHP-${id}`, status: data.status, currency: data.currency, multi: data.multi }, ...rest, ...extra });
 }
 
@@ -3557,6 +3566,52 @@ app.post('/api/v2/legs/:id/status', authMiddleware, async (req, res) => {
     return sendError(res, error, 'The leg status could not be changed.', 'v2 leg status');
   }
 });
+
+/* ---------- warehouse legs: receive and release (Phase 5.2) ---------- */
+// Receiving puts the goods in storage (the leg goes In Transit); releasing hands them to the next leg (Delivered).
+async function warehouseAction(req, res, action) {
+  try {
+    const legId = positiveId(req.params.id);
+    const leg = legId ? await getLeg(req.user.tenantId, legId) : null;
+    if (!leg) return res.status(404).json({ success: false, message: 'Leg not found.' });
+    if (leg.mode !== 'WAREHOUSE') return res.status(409).json({ success: false, message: 'Only a warehouse leg can receive or release goods.' });
+    const stay = await coldChainDb.getWarehouseStay(req.user.tenantId, legId);
+    let input;
+    try {
+      if (action === 'receive') {
+        if (stay) return res.status(409).json({ success: false, message: 'These goods were already received.' });
+        if (leg.status !== 'Booked') return res.status(409).json({ success: false, message: 'Book the warehouse leg before receiving goods.' });
+        input = warehouseLib.readReceive(req.body || {}, { parseMoney });
+      } else {
+        if (!stay) return res.status(409).json({ success: false, message: 'Receive the goods before releasing them.' });
+        if (stay.releasedAt) return res.status(409).json({ success: false, message: 'These goods were already released.' });
+        input = warehouseLib.readRelease(req.body || {}, stay);
+      }
+    } catch (error) {
+      if (error instanceof warehouseLib.WarehouseError) return res.status(400).json({ success: false, message: error.message });
+      throw error;
+    }
+    const status = action === 'receive' ? 'In Transit' : 'Delivered';
+    const note = action === 'receive'
+      ? `Received ${input.piecesReceived} piece(s)${input.damagedPieces ? `, ${input.damagedPieces} damaged` : ''}`
+      : `Released ${input.piecesReleased} piece(s)`;
+    const result = await setLegStatus(req.user.tenantId, legId, status, { note, handover: action === 'release' ? { note: input.note } : null }, req.user.id);
+    const saved = action === 'receive'
+      ? await coldChainDb.recordWarehouseReceipt(req.user.tenantId, legId, leg.shipmentId, input, req.user.id)
+      : await coldChainDb.recordWarehouseRelease(req.user.tenantId, legId, input, req.user.id);
+    audit(req, `warehouse.${action}`, `leg ${legId}: ${note}`);
+    nexus.emit('leg.status', { tenantId: req.user.tenantId, shipmentId: result.shipmentId, legId, status, handoverTo: result.handoverTo });
+    if (action === 'receive') nexus.emit('warehouse.received', { tenantId: req.user.tenantId, shipmentId: result.shipmentId, legId });
+    if (result.shipmentStatus !== result.shipmentStatusBefore) {
+      nexus.emit('shipment.status', { tenantId: req.user.tenantId, shipmentId: result.shipmentId, status: result.shipmentStatus });
+    }
+    return await sendShipmentLegs(res, req.user.tenantId, result.shipmentId, 200, { warehouse: { ...saved, storage: warehouseLib.storage(saved) } });
+  } catch (error) {
+    return sendError(res, error, action === 'receive' ? 'The goods could not be received.' : 'The goods could not be released.', `warehouse ${action}`);
+  }
+}
+app.post('/api/v2/legs/:id/warehouse/receive', authMiddleware, requirePermission('shipments:status'), (req, res) => warehouseAction(req, res, 'receive'));
+app.post('/api/v2/legs/:id/warehouse/release', authMiddleware, requirePermission('shipments:status'), (req, res) => warehouseAction(req, res, 'release'));
 
 app.post('/api/v2/legs/:id/tracking', authMiddleware, requirePermission('shipments:track'), async (req, res) => {
   try {

@@ -137,3 +137,13 @@ Document types `bill_of_lading`, `air_waybill` and `rail_waybill` (upload as usu
 | `POST /api/v2/shipments/:id/temperatures` | `{ celsius, recordedAt?, legId?, note? }`; recordedAt is UTC unless it has an offset, not in the future |
 
 An excursion is a stretch of readings outside the range: it starts at the first reading outside and ends at the first one back inside (`open` while the latest reading is still outside), with its `peak` and `minutes`. With "Warn about loads at risk" on, NEXUS makes one task per excursion (not per reading). Readings are typed by people; no sensor or logger is connected.
+
+## Warehouse legs
+
+| Call | What |
+|---|---|
+| `POST /api/v2/legs/:id/warehouse/receive` | A booked WAREHOUSE leg: `{ piecesReceived, piecesExpected?, damagedPieces?, freeDays?, dailyRate?, receivedAt?, note? }`. The leg goes In Transit (in storage). Once only. |
+| `POST /api/v2/legs/:id/warehouse/release` | `{ piecesReleased?, releasedAt?, note? }` (default: the good pieces). The leg is Delivered and handed over to the next leg. |
+
+A warehouse leg in `GET /api/v2/shipments/:id` has `warehouse`: the receipt, the release and `storage` (`days` per started 24 h, `freeDays`, `chargeableDays`, `charge` = chargeable days × price per day in the load's currency, `shortPieces`, `overPieces`, `damagedPieces`).
+NEXUS (with "Warn about loads at risk" on) makes one task when goods arrive short, extra or damaged, and one task while goods are stored past their free days (closed on release). Quiet-truck checks skip warehouse legs. Entered by warehouse staff; no warehouse system is connected.

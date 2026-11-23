@@ -150,6 +150,19 @@
     ].filter(Boolean);
     if (meta.length) lines.push(text('div', 'leg-meta', meta.join(' · ')));
     if (leg.timing && leg.timing.late) lines.push(text('div', 'leg-meta leg-late', `Late: ${leg.timing.issues.map((issue) => issue.text).join('; ')}`));
+    if (leg.warehouse) {
+      const stay = leg.warehouse;
+      const store = stay.storage || {};
+      const parts = [
+        `Received ${stay.piecesReceived}${stay.piecesExpected !== null ? ` of ${stay.piecesExpected}` : ''} piece(s) ${formatTimestamp(stay.receivedAt)}`,
+        stay.damagedPieces ? `${stay.damagedPieces} damaged` : null,
+        `${store.days} day(s) stored, ${store.freeDays} free`,
+        store.charge !== null && store.charge !== undefined ? `storage ${money(store.charge, stay.currency)}` : null,
+        stay.releasedAt ? `released ${stay.piecesReleased} ${formatTimestamp(stay.releasedAt)}` : null
+      ].filter(Boolean);
+      const problem = store.shortPieces || store.overPieces || store.damagedPieces || (!stay.releasedAt && store.overFreeDays);
+      lines.push(text('div', problem ? 'leg-meta leg-late' : 'leg-meta', `Warehouse: ${parts.join(' · ')}`));
+    }
     if (leg.lastLocation) lines.push(text('div', 'leg-meta', `Now: ${leg.lastLocation}${leg.eta ? ` · ETA ${when(leg.eta)}` : ''}${leg.lastTrackedAt ? ` (${formatTimestamp(leg.lastTrackedAt)})` : ''}`));
     const actions = text('div', 'leg-actions');
     const add = (label, handler, cls = 'btn btn-ghost small') => {
@@ -166,8 +179,15 @@
       add(leg.paidAt ? 'Undo payment' : 'Mark paid', () => pay(leg, !leg.paidAt), leg.paidAt ? 'btn btn-ghost small' : 'btn btn-primary small');
     }
     if (leg.status === 'Planned' && canBook) add('Book', () => move(leg, 'Booked'), 'btn btn-primary small');
-    if (leg.status === 'Booked' && canMove) add('Start', () => move(leg, 'In Transit'), 'btn btn-primary small');
-    if (leg.status === 'In Transit' && canMove) add('Delivered', () => openHandover(leg), 'btn btn-primary small');
+    const store = leg.mode === 'WAREHOUSE' && !leg.synthetic;
+    if (leg.status === 'Booked' && canMove) {
+      if (store) add('Receive goods', () => openReceive(leg), 'btn btn-primary small');
+      else add('Start', () => move(leg, 'In Transit'), 'btn btn-primary small');
+    }
+    if (leg.status === 'In Transit' && canMove) {
+      if (store && leg.warehouse) add('Release goods', () => openRelease(leg), 'btn btn-primary small');
+      else add('Delivered', () => openHandover(leg), 'btn btn-primary small');
+    }
     if (leg.status === 'In Transit' && canMove) add('Report problem', () => move(leg, 'Exception'));
     if (leg.status === 'Exception' && canMove) add('Resume', () => move(leg, 'In Transit'), 'btn btn-primary small');
     if (['Booked', 'In Transit', 'Exception'].includes(leg.status) && canTrack) add('Add position', () => openPosition(leg));
@@ -245,6 +265,36 @@
     form.insertBefore(field('Handed over at', input('location', { value: leg.destination, maxLength: 200 })), footer);
     form.insertBefore(field('Received by', input('receivedBy', { maxLength: 120, placeholder: 'Person or company (optional)' })), footer);
     form.insertBefore(field('Note', input('note', { maxLength: 500, placeholder: 'Optional' })), footer);
+    view.form = form;
+    render();
+  }
+
+  function openReceive(leg) {
+    const { form, footer } = formShell(`Leg ${leg.sequence}: goods received at the warehouse`, async (data) => {
+      await api('POST', `/api/v2/legs/${leg.id}/warehouse/receive`, {
+        piecesExpected: data.get('piecesExpected') || null, piecesReceived: data.get('piecesReceived'), damagedPieces: data.get('damagedPieces') || 0,
+        freeDays: data.get('freeDays') || 0, dailyRate: data.get('dailyRate') || null, note: data.get('note') || null
+      });
+      notify(`Leg ${leg.sequence}: goods received.`, 'ok');
+    }, 'Save receipt');
+    form.insertBefore(field('Pieces expected', input('piecesExpected', { type: 'number', min: 0, step: 1 })), footer);
+    form.insertBefore(field('Pieces received', input('piecesReceived', { type: 'number', min: 0, step: 1, required: true })), footer);
+    form.insertBefore(field('Damaged pieces', input('damagedPieces', { type: 'number', min: 0, step: 1, value: 0 })), footer);
+    form.insertBefore(field('Free storage days', input('freeDays', { type: 'number', min: 0, max: 365, step: 1, value: leg.details.storageDays || 0 })), footer);
+    form.insertBefore(field('Storage price per day (optional)', input('dailyRate', { type: 'number', min: 0, step: '0.01' })), footer);
+    form.insertBefore(field('Note', input('note', { maxLength: 500, placeholder: 'Damage, remarks (optional)' })), footer);
+    view.form = form;
+    render();
+  }
+
+  function openRelease(leg) {
+    const good = leg.warehouse.piecesReceived - leg.warehouse.damagedPieces;
+    const { form, footer } = formShell(`Leg ${leg.sequence}: release the goods`, async (data) => {
+      await api('POST', `/api/v2/legs/${leg.id}/warehouse/release`, { piecesReleased: data.get('piecesReleased'), note: data.get('note') || null });
+      notify(`Leg ${leg.sequence}: goods released.`, 'ok');
+    }, 'Release');
+    form.insertBefore(field('Pieces released', input('piecesReleased', { type: 'number', min: 0, max: leg.warehouse.piecesReceived, step: 1, value: good })), footer);
+    form.insertBefore(field('Note', input('note', { maxLength: 500, placeholder: 'Who collected it (optional)' })), footer);
     view.form = form;
     render();
   }

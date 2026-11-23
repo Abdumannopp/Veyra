@@ -9,6 +9,7 @@
 //
 // Every reaction is idempotent (tasks carry a dedupe key), runs after the web request has
 // finished, and failures are logged, never thrown at the person who triggered the event.
+const warehouseLib = require('../lib/warehouse');
 const coldChainLib = require('../lib/cold-chain');
 const legsLib = require('../lib/legs');
 const db = require('../database');
@@ -175,6 +176,7 @@ async function handleBuiltIn(event, context) {
     case 'shipment.dispatched': return onShipmentDispatched(context);
     case 'document.uploaded': return onDocumentUploaded(context);
     case 'temperature.reading': return onTemperatureReading(context);
+    case 'warehouse.received': return onWarehouseReceived(context);
     case 'inbox.attached': return onInboxAttached(context);
     case 'message.failed': return onMessageFailed(context);
     default: return undefined;
@@ -508,6 +510,56 @@ async function readTransportDocument({ tenantId, shipmentId, document, file, shi
   }
 }
 
+/* ---------- warehouse: short, extra or damaged pieces at receiving ---------- */
+async function onWarehouseReceived({ tenantId, shipmentId, legId }) {
+  if (!(await automationOn(tenantId, 'riskWatch'))) return;
+  const stay = await db.getWarehouseStay(tenantId, legId);
+  const leg = await db.getLeg(tenantId, legId);
+  if (!stay || !leg) return;
+  const check = warehouseLib.storage(stay);
+  const problems = [
+    check.shortPieces ? `${check.shortPieces} piece(s) missing (${stay.piecesReceived} of ${stay.piecesExpected})` : null,
+    check.overPieces ? `${check.overPieces} piece(s) more than expected` : null,
+    check.damagedPieces ? `${check.damagedPieces} piece(s) damaged` : null
+  ].filter(Boolean);
+  if (!problems.length) return;
+  await db.createTask(tenantId, {
+    kind: 'attention',
+    title: `${legLabel(shipmentId, leg)}: received with ${problems.join(', ')}`,
+    shipmentId,
+    dedupeKey: `whreceive:${stay.id}`,
+    payload: { text: 'Note it on the delivery papers, take photos, tell the customer, and claim against the carrier of the leg before if needed.', severity: 'high' }
+  });
+}
+
+// Goods stored longer than their free days: one task per stay (charges are running). Closes when released.
+async function warehouseSweep(now = new Date()) {
+  return runAsSystem(async () => {
+    const active = new Set();
+    let created = 0;
+    for (const stay of await db.listOpenWarehouseStaysAllTenants()) {
+      if (!(await automationOn(stay.tenantId, 'riskWatch'))) continue;
+      const check = warehouseLib.storage(stay, { now });
+      if (!check.overFreeDays) continue;
+      const key = `whstorage:${stay.id}`;
+      active.add(`${stay.tenantId}|${key}`);
+      const leg = await db.getLeg(stay.tenantId, stay.legId);
+      const result = await db.createTask(stay.tenantId, {
+        kind: 'attention',
+        title: `${legLabel(stay.shipmentId, leg || { sequence: '?', mode: 'WAREHOUSE' })}: stored past the ${check.freeDays} free day(s) — charges are running`,
+        shipmentId: stay.shipmentId,
+        dedupeKey: key,
+        payload: { text: 'Plan the pickup from the warehouse, or agree the storage charge with the customer.', severity: 'medium' }
+      });
+      if (result.created) created += 1;
+    }
+    for (const task of await db.listOpenTasksByKeyPrefix(null, 'whstorage:')) {
+      if (!active.has(`${task.tenantId}|${task.dedupeKey}`)) await db.resolveTask(task.tenantId, task.id, { status: 'done' });
+    }
+    return created;
+  });
+}
+
 /* ---------- cold chain: a reading outside the load's range ---------- */
 // One task per excursion (a stretch of readings outside the range), not one per reading.
 async function onTemperatureReading({ tenantId, shipmentId, readingId }) {
@@ -731,6 +783,7 @@ function startSweeper(intervalMinutes = 10) {
   const run = () => sweep()
     .then(() => sentinelSweep())
     .then(() => delaySweep())
+    .then(() => warehouseSweep())
     .then(() => poolingSweep())
     .catch((error) => console.error('[NEXUS] sweep failed:', error.message));
   sweepTimer = setInterval(run, intervalMinutes * 60 * 1000);
@@ -743,4 +796,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, poolingSweep, startSweeper, stopSweeper };
+module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, poolingSweep, startSweeper, stopSweeper };
