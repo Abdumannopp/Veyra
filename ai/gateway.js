@@ -1,22 +1,39 @@
-// AI Gateway: the only place VEYRA talks to a language model.
+// AI Gateway: the only place VEYRA talks to a language model. Every rule that protects money and data is enforced
+// HERE, so a new endpoint or agent cannot skip it:
 //
-// - Provider: OpenRouter (one key, many models). No key = AI is off; nothing leaves the server.
-// - Model: OPENROUTER_MODEL. Left empty on purpose, so no model name is hard-coded that may
-//   later be retired; OpenRouter then uses the account's default model.
-// - No HTTP-Referer header: it would reveal the server's address. Only the title "VEYRA" is sent.
-// - Every call is logged in agent_tasks (agent, model, tokens, time, result) for cost control.
-// - The model only ever returns data (JSON). It cannot call tools or write to the database;
-//   callers validate the JSON with the same rules as human input.
+// 1. Consent: a company's data goes to the outside provider only after its administrator agreed (tenants.ai_external_consent).
+// 2. Quota: one unit per model request, taken BEFORE the provider is called, from durable counters in the database
+//    (a daily budget per company and an hourly budget per person). Atomic, so parallel requests cannot pass the limit,
+//    and kept across restarts and across several server instances. A failed request still counts. The gateway's own
+//    retry is a second provider request and takes a second unit, so the counters equal the requests sent.
+// 3. Ledger: an ai_calls row MUST be written before the call (else nothing is sent) and completed after it with status, model, tokens, latency
+//    and the kind of error. Tokens are kept even when the answer is not valid JSON.
+// 4. Data: passwords, API keys, tokens and the server's secrets are removed from the text before it is sent
+//    (ai/redact.js). No prompt, email or document text is ever written to a log.
+// 5. Output: the answer must be a JSON object that passes the caller's strict shape check (ai/schema.js).
+//
+// Provider: OpenRouter. Model: OPENROUTER_MODEL (see modelName and checkModelConfig). No HTTP-Referer header.
 const { httpError } = require('../lib/validation');
+const { logEvent } = require('../lib/log');
+const { redactContent } = require('./redact');
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 20000;
 
 let transport = (url, init) => fetch(url, init);
-
 // Tests replace the network with a fake; production never calls this.
 function setTransport(fn) {
   transport = fn || ((url, init) => fetch(url, init));
+}
+
+// Where consent, quota and the ledger are kept (the database). Tests may pass another store.
+let store = null;
+function usageStore() {
+  if (!store) store = require('../database');
+  return store;
+}
+function setUsageStore(next) {
+  store = next || null;
 }
 
 function isEnabled() {
@@ -27,13 +44,106 @@ function modelName() {
   return process.env.OPENROUTER_MODEL ? process.env.OPENROUTER_MODEL.trim() : '';
 }
 
+// Without OPENROUTER_MODEL, OpenRouter uses the account's default model, which can change without notice.
+// Production should name the model; the server says so at start-up and in Integrations.
+function checkModelConfig({ production = process.env.NODE_ENV !== 'development' } = {}) {
+  if (!isEnabled()) return { ok: true, warning: null };
+  if (modelName()) return { ok: true, warning: null };
+  const warning = 'OPENROUTER_MODEL is not set: OpenRouter will use the account default model, which can change without notice. Set it to the model you tested.';
+  if (production) logEvent('warn', 'ai_model_not_set', { message: warning });
+  return { ok: false, warning };
+}
+
+const limits = () => ({
+  companyPerDay: Number(process.env.AI_DAILY_LIMIT_PER_TENANT) > 0 ? Number(process.env.AI_DAILY_LIMIT_PER_TENANT) : 300,
+  personPerHour: Number(process.env.AI_RATE_LIMIT_PER_HOUR) > 0 ? Number(process.env.AI_RATE_LIMIT_PER_HOUR) : 60
+});
+
+// Windows are UTC calendar buckets: the company's day resets at 00:00 UTC, a person's hour at the top of the hour.
+function windows(now = new Date()) {
+  const iso = now.toISOString();
+  const nextDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+  const nextHour = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours() + 1);
+  return {
+    day: { key: `day:${iso.slice(0, 10)}`, resetSeconds: Math.max(1, Math.ceil((nextDay - now) / 1000)) },
+    hour: (userId) => ({ key: `user:${userId}:hour:${iso.slice(0, 13)}`, resetSeconds: Math.max(1, Math.ceil((nextHour - now) / 1000)) })
+  };
+}
+
+function quotaError(scope, limit, resetSeconds) {
+  const error = httpError(429, scope === 'company_daily'
+    ? `Your company used its ${limit} AI requests for today. AI starts again at 00:00 UTC; until then fill the form by hand.`
+    : `You used your ${limit} AI requests for this hour. Please fill the form by hand or try again later.`);
+  error.code = 'AI_QUOTA_EXCEEDED';
+  error.details = { scope, limit, retryAfterSeconds: resetSeconds };
+  error.retryAfterSeconds = resetSeconds;
+  return error;
+}
+
+function consentError() {
+  const error = httpError(403, 'Sending data to the AI provider is switched off for your company. An administrator can switch it on in Team & settings → AI data sharing.');
+  error.code = 'AI_CONSENT_REQUIRED';
+  return error;
+}
+
+// Is AI allowed for this company right now? Used by screens and by NEXUS before queuing work; it takes nothing.
+async function availability(tenantId, { userId = null, now = new Date() } = {}) {
+  if (!isEnabled()) return { ok: false, code: 'AI_OFF', reason: 'AI is off.' };
+  const db = usageStore();
+  if (!(await db.getAiConsent(tenantId)).consent) return { ok: false, code: 'AI_CONSENT_REQUIRED', reason: consentError().message };
+  const { companyPerDay, personPerHour } = limits();
+  const w = windows(now);
+  if ((await db.aiQuotaUsed(tenantId, w.day.key)) >= companyPerDay) return { ok: false, code: 'AI_QUOTA_EXCEEDED', reason: quotaError('company_daily', companyPerDay, w.day.resetSeconds).message, error: quotaError('company_daily', companyPerDay, w.day.resetSeconds) };
+  if (userId && (await db.aiQuotaUsed(tenantId, w.hour(userId).key)) >= personPerHour) return { ok: false, code: 'AI_QUOTA_EXCEEDED', reason: quotaError('user_hourly', personPerHour, w.hour(userId).resetSeconds).message, error: quotaError('user_hourly', personPerHour, w.hour(userId).resetSeconds) };
+  return { ok: true };
+}
+
+// Takes one unit from the company's day and the person's hour, or none of them.
+async function reserve(tenantId, userId, now = new Date()) {
+  const db = usageStore();
+  const { companyPerDay, personPerHour } = limits();
+  const w = windows(now);
+  let tookDay = false;
+  try {
+    tookDay = await db.takeAiQuota(tenantId, w.day.key, companyPerDay);
+    if (!tookDay) throw quotaError('company_daily', companyPerDay, w.day.resetSeconds);
+    if (userId) {
+      const hour = w.hour(userId);
+      if (!(await db.takeAiQuota(tenantId, hour.key, personPerHour))) {
+        await db.returnAiQuota(tenantId, w.day.key);
+        throw quotaError('user_hourly', personPerHour, hour.resetSeconds);
+      }
+    }
+  } catch (error) {
+    if (error.code === 'AI_QUOTA_EXCEEDED') throw error;
+    // The counter could not be written: nothing is sent, so nothing can be spent without being counted.
+    logEvent('error', 'ai_quota_unavailable', { tenantId, error: error.message });
+    if (tookDay) await db.returnAiQuota(tenantId, w.day.key).catch(() => {});
+    const unavailable = httpError(503, 'AI usage could not be recorded, so nothing was sent to the AI provider. Please try again later.');
+    unavailable.code = 'AI_USAGE_UNAVAILABLE';
+    throw unavailable;
+  }
+}
+
+// Gives back the units taken by reserve() when nothing was sent.
+async function release(tenantId, userId, now = new Date()) {
+  const db = usageStore();
+  const w = windows(now);
+  await db.returnAiQuota(tenantId, w.day.key);
+  if (userId) await db.returnAiQuota(tenantId, w.hour(userId).key);
+}
+
 // Models sometimes wrap JSON in ``` fences or add a sentence; take the first JSON object.
 function extractJson(text) {
   const cleaned = String(text || '').replace(/```(?:json)?/gi, '').trim();
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
-  if (start === -1 || end <= start) throw new Error('Model did not return JSON.');
-  return JSON.parse(cleaned.slice(start, end + 1));
+  if (start === -1 || end <= start) throw Object.assign(new Error('Model did not return JSON.'), { kind: 'invalid_json' });
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1));
+  } catch (_) {
+    throw Object.assign(new Error('Model returned broken JSON.'), { kind: 'invalid_json' });
+  }
 }
 
 async function callOnce(body, signal) {
@@ -56,28 +166,67 @@ async function callOnce(body, signal) {
   }
   if (!response.ok) {
     const error = new Error(data?.error?.message || `AI provider returned ${response.status}`);
+    error.kind = response.status === 429 ? 'provider_rate_limit' : response.status >= 500 ? 'provider_error' : 'provider_rejected';
     error.retryable = response.status === 429 || response.status >= 500;
     throw error;
   }
   return data;
 }
 
+async function safeLog(log, task, tenantId) {
+  try {
+    await log?.(task);
+  } catch (error) {
+    logEvent('error', 'ai_audit_log_failed', { tenantId, agent: task.agent, status: task.status, error: error.message });
+  }
+}
+
 /**
  * Ask the model for a JSON object.
  * @param {object} options
- * @param {string} options.agent        Agent name for the log (FLOW, RELAY, ...).
+ * @param {string} options.agent        Agent name for the ledger and the log (FLOW, VAULT, ...).
  * @param {string} options.system       Trusted instructions.
- * @param {string|object[]} options.user  Untrusted content: text (an email, a chat message) or a list of
- *        content parts (text plus an image or PDF as a data: URL) for documents.
+ * @param {string|object[]} options.user  Untrusted content: text, or content parts (text plus a file as a data: URL).
+ * @param {{tenantId: number, userId?: number}} options.usage  Who pays: REQUIRED. Consent and quota are checked for this company.
+ * @param {(raw: object) => {ok: boolean, errors?: string[]}} options.validate  Strict shape check of the answer: REQUIRED.
  * @param {number} [options.timeoutMs]  Longer for documents than for short messages.
- * @param {(task: object) => Promise<void>} options.log  Writes the agent_tasks row.
+ * @param {(task: object) => Promise<void>} [options.log]  Writes the agent_tasks row (analytics).
  */
-async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = TIMEOUT_MS, log }) {
+async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = TIMEOUT_MS, log, usage, validate }) {
   if (!isEnabled()) throw httpError(503, 'AI is not configured. Add OPENROUTER_API_KEY to the server settings.');
+  if (!usage || !Number.isInteger(Number(usage.tenantId)) || Number(usage.tenantId) <= 0) {
+    // A programming error, never a user error: every model call must name the company that pays for it.
+    throw new Error(`AI call for ${agent} without a company: pass usage: { tenantId }.`);
+  }
+  if (typeof validate !== 'function') {
+    // A programming error: an answer that is not checked must never be used, so the call is refused before anything is spent.
+    throw new Error(`AI call for ${agent} without an answer check: pass validate.`);
+  }
+  const tenantId = Number(usage.tenantId);
+  const userId = usage.userId ? Number(usage.userId) : null;
+  const db = usageStore();
+
+  if (!(await db.getAiConsent(tenantId)).consent) throw consentError();
+  await reserve(tenantId, userId);
+
+  // The ledger row must exist BEFORE anything is sent: without it the cost could not be recorded. If it cannot be
+  // written, the unit is given back and nothing is sent.
+  let callId = null;
+  try {
+    callId = await db.startAiCall(tenantId, { userId, agent });
+    if (!callId) throw new Error('no ledger id');
+  } catch (error) {
+    logEvent('error', 'ai_ledger_start_failed', { tenantId, agent, error: error.message });
+    await release(tenantId, userId).catch(() => {});
+    const unavailable = httpError(503, 'AI usage could not be recorded, so nothing was sent to the AI provider. Please try again later.');
+    unavailable.code = 'AI_USAGE_UNAVAILABLE';
+    throw unavailable;
+  }
+
   const body = {
     messages: [
       { role: 'system', content: system },
-      { role: 'user', content: user }
+      { role: 'user', content: redactContent(user) }
     ],
     temperature: 0,
     max_tokens: maxTokens
@@ -86,33 +235,75 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
   if (model) body.model = model;
 
   const started = Date.now();
+  const totals = { inputTokens: null, outputTokens: null, model: model || null, attempts: 0 };
+  const addUsage = (data) => {
+    if (data?.model) totals.model = data.model;
+    const input = Number(data?.usage?.prompt_tokens);
+    const output = Number(data?.usage?.completion_tokens);
+    if (Number.isFinite(input)) totals.inputTokens = (totals.inputTokens || 0) + input;
+    if (Number.isFinite(output)) totals.outputTokens = (totals.outputTokens || 0) + output;
+  };
+  const finish = async (status, errorKind, message) => {
+    const latencyMs = Date.now() - started;
+    const result = { status, model: totals.model, inputTokens: totals.inputTokens, outputTokens: totals.outputTokens, latencyMs, attempts: totals.attempts, errorKind };
+    // The provider has already charged: the row is completed with a second try, and if both fail the tokens are kept
+    // in a structured log line (never the prompt), so the cost can still be reconciled.
+    let saved = false;
+    for (let attempt = 0; attempt < 2 && !saved; attempt += 1) {
+      try {
+        await db.finishAiCall(tenantId, callId, result);
+        saved = true;
+      } catch (error) {
+        if (attempt === 1) logEvent('error', 'ai_ledger_finish_failed', { tenantId, agent, callId, error: error.message, ...result });
+      }
+    }
+    await safeLog(log, { agent, status: status === 'succeeded' ? 'succeeded' : 'failed', model: totals.model, inputTokens: totals.inputTokens, outputTokens: totals.outputTokens, latencyMs, error: errorKind ? `${errorKind}${message ? `: ${message}` : ''}` : null }, tenantId);
+  };
+
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    totals.attempts += 1;
+    let data;
     try {
-      const data = await callOnce(body, controller.signal);
-      clearTimeout(timer);
-      const content = data?.choices?.[0]?.message?.content;
-      const parsed = extractJson(content);
-      await log?.({
-        agent,
-        status: 'succeeded',
-        model: data?.model || model || null,
-        inputTokens: data?.usage?.prompt_tokens ?? null,
-        outputTokens: data?.usage?.completion_tokens ?? null,
-        latencyMs: Date.now() - started
-      });
-      return parsed;
+      data = await callOnce(body, controller.signal);
     } catch (error) {
       clearTimeout(timer);
-      lastError = error.name === 'AbortError' ? new Error('AI provider timed out.') : error;
+      lastError = error.name === 'AbortError' ? Object.assign(new Error('AI provider timed out.'), { kind: 'timeout' }) : error;
+      if (!lastError.kind) lastError.kind = error instanceof TypeError ? 'network' : 'provider_error';
       const retryable = error.name === 'AbortError' || error.retryable || error instanceof TypeError;
       if (!retryable || attempt === 1) break;
+      // A retry is a second provider request and may be charged too: it takes its own unit, so the counters always
+      // equal the number of requests sent. No unit left = no retry.
+      try {
+        await reserve(tenantId, userId);
+      } catch (quotaError) {
+        logEvent('warn', 'ai_retry_skipped', { tenantId, agent, callId, reason: quotaError.code || 'quota' });
+        break;
+      }
+      continue;
     }
+    clearTimeout(timer);
+    // The provider answered and charged for it: its token usage is recorded whatever the answer looks like.
+    addUsage(data);
+    let parsed;
+    try {
+      parsed = extractJson(data?.choices?.[0]?.message?.content);
+    } catch (error) {
+      await finish('invalid_output', 'invalid_json', error.message);
+      throw Object.assign(httpError(502, 'The AI answer could not be read. Please fill the form by hand.'), { code: 'AI_INVALID_OUTPUT' });
+    }
+    const shape = validate(parsed) || { ok: false, errors: ['validator returned nothing'] };
+    if (!shape.ok) {
+      await finish('invalid_output', 'schema', (shape.errors || []).slice(0, 3).join('; '));
+      throw Object.assign(httpError(502, 'The AI answer did not have the expected fields, so nothing was filled in. Please fill the form by hand.'), { code: 'AI_INVALID_OUTPUT' });
+    }
+    await finish('succeeded', null, null);
+    return parsed;
   }
-  await log?.({ agent, status: 'failed', model: model || null, latencyMs: Date.now() - started, error: lastError?.message });
-  throw httpError(502, 'The AI assistant could not answer right now. Please fill the form by hand or try again.');
+  await finish('failed', lastError?.kind || 'provider_error', lastError?.message);
+  throw Object.assign(httpError(502, 'The AI assistant could not answer right now. Please fill the form by hand or try again.'), { code: 'AI_PROVIDER_FAILED' });
 }
 
-module.exports = { completeJson, isEnabled, setTransport, extractJson };
+module.exports = { completeJson, isEnabled, setTransport, setUsageStore, extractJson, availability, checkModelConfig, modelName, limits };

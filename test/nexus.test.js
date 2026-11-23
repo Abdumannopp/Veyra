@@ -22,7 +22,8 @@ process.env.TWILIO_SMS_FROM = '+15550001111';
 process.env.TWILIO_WHATSAPP_FROM = '+15550002222';
 
 const { app, initialize } = require('../server');
-const { db } = require('../database');
+const { db, takeAiQuota } = require('../database');
+const { runAsSystem } = require('../lib/tenant-context');
 const aiGateway = require('../ai/gateway');
 const messaging = require('../integrations/messaging');
 const nexus = require('../agents/nexus');
@@ -196,15 +197,18 @@ test('without AI the email still becomes a task, and the daily AI cap is respect
     process.env.OPENROUTER_API_KEY = saved;
   }
 
-  nexus.configure({ aiDailyLimit: 0 });
+  // The company's daily AI budget (one shared, durable counter in the database) is used up.
+  const savedLimit = process.env.AI_DAILY_LIMIT_PER_TENANT;
+  process.env.AI_DAILY_LIMIT_PER_TENANT = '1';
+  await runAsSystem(() => takeAiQuota(1, `day:${new Date().toISOString().slice(0, 10)}`, 1));
   try {
     const requests = fakeModel([orderReply()]);
     await inbound(postmark({ MessageID: 'cap-1', From: 'cap@x.example' }));
     await nexus.idle();
     assert.equal(requests.length, 0);
-    assert.match((await tasks()).find((t) => t.payload?.from === 'cap@x.example').payload.note, /daily AI limit/);
+    assert.match((await tasks()).find((t) => t.payload?.from === 'cap@x.example').payload.note, /AI requests for today/);
   } finally {
-    nexus.configure({ aiDailyLimit: 300 });
+    if (savedLimit === undefined) delete process.env.AI_DAILY_LIMIT_PER_TENANT; else process.env.AI_DAILY_LIMIT_PER_TENANT = savedLimit;
   }
 
   // A person can still ask FLOW to read it by hand.

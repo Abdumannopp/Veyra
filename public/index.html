@@ -433,6 +433,15 @@
                 <div class="head-sub">People, integrations, backups and the activity log.</div>
               </div>
             </div>
+          <div class="card admin-panel hidden" id="aiConsentPanel">
+            <div class="admin-panel-header">
+              <div>
+                <h3 class="head-label small">AI data sharing</h3>
+                <div class="head-sub">Whether order texts and documents may be sent to the outside AI provider. Off until an administrator allows it.</div>
+              </div>
+            </div>
+            <div data-ai-consent-body></div>
+          </div>
           <div class="card admin-panel hidden" id="retentionPanel">
             <div class="admin-panel-header">
               <div>
@@ -666,7 +675,7 @@
             <div class="assistant-head">
               <div class="mini-brand">
                 <span class="mini-mark"><svg viewBox="0 0 100 80"><use href="#logo-v" /></svg></span>
-                <span>Veyra AI <svg class="ico sm sparkle-mark"><use href="#i-sparkle" /></svg></span>
+                <span>Quick Shipment Draft</span>
               </div>
               <div class="assistant-actions">
                 <button class="btn btn-primary small assist-btn" type="button">New Shipment</button>
@@ -1012,6 +1021,7 @@
     <script src="coldchain.js"></script>
     <script src="compliance.js"></script>
     <script src="retention.js"></script>
+    <script src="ai-consent.js"></script>
     <script src="trips.js"></script>
   </body>
 </html>

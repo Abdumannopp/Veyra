@@ -208,6 +208,7 @@
       if (search) search.value = '';
       renderSettings();
       window.VeyraRetention?.show();
+      window.VeyraAiConsent?.show();
     } else {
       if (search) search.value = '';
       // Coming back to the dashboard shows fresh numbers, not the ones from when the page first opened.
