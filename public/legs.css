@@ -55,3 +55,7 @@
 .leg-stop-list li {
   margin: 4px 0;
 }
+
+.compliance-form label {
+  max-width: 180px;
+}

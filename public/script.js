@@ -2170,6 +2170,7 @@ async function openShipmentDetails(shipmentId) {
     setupDetailTools(shipment);
     window.VeyraLegs?.show(shipment);
     window.VeyraColdChain?.show(shipment);
+    window.VeyraCompliance?.show(shipment);
     modal.classList.remove('hidden');
   } catch (error) {
     notify(error.message, 'error');

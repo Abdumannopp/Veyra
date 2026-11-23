@@ -160,3 +160,12 @@ NEXUS (with "Warn about loads at risk" on) makes one task when goods arrive shor
 
 Last-mile legs in `GET /api/v2/shipments/:id` have `stops` (each with `missedWindow`) and `stopSummary` (`total`, `pending`, `delivered`, `failed`, `done`, `complete`).
 NEXUS (with "Warn about loads at risk" on) makes one task per failed attempt and one per stop whose deliver-by time passed more than an hour ago (closed when the stop is delivered or fails). Entered by dispatchers and drivers; no courier system is connected.
+
+## Customs and dangerous goods
+
+| Call | What |
+|---|---|
+| `GET /api/v2/shipments/:id/compliance` | `{ compliance, warnings, options }` (`compliance` is null until saved) |
+| `PUT /api/v2/shipments/:id/compliance` | The whole record: `goodsDescription`, `hsCode` (6–10 digits), `originCountry`/`destinationCountry` (ISO 2 letters), `declaredValue` (in the load's currency), `incoterm` (Incoterms 2020), `customsStatus` (Not started, Documents requested, Declared, Held, Cleared; Declared and later need `declarationNo`), `dangerous`, and for dangerous goods `unNumber` (UN + 4 digits), `dgClass`, `packingGroup` (I–III; none for classes 1, 2, 6.2 and 7) and `properShippingName` |
+
+Warnings (never decisions): dangerous goods on air (IATA DGR), ocean (IMDG) or road (ADR) legs, high-consequence classes, and missing HS code / value / Incoterm on a border crossing. NEXUS (with "Warn about loads at risk" on) makes one task per dangerous-goods warning and one while customs hold the goods (closed when the status moves on). These are format checks only, not legal or dangerous-goods advice; no customs system is connected.

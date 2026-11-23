@@ -52,6 +52,13 @@ Sequential legs with handovers; temperature ranges and excursions; warehouse rec
 ## Phase 6 — Compliance, security audit, production readiness
 Customs data, dangerous goods, retention rules, external security review, load and recovery tests.
 
+| Step | What | State |
+|---|---|---|
+| 6.1 | Customs and dangerous goods per load: HS code, countries, declared value, Incoterm, customs status and declaration number; UN number, class, packing group and proper shipping name (format checks, not legal advice); warnings per leg mode; NEXUS tasks for goods held by customs and dangerous goods to check | Done |
+| 6.2 | Retention rules (how long finished loads, files and logs are kept, then removed) | Next |
+| 6.3 | Load and recovery tests (backup restore drill) | Planned |
+| 6.4 | External security review | Needs an outside reviewer |
+
 ## Rules kept throughout
 - Existing FTL workflow keeps working after every step (the full test suite runs on both databases).
 - Timestamps stored in UTC; money with an explicit currency; weights and sizes normalised but the entered value and unit kept.

@@ -9,6 +9,7 @@
 //
 // Every reaction is idempotent (tasks carry a dedupe key), runs after the web request has
 // finished, and failures are logged, never thrown at the person who triggered the event.
+const complianceLib = require('../lib/compliance');
 const lastMileLib = require('../lib/last-mile');
 const warehouseLib = require('../lib/warehouse');
 const coldChainLib = require('../lib/cold-chain');
@@ -179,6 +180,7 @@ async function handleBuiltIn(event, context) {
     case 'temperature.reading': return onTemperatureReading(context);
     case 'warehouse.received': return onWarehouseReceived(context);
     case 'stop.failed': return onStopFailed(context);
+    case 'compliance.saved': return onComplianceSaved(context);
     case 'inbox.attached': return onInboxAttached(context);
     case 'message.failed': return onMessageFailed(context);
     default: return undefined;
@@ -509,6 +511,38 @@ async function readTransportDocument({ tenantId, shipmentId, document, file, shi
     }
   } catch (error) {
     await db.updateDocumentExtraction(tenantId, document.id, { status: 'failed', error: error.message });
+  }
+}
+
+/* ---------- customs held, dangerous goods to check ---------- */
+// One task while customs hold the goods (closed when the status moves on), and one per dangerous-goods
+// warning (e.g. dangerous goods on an air leg), raised once.
+async function onComplianceSaved({ tenantId, shipmentId }) {
+  if (!(await automationOn(tenantId, 'riskWatch'))) return;
+  const record = await db.getCompliance(tenantId, shipmentId);
+  if (!record) return;
+  if (record.customsStatus === 'Held') {
+    await db.createTask(tenantId, {
+      kind: 'attention',
+      title: `SHP-${shipmentId}: held by customs${record.declarationNo ? ` (declaration ${record.declarationNo})` : ''}`,
+      shipmentId,
+      dedupeKey: `customsheld:${shipmentId}:${record.updatedAt}`,
+      payload: { text: 'Ask the customs broker what is missing, send it, and tell the customer about the delay.', severity: 'high' }
+    });
+  } else {
+    await db.resolveTasksByKey(tenantId, `customsheld:${shipmentId}:`);
+  }
+  if (!record.dangerous) return;
+  const legs = (await db.getShipmentLegs(tenantId, shipmentId))?.legs || [];
+  for (const warning of complianceLib.warnings(record, { legModes: legs.filter((leg) => leg.status !== 'Cancelled').map((leg) => leg.mode) })) {
+    if (!warning.kind.startsWith('dg_')) continue;
+    await db.createTask(tenantId, {
+      kind: 'attention',
+      title: `SHP-${shipmentId}: ${record.unNumber} class ${record.dgClass} — ${warning.text.split(':')[0].toLowerCase()}`,
+      shipmentId,
+      dedupeKey: `dg:${shipmentId}:${warning.kind}:${record.unNumber}`,
+      payload: { text: warning.text, severity: 'high' }
+    });
   }
 }
 

@@ -180,6 +180,7 @@ const legsLib = require('./lib/legs');
 const coldChain = require('./lib/cold-chain');
 const warehouseLib = require('./lib/warehouse');
 const lastMileLib = require('./lib/last-mile');
+const complianceLib = require('./lib/compliance');
 const coldChainDb = require('./database');
 const tripsLib = require('./lib/trips');
 const jobQueue = require('./lib/job-queue');
@@ -3574,6 +3575,49 @@ app.post('/api/v2/legs/:id/status', authMiddleware, async (req, res) => {
     return await sendShipmentLegs(res, req.user.tenantId, result.shipmentId, 200, { handoverTo: result.handoverTo });
   } catch (error) {
     return sendError(res, error, 'The leg status could not be changed.', 'v2 leg status');
+  }
+});
+
+/* ---------- customs and dangerous goods (Phase 6.1) ---------- */
+async function sendCompliance(res, tenantId, shipmentId, status = 200) {
+  const legs = await getShipmentLegs(tenantId, shipmentId);
+  if (!legs) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+  const record = await coldChainDb.getCompliance(tenantId, shipmentId);
+  return res.status(status).json({
+    success: true, shipmentId: `SHP-${shipmentId}`, compliance: record,
+    warnings: complianceLib.warnings(record, { legModes: legs.legs.filter((leg) => leg.status !== 'Cancelled').map((leg) => leg.mode) }),
+    options: { customsStatuses: complianceLib.CUSTOMS_STATUSES, incoterms: complianceLib.INCOTERMS, dgClasses: complianceLib.DG_CLASSES }
+  });
+}
+
+app.get('/api/v2/shipments/:id/compliance', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+    return await sendCompliance(res, req.user.tenantId, shipmentId);
+  } catch (error) {
+    return sendError(res, error, 'Customs data could not be loaded.', 'compliance');
+  }
+});
+
+// The whole record each time (fields left out are cleared).
+app.put('/api/v2/shipments/:id/compliance', authMiddleware, requirePermission('shipments:status'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+    let record;
+    try {
+      record = complianceLib.readCompliance(req.body || {}, { parseMoney });
+    } catch (error) {
+      if (error instanceof complianceLib.ComplianceError) return res.status(400).json({ success: false, message: error.message });
+      throw error;
+    }
+    const saved = await coldChainDb.saveCompliance(req.user.tenantId, shipmentId, record, req.user.id);
+    audit(req, 'compliance.save', `SHP-${shipmentId}: customs ${record.customsStatus}${record.dangerous ? `, ${record.unNumber} class ${record.dgClass}` : ''}`);
+    nexus.emit('compliance.saved', { tenantId: req.user.tenantId, shipmentId, customsStatus: record.customsStatus, before: saved.before?.customsStatus || null });
+    return await sendCompliance(res, req.user.tenantId, shipmentId);
+  } catch (error) {
+    return sendError(res, error, 'Customs data could not be saved.', 'compliance save');
   }
 });
 
