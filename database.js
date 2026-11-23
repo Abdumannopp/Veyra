@@ -1046,6 +1046,46 @@ const MIGRATIONS = [
       if (Number(kept?.total) > 0) throw new Error('0012_last_mile_stops cannot be reversed while stops exist. Restore the backup taken before the upgrade.');
       await run('DROP TABLE IF EXISTS last_mile_stops');
     }
+  },
+  {
+    id: '0013_shipment_compliance',
+    name: 'Customs and dangerous goods facts per load',
+    transactional: false,
+    up: async (tx) => {
+      await run(`
+        CREATE TABLE IF NOT EXISTS shipment_compliance (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          shipment_id INTEGER NOT NULL REFERENCES shipments(id),
+          goods_description TEXT,
+          hs_code TEXT,
+          origin_country TEXT,
+          destination_country TEXT,
+          declared_value REAL,
+          currency TEXT,
+          incoterm TEXT,
+          customs_status TEXT NOT NULL DEFAULT 'Not started',
+          declaration_no TEXT,
+          dangerous INTEGER NOT NULL DEFAULT 0,
+          un_number TEXT,
+          dg_class TEXT,
+          packing_group TEXT,
+          proper_shipping_name TEXT,
+          updated_by INTEGER REFERENCES users(id),
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_shipment_compliance_shipment ON shipment_compliance (shipment_id)');
+      if (isPostgres) {
+        await run('ALTER TABLE shipment_compliance ALTER COLUMN declared_value TYPE NUMERIC(18,4) USING ROUND(declared_value::numeric, 4)');
+        await protectTenantTable(tx, 'shipment_compliance');
+      }
+    },
+    down: async () => {
+      const kept = await get('SELECT COUNT(*) AS total FROM shipment_compliance');
+      if (Number(kept?.total) > 0) throw new Error('0013_shipment_compliance cannot be reversed while compliance records exist. Restore the backup taken before the upgrade.');
+      await run('DROP TABLE IF EXISTS shipment_compliance');
+    }
   }
 ];
 
@@ -3649,6 +3689,49 @@ async function listOpenMultiLegShipmentsAllTenants() {
   return all("SELECT id, tenant_id AS tenantId FROM shipments WHERE leg_mode = 'multi' AND status NOT IN ('Delivered', 'Cancelled') ORDER BY id");
 }
 
+/* ---------- customs and dangerous goods (Phase 6.1) ---------- */
+
+async function getCompliance(tenantId, shipmentId) {
+  assertTenant(tenantId);
+  const row = await get(
+    `SELECT c.goods_description AS goodsDescription, c.hs_code AS hsCode, c.origin_country AS originCountry, c.destination_country AS destinationCountry,
+       c.declared_value AS declaredValue, c.currency, c.incoterm, c.customs_status AS customsStatus, c.declaration_no AS declarationNo,
+       c.dangerous, c.un_number AS unNumber, c.dg_class AS dgClass, c.packing_group AS packingGroup, c.proper_shipping_name AS properShippingName,
+       c.updated_at AS updatedAt, users.name AS updatedBy
+     FROM shipment_compliance c LEFT JOIN users ON users.id = c.updated_by WHERE c.shipment_id = ? AND c.tenant_id = ?`,
+    [shipmentId, tenantId]
+  );
+  if (!row) return null;
+  return { ...row, dangerous: Boolean(Number(row.dangerous)), declaredValue: row.declaredValue === null || row.declaredValue === undefined ? null : Number(row.declaredValue) };
+}
+
+// Saves the whole record (insert or replace). Returns { record, before }.
+async function saveCompliance(tenantId, shipmentId, record, actorId) {
+  assertTenant(tenantId);
+  const shipment = await get('SELECT id, currency FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+  if (!shipment) throw httpError(404, 'Shipment not found.');
+  const before = await getCompliance(tenantId, shipmentId);
+  const currency = shipment.currency || await currencyOf(tenantId);
+  const values = [record.goodsDescription, record.hsCode, record.originCountry, record.destinationCountry, record.declaredValue, currency, record.incoterm,
+    record.customsStatus, record.declarationNo, record.dangerous ? 1 : 0, record.unNumber, record.dgClass, record.packingGroup, record.properShippingName, actorId || null];
+  if (before) {
+    await run(
+      `UPDATE shipment_compliance SET goods_description = ?, hs_code = ?, origin_country = ?, destination_country = ?, declared_value = ?, currency = ?, incoterm = ?,
+         customs_status = ?, declaration_no = ?, dangerous = ?, un_number = ?, dg_class = ?, packing_group = ?, proper_shipping_name = ?, updated_by = ?,
+         updated_at = datetime('now') WHERE shipment_id = ? AND tenant_id = ?`,
+      [...values, shipmentId, tenantId]
+    );
+  } else {
+    await run(
+      `INSERT INTO shipment_compliance (goods_description, hs_code, origin_country, destination_country, declared_value, currency, incoterm, customs_status,
+         declaration_no, dangerous, un_number, dg_class, packing_group, proper_shipping_name, updated_by, shipment_id, tenant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [...values, shipmentId, tenantId]
+    );
+  }
+  return { record: await getCompliance(tenantId, shipmentId), before };
+}
+
 /* ---------- last mile (Phase 5.3) ---------- */
 
 const STOP_SELECT = `SELECT st.id, st.shipment_id AS shipmentId, st.leg_id AS legId, st.sequence, st.address, st.contact_name AS contactName,
@@ -4480,6 +4563,8 @@ module.exports = {
   getDocument,
   listDocuments,
   getDocumentFile,
+  getCompliance,
+  saveCompliance,
   listLegStops,
   getStop,
   addStop,
