@@ -127,3 +127,13 @@ Document types `bill_of_lading`, `air_waybill` and `rail_waybill` (upload as usu
 - container, AWB and wagon numbers must pass their check digits; one that does not is shown as "Unreadable number" (a mismatch), never trusted;
 - the result is compared with the leg the document is filed under, else with the load's first leg of that mode, and the document is then filed under that leg (`legId`);
 - any difference makes one `check_document` task. VAULT never changes a leg.
+
+## Cold chain (temperature)
+
+| Call | What |
+|---|---|
+| `GET /api/v2/shipments/:id/temperatures` | `{ range, readings, excursions }` |
+| `PUT /api/v2/shipments/:id/temperature-range` | `{ min, max }` in °C (-40 to 40, max at least 0.5 above min); `{ min: null, max: null }` clears it |
+| `POST /api/v2/shipments/:id/temperatures` | `{ celsius, recordedAt?, legId?, note? }`; recordedAt is UTC unless it has an offset, not in the future |
+
+An excursion is a stretch of readings outside the range: it starts at the first reading outside and ends at the first one back inside (`open` while the latest reading is still outside), with its `peak` and `minutes`. With "Warn about loads at risk" on, NEXUS makes one task per excursion (not per reading). Readings are typed by people; no sensor or logger is connected.

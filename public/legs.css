@@ -23,3 +23,25 @@
   color: var(--red, #e11d48);
   font-weight: 600;
 }
+
+.cold-readings {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.cold-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.cold-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  max-width: 140px;
+}

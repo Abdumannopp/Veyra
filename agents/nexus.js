@@ -9,6 +9,7 @@
 //
 // Every reaction is idempotent (tasks carry a dedupe key), runs after the web request has
 // finished, and failures are logged, never thrown at the person who triggered the event.
+const coldChainLib = require('../lib/cold-chain');
 const legsLib = require('../lib/legs');
 const db = require('../database');
 const { runAsSystem } = require('../lib/tenant-context');
@@ -173,6 +174,7 @@ async function handleBuiltIn(event, context) {
     case 'trip.status': return onTripStatus(context);
     case 'shipment.dispatched': return onShipmentDispatched(context);
     case 'document.uploaded': return onDocumentUploaded(context);
+    case 'temperature.reading': return onTemperatureReading(context);
     case 'inbox.attached': return onInboxAttached(context);
     case 'message.failed': return onMessageFailed(context);
     default: return undefined;
@@ -504,6 +506,28 @@ async function readTransportDocument({ tenantId, shipmentId, document, file, shi
   } catch (error) {
     await db.updateDocumentExtraction(tenantId, document.id, { status: 'failed', error: error.message });
   }
+}
+
+/* ---------- cold chain: a reading outside the load's range ---------- */
+// One task per excursion (a stretch of readings outside the range), not one per reading.
+async function onTemperatureReading({ tenantId, shipmentId, readingId }) {
+  if (!(await automationOn(tenantId, 'riskWatch'))) return;
+  const data = await db.getColdChain(tenantId, shipmentId);
+  if (!data?.range) return;
+  const excursion = coldChainLib.excursions(data.readings, data.range).find((item) => item.open || item.startReadingId === readingId);
+  if (!excursion || !excursion.open) return;
+  const reading = data.readings.find((item) => item.id === readingId);
+  const word = excursion.direction === 'too_warm' ? 'too warm' : 'too cold';
+  await db.createTask(tenantId, {
+    kind: 'attention',
+    title: `SHP-${shipmentId}: ${word} — ${excursion.peak} °C (range ${data.range.min} to ${data.range.max} °C)`,
+    shipmentId,
+    dedupeKey: `temp:${shipmentId}:${excursion.startReadingId}`,
+    payload: {
+      text: `The load is ${word} since ${excursion.startedAt} UTC (latest ${reading ? reading.celsius : excursion.peak} °C). Ask the driver to check the reefer unit and its setting, note it on the CMR, and tell the customer if the goods may be affected.`,
+      severity: 'high'
+    }
+  });
 }
 
 /* ---------- trucks that went quiet (periodic) ---------- */
