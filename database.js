@@ -968,6 +968,45 @@ const MIGRATIONS = [
       await run('ALTER TABLE shipments DROP COLUMN temp_max');
       await run('ALTER TABLE shipments DROP COLUMN temp_min');
     }
+  },
+  {
+    id: '0011_warehouse_stays',
+    name: 'Warehouse: goods received into a warehouse leg, stored and released',
+    transactional: false,
+    up: async (tx) => {
+      await run(`
+        CREATE TABLE IF NOT EXISTS warehouse_stays (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          shipment_id INTEGER NOT NULL REFERENCES shipments(id),
+          leg_id INTEGER NOT NULL REFERENCES shipment_legs(id),
+          received_at TEXT NOT NULL,
+          pieces_expected INTEGER,
+          pieces_received INTEGER NOT NULL,
+          damaged_pieces INTEGER NOT NULL DEFAULT 0,
+          free_days INTEGER NOT NULL DEFAULT 0,
+          daily_rate REAL,
+          currency TEXT,
+          receive_note TEXT,
+          released_at TEXT,
+          pieces_released INTEGER,
+          release_note TEXT,
+          received_by INTEGER REFERENCES users(id),
+          released_by INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_warehouse_stays_leg ON warehouse_stays (leg_id)');
+      if (isPostgres) {
+        await run('ALTER TABLE warehouse_stays ALTER COLUMN daily_rate TYPE NUMERIC(18,4) USING ROUND(daily_rate::numeric, 4)');
+        await protectTenantTable(tx, 'warehouse_stays');
+      }
+    },
+    down: async () => {
+      const kept = await get('SELECT COUNT(*) AS total FROM warehouse_stays');
+      if (Number(kept?.total) > 0) throw new Error('0011_warehouse_stays cannot be reversed while warehouse records exist. Restore the backup taken before the upgrade.');
+      await run('DROP TABLE IF EXISTS warehouse_stays');
+    }
   }
 ];
 
@@ -3571,6 +3610,53 @@ async function listOpenMultiLegShipmentsAllTenants() {
   return all("SELECT id, tenant_id AS tenantId FROM shipments WHERE leg_mode = 'multi' AND status NOT IN ('Delivered', 'Cancelled') ORDER BY id");
 }
 
+/* ---------- warehouse (Phase 5.2) ---------- */
+
+const STAY_SELECT = `SELECT w.id, w.shipment_id AS shipmentId, w.leg_id AS legId, w.received_at AS receivedAt, w.pieces_expected AS piecesExpected,
+  w.pieces_received AS piecesReceived, w.damaged_pieces AS damagedPieces, w.free_days AS freeDays, w.daily_rate AS dailyRate, w.currency,
+  w.receive_note AS receiveNote, w.released_at AS releasedAt, w.pieces_released AS piecesReleased, w.release_note AS releaseNote,
+  receiver.name AS receivedBy, releaser.name AS releasedBy
+  FROM warehouse_stays w LEFT JOIN users receiver ON receiver.id = w.received_by LEFT JOIN users releaser ON releaser.id = w.released_by`;
+const mapStay = (row) => (row ? { ...row, dailyRate: row.dailyRate === null || row.dailyRate === undefined ? null : Number(row.dailyRate) } : null);
+
+async function getWarehouseStay(tenantId, legId) {
+  assertTenant(tenantId);
+  return mapStay(await get(`${STAY_SELECT} WHERE w.leg_id = ? AND w.tenant_id = ?`, [legId, tenantId]));
+}
+
+async function listWarehouseStays(tenantId, shipmentId) {
+  assertTenant(tenantId);
+  return (await all(`${STAY_SELECT} WHERE w.shipment_id = ? AND w.tenant_id = ? ORDER BY w.id`, [shipmentId, tenantId])).map(mapStay);
+}
+
+async function recordWarehouseReceipt(tenantId, legId, shipmentId, receipt, actorId) {
+  assertTenant(tenantId);
+  const shipment = await get('SELECT currency FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+  const currency = shipment?.currency || await currencyOf(tenantId);
+  await run(
+    `INSERT INTO warehouse_stays (tenant_id, shipment_id, leg_id, received_at, pieces_expected, pieces_received, damaged_pieces, free_days, daily_rate, currency, receive_note, received_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [tenantId, shipmentId, legId, receipt.receivedAt, receipt.piecesExpected, receipt.piecesReceived, receipt.damagedPieces, receipt.freeDays,
+      receipt.dailyRate, currency, receipt.note, actorId || null]
+  );
+  return getWarehouseStay(tenantId, legId);
+}
+
+async function recordWarehouseRelease(tenantId, legId, release, actorId) {
+  assertTenant(tenantId);
+  const result = await run(
+    'UPDATE warehouse_stays SET released_at = ?, pieces_released = ?, release_note = ?, released_by = ? WHERE leg_id = ? AND tenant_id = ? AND released_at IS NULL',
+    [release.releasedAt, release.piecesReleased, release.note, actorId || null, legId, tenantId]
+  );
+  if (result.changes !== 1) throw httpError(409, 'These goods were already released.');
+  return getWarehouseStay(tenantId, legId);
+}
+
+// Goods still in a warehouse, in every company (system context, for NEXUS).
+async function listOpenWarehouseStaysAllTenants() {
+  return (await all(`${STAY_SELECT.replace('SELECT w.id,', 'SELECT w.id, w.tenant_id AS tenantId,')} WHERE w.released_at IS NULL ORDER BY w.id`)).map(mapStay);
+}
+
 /* ---------- cold chain (Phase 5.1) ---------- */
 
 async function setTemperatureRange(tenantId, shipmentId, range) {
@@ -3618,7 +3704,7 @@ async function listStaleLegsAllTenants(staleHours) {
   return all(
     `SELECT l.id, l.tenant_id AS tenantId, l.shipment_id AS shipmentId, l.last_tracked_at AS lastTrackedAt
      FROM shipment_legs l JOIN shipments s ON s.id = l.shipment_id
-     WHERE l.status = 'In Transit' AND s.status NOT IN ('Delivered', 'Cancelled') AND COALESCE(l.last_tracked_at, l.updated_at) < datetime('now', ?)`,
+     WHERE l.status = 'In Transit' AND l.mode <> 'WAREHOUSE' AND s.status NOT IN ('Delivered', 'Cancelled') AND COALESCE(l.last_tracked_at, l.updated_at) < datetime('now', ?)`,
     [`-${Number(staleHours)} hours`]
   );
 }
@@ -4273,6 +4359,11 @@ module.exports = {
   getDocument,
   listDocuments,
   getDocumentFile,
+  getWarehouseStay,
+  listWarehouseStays,
+  recordWarehouseReceipt,
+  recordWarehouseRelease,
+  listOpenWarehouseStaysAllTenants,
   setTemperatureRange,
   addTemperatureReading,
   getColdChain,

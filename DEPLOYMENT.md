@@ -221,6 +221,10 @@ Put these only in Railway → Variables (never in chat, email or the code):
 
 Migration 0010 adds a temperature range to loads and a table of temperature readings. It can be reversed only while no reading is saved; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.** Readings are typed by people; no sensor is connected.
 
+## Warehouse
+
+Migration 0011 adds the table of warehouse receipts and releases. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.**
+
 ## Trips (LTL)
 
 One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migration `0008_trips` adds the trip tables (protected by row level security on PostgreSQL) and `shipments.trip_id`; it cannot be reversed, so take a backup before upgrading.
