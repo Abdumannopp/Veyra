@@ -119,3 +119,11 @@ Every leg in `GET /api/v2/shipments/:id` has `timing`: `{ late, issues: [{ kind,
 A planned date without a time counts as the end of that day (UTC). Free text (such as "Oct 3" on older loads) is not read as a time.
 
 NEXUS checks multi-leg loads every sweep (with "Warn about loads at risk" on) and makes one task per leg and kind of delay. The task closes by itself when the leg is on time again, delivered or cancelled; a task a person dismissed does not come back.
+
+## Ocean, air and rail papers
+
+Document types `bill_of_lading`, `air_waybill` and `rail_waybill` (upload as usual with `?type=`). VAULT (with AI on and "Read CMR and proof-of-delivery files" on) reads them:
+- the document number, vessel or flight, ports/airports/stations, container or wagon numbers, pieces and weight;
+- container, AWB and wagon numbers must pass their check digits; one that does not is shown as "Unreadable number" (a mismatch), never trusted;
+- the result is compared with the leg the document is filed under, else with the load's first leg of that mode, and the document is then filed under that leg (`legId`);
+- any difference makes one `check_document` task. VAULT never changes a leg.

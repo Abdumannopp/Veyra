@@ -445,7 +445,7 @@ async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = f
   const document = await db.getDocument(tenantId, shipmentId, documentId);
   if (!document) return;
   if (!vaultAgent.READABLE_TYPES.includes(document.type)) {
-    await db.updateDocumentExtraction(tenantId, documentId, { status: 'skipped', error: 'Only CMR and proof of delivery files are read automatically.' });
+    await db.updateDocumentExtraction(tenantId, documentId, { status: 'skipped', error: 'Only CMR, proof of delivery, B/L, AWB and rail notes are read automatically.' });
     return;
   }
   if (!manual && !(await automationOn(tenantId, 'readDocuments'))) {
@@ -460,6 +460,8 @@ async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = f
   const file = await db.getDocumentFile(tenantId, shipmentId, documentId);
   const shipment = await db.getShipment(tenantId, shipmentId);
   if (!file || !shipment) return;
+  const mode = vaultAgent.TRANSPORT_DOC_MODES[document.type];
+  if (mode) return readTransportDocument({ tenantId, shipmentId, document, file, shipment, mode });
   try {
     const fields = await vaultAgent.extractFields({ content: file.content, mime: file.mime, filename: file.filename }, { ...settings.flow, ...(await regionFor(tenantId)) }, logger(tenantId, shipmentId));
     const comparison = vaultAgent.compareWithShipment(fields, shipment);
@@ -475,6 +477,32 @@ async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = f
     }
   } catch (error) {
     await db.updateDocumentExtraction(tenantId, documentId, { status: 'failed', error: error.message });
+  }
+}
+
+// A B/L, AWB or rail note: compared with the leg it is filed under, else with the load's first leg of that mode.
+// The document is filed under that leg when it had none, so it shows on the leg.
+async function readTransportDocument({ tenantId, shipmentId, document, file, shipment, mode }) {
+  try {
+    const legs = (await db.getShipmentLegs(tenantId, shipmentId))?.legs || [];
+    const leg = legs.find((item) => item.id && item.id === document.legId) || legs.find((item) => item.id && item.mode === mode) || null;
+    const fields = await vaultAgent.extractTransport({ content: file.content, mime: file.mime, filename: file.filename }, document.type, logger(tenantId, shipmentId));
+    const comparison = leg
+      ? vaultAgent.compareWithLeg(fields, leg, shipment)
+      : { checks: [{ field: 'leg', label: 'Leg', document: mode, load: null, status: 'unknown', hint: `This load has no ${MODE_NAMES[mode] || mode} leg to compare with.` }], mismatches: 0 };
+    await db.updateDocumentExtraction(tenantId, document.id, { status: 'done', extracted: fields, comparison });
+    if (leg && !document.legId) await db.setDocumentLeg(tenantId, document.id, leg.id);
+    if (comparison.mismatches > 0) {
+      await db.createTask(tenantId, {
+        kind: 'check_document',
+        title: `${file.filename}: ${comparison.mismatches} difference${comparison.mismatches === 1 ? '' : 's'} from ${legLabel(shipmentId, leg)}`,
+        shipmentId,
+        dedupeKey: `doc:${document.id}`,
+        payload: { documentId: document.id, filename: file.filename, mismatches: comparison.checks.filter((check) => check.status === 'mismatch') }
+      });
+    }
+  } catch (error) {
+    await db.updateDocumentExtraction(tenantId, document.id, { status: 'failed', error: error.message });
   }
 }
 

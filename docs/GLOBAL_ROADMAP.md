@@ -38,7 +38,7 @@ Modular monolith; every step ships as its own pull request with tests on SQLite 
 |---|---|---|
 | 4.1 | Ocean, air and rail details with industry checks: ISO 6346 container numbers, container types, seal and booking; AWB check digit, IATA airports, pieces, weights and chargeable weight; UIC / 1520 wagon numbers, CIM/SMGS notes, border station. Screens show the new fields | Done |
 | 4.2 | Schedules and delays: each leg shows if it is late (pickup not started, past the planned delivery, ETA after the plan) or if the leg before will arrive after its pickup; NEXUS makes one task per delay that closes by itself | Done |
-| 4.3 | Mode documents (B/L, AWB, CIM/SMGS) linked to their leg and read by VAULT | Next |
+| 4.3 | Mode documents: B/L, AWB and rail notes (CIM/SMGS) are read by VAULT, their numbers checked (check digits), compared with the leg of that mode and filed under it; a difference is one task | Done |
 
 ## Phase 5 — Multimodal, cold chain, warehouse, last mile
 Sequential legs with handovers; temperature ranges and excursions; warehouse receiving and storage; last-mile stops and proof of delivery.

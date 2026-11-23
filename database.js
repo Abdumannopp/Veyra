@@ -2933,12 +2933,13 @@ function mapDocument(row) {
     comparison: parse(row.comparison_json),
     error: row.error,
     uploadedBy: row.uploadedBy || null,
+    legId: row.leg_id ?? null,
     createdAt: row.created_at
   };
 }
 
 const DOCUMENT_COLUMNS = `documents.id, documents.doc_type, documents.filename, documents.mime, documents.size, documents.extraction_status,
-  documents.extracted_json, documents.comparison_json, documents.error, documents.created_at, users.name AS uploadedBy`;
+  documents.extracted_json, documents.comparison_json, documents.error, documents.created_at, documents.leg_id, users.name AS uploadedBy`;
 
 // Returns { document, duplicate }. The same file attached twice to one load is kept once.
 async function addDocument(tenantId, shipmentId, { type, filename, mime, content, uploadedBy }) {
