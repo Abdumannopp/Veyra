@@ -1646,7 +1646,7 @@ function updateDashboard(data) {
 let detailsShipmentId = null;
 
 /* ---------- VAULT: documents attached to a load ---------- */
-const DOC_TYPE_LABELS = { cmr: 'CMR', pod: 'Proof of delivery', other: 'Other' };
+const DOC_TYPE_LABELS = { cmr: 'CMR', pod: 'Proof of delivery', bill_of_lading: 'Bill of lading (B/L)', air_waybill: 'Air waybill (AWB)', rail_waybill: 'Rail note (CIM/SMGS)', other: 'Other' };
 let documentPollTimer = null;
 
 function formatSize(bytes) {
@@ -1714,7 +1714,7 @@ function documentCard(shipmentId, doc, canRead, canDelete) {
     });
     buttons.append(typeSelect);
   }
-  if (canRead && ['skipped', 'failed'].includes(doc.extractionStatus) && ['cmr', 'pod'].includes(doc.type)) {
+  if (canRead && ['skipped', 'failed'].includes(doc.extractionStatus) && ['cmr', 'pod', 'bill_of_lading', 'air_waybill', 'rail_waybill'].includes(doc.type)) {
     const read = createTextElement('button', 'btn btn-ghost small', 'Read with AI');
     read.type = 'button';
     read.addEventListener('click', async () => {
