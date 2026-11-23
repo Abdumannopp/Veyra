@@ -4,9 +4,9 @@
 // 1. Consent: a company's data goes to the outside provider only after its administrator agreed (tenants.ai_external_consent).
 // 2. Quota: one unit per model request, taken BEFORE the provider is called, from durable counters in the database
 //    (a daily budget per company and an hourly budget per person). Atomic, so parallel requests cannot pass the limit,
-//    and kept across restarts and across several server instances. A failed request still counts; the gateway's own
-//    retry of the same request does not count twice.
-// 3. Ledger: an ai_calls row is written before the call and completed after it with status, model, tokens, latency
+//    and kept across restarts and across several server instances. A failed request still counts. The gateway's own
+//    retry is a second provider request and takes a second unit, so the counters equal the requests sent.
+// 3. Ledger: an ai_calls row MUST be written before the call (else nothing is sent) and completed after it with status, model, tokens, latency
 //    and the kind of error. Tokens are kept even when the answer is not valid JSON.
 // 4. Data: passwords, API keys, tokens and the server's secrets are removed from the text before it is sent
 //    (ai/redact.js). No prompt, email or document text is ever written to a log.
@@ -125,6 +125,14 @@ async function reserve(tenantId, userId, now = new Date()) {
   }
 }
 
+// Gives back the units taken by reserve() when nothing was sent.
+async function release(tenantId, userId, now = new Date()) {
+  const db = usageStore();
+  const w = windows(now);
+  await db.returnAiQuota(tenantId, w.day.key);
+  if (userId) await db.returnAiQuota(tenantId, w.hour(userId).key);
+}
+
 // Models sometimes wrap JSON in ``` fences or add a sentence; take the first JSON object.
 function extractJson(text) {
   const cleaned = String(text || '').replace(/```(?:json)?/gi, '').trim();
@@ -180,7 +188,7 @@ async function safeLog(log, task, tenantId) {
  * @param {string} options.system       Trusted instructions.
  * @param {string|object[]} options.user  Untrusted content: text, or content parts (text plus a file as a data: URL).
  * @param {{tenantId: number, userId?: number}} options.usage  Who pays: REQUIRED. Consent and quota are checked for this company.
- * @param {(raw: object) => {ok: boolean, errors?: string[]}} [options.validate]  Strict shape check of the answer.
+ * @param {(raw: object) => {ok: boolean, errors?: string[]}} options.validate  Strict shape check of the answer: REQUIRED.
  * @param {number} [options.timeoutMs]  Longer for documents than for short messages.
  * @param {(task: object) => Promise<void>} [options.log]  Writes the agent_tasks row (analytics).
  */
@@ -190,6 +198,10 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
     // A programming error, never a user error: every model call must name the company that pays for it.
     throw new Error(`AI call for ${agent} without a company: pass usage: { tenantId }.`);
   }
+  if (typeof validate !== 'function') {
+    // A programming error: an answer that is not checked must never be used, so the call is refused before anything is spent.
+    throw new Error(`AI call for ${agent} without an answer check: pass validate.`);
+  }
   const tenantId = Number(usage.tenantId);
   const userId = usage.userId ? Number(usage.userId) : null;
   const db = usageStore();
@@ -197,11 +209,18 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
   if (!(await db.getAiConsent(tenantId)).consent) throw consentError();
   await reserve(tenantId, userId);
 
+  // The ledger row must exist BEFORE anything is sent: without it the cost could not be recorded. If it cannot be
+  // written, the unit is given back and nothing is sent.
   let callId = null;
   try {
     callId = await db.startAiCall(tenantId, { userId, agent });
+    if (!callId) throw new Error('no ledger id');
   } catch (error) {
     logEvent('error', 'ai_ledger_start_failed', { tenantId, agent, error: error.message });
+    await release(tenantId, userId).catch(() => {});
+    const unavailable = httpError(503, 'AI usage could not be recorded, so nothing was sent to the AI provider. Please try again later.');
+    unavailable.code = 'AI_USAGE_UNAVAILABLE';
+    throw unavailable;
   }
 
   const body = {
@@ -226,9 +245,17 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
   };
   const finish = async (status, errorKind, message) => {
     const latencyMs = Date.now() - started;
-    if (callId) {
-      await db.finishAiCall(tenantId, callId, { status, model: totals.model, inputTokens: totals.inputTokens, outputTokens: totals.outputTokens, latencyMs, attempts: totals.attempts, errorKind })
-        .catch((error) => logEvent('error', 'ai_ledger_finish_failed', { tenantId, agent, callId, error: error.message }));
+    const result = { status, model: totals.model, inputTokens: totals.inputTokens, outputTokens: totals.outputTokens, latencyMs, attempts: totals.attempts, errorKind };
+    // The provider has already charged: the row is completed with a second try, and if both fail the tokens are kept
+    // in a structured log line (never the prompt), so the cost can still be reconciled.
+    let saved = false;
+    for (let attempt = 0; attempt < 2 && !saved; attempt += 1) {
+      try {
+        await db.finishAiCall(tenantId, callId, result);
+        saved = true;
+      } catch (error) {
+        if (attempt === 1) logEvent('error', 'ai_ledger_finish_failed', { tenantId, agent, callId, error: error.message, ...result });
+      }
     }
     await safeLog(log, { agent, status: status === 'succeeded' ? 'succeeded' : 'failed', model: totals.model, inputTokens: totals.inputTokens, outputTokens: totals.outputTokens, latencyMs, error: errorKind ? `${errorKind}${message ? `: ${message}` : ''}` : null }, tenantId);
   };
@@ -247,6 +274,14 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
       if (!lastError.kind) lastError.kind = error instanceof TypeError ? 'network' : 'provider_error';
       const retryable = error.name === 'AbortError' || error.retryable || error instanceof TypeError;
       if (!retryable || attempt === 1) break;
+      // A retry is a second provider request and may be charged too: it takes its own unit, so the counters always
+      // equal the number of requests sent. No unit left = no retry.
+      try {
+        await reserve(tenantId, userId);
+      } catch (quotaError) {
+        logEvent('warn', 'ai_retry_skipped', { tenantId, agent, callId, reason: quotaError.code || 'quota' });
+        break;
+      }
       continue;
     }
     clearTimeout(timer);
@@ -259,7 +294,7 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
       await finish('invalid_output', 'invalid_json', error.message);
       throw Object.assign(httpError(502, 'The AI answer could not be read. Please fill the form by hand.'), { code: 'AI_INVALID_OUTPUT' });
     }
-    const shape = validate ? validate(parsed) : { ok: true };
+    const shape = validate(parsed) || { ok: false, errors: ['validator returned nothing'] };
     if (!shape.ok) {
       await finish('invalid_output', 'schema', (shape.errors || []).slice(0, 3).join('; '));
       throw Object.assign(httpError(502, 'The AI answer did not have the expected fields, so nothing was filled in. Please fill the form by hand.'), { code: 'AI_INVALID_OUTPUT' });

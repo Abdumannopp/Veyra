@@ -24,14 +24,14 @@
       ? `ON: order texts and documents may be sent to ${data.provider} when someone uses an AI agent.`
       : `OFF: nothing is sent to ${data.provider}. AI agents are paused for this company; forms work as usual.`);
     const last = text('small', 'muted', data.changedAt ? `Last changed ${formatTimestamp(data.changedAt)}${data.changedBy ? ` by ${data.changedBy}` : ''}. Every change is in the activity log.` : 'Never changed.');
-    const note = text('small', 'muted', 'Passwords, API keys and tokens found in the text are removed before sending. The provider is outside VEYRA.');
+    const note = text('small', 'muted', `What is sent: order texts (emails, pasted messages) and the uploaded document FILES themselves (PDF and photos of CMR, POD, B/L, AWB, rail notes). Passwords, API keys and tokens are removed from TEXT only; files are sent unchanged, so everything printed or written on a document reaches ${data.provider}, which is outside VEYRA.`);
     body.append(state, last, note);
     if (data.canChange) {
       const button = text('button', data.consent ? 'btn btn-ghost small' : 'btn btn-primary small', data.consent ? 'Switch off' : 'Allow sending to the AI provider');
       button.type = 'button';
       button.addEventListener('click', async () => {
         const next = !data.consent;
-        if (next && !window.confirm(`Allow VEYRA to send order texts and documents to ${data.provider} for AI reading?`)) return;
+        if (next && !window.confirm(`Allow VEYRA to send order texts AND document files (PDF, photos, sent unchanged) to ${data.provider} for AI reading?`)) return;
         try {
           render(box, await api('PUT', '/api/settings/ai-consent', { consent: next }));
           notify(next ? 'AI data sharing switched on.' : 'AI data sharing switched off.', 'ok');

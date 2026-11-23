@@ -80,7 +80,9 @@ const withLimits = async (day, hour, work) => {
 const today = () => `day:${new Date().toISOString().slice(0, 10)}`;
 // The day's counter is shared by every test in this file, so each test reads it and checks the change.
 const usedToday = (tenantId) => runAsTenant(tenantId, () => database.aiQuotaUsed(tenantId, today()));
-const askGateway = (tenantId, userId, validate) => runAsTenant(tenantId, () => aiGateway.completeJson({
+const anyObject = () => ({ ok: true });
+const userIds = (tenantId) => new Promise((resolve, reject) => database.db.all('SELECT id FROM users WHERE tenant_id = ? ORDER BY id', [tenantId], (e, rows) => (e ? reject(e) : resolve(rows.map((row) => row.id)))));
+const askGateway = (tenantId, userId, validate = anyObject) => runAsTenant(tenantId, () => aiGateway.completeJson({
   agent: 'FLOW', system: 's', user: 'u', usage: { tenantId, userId }, validate
 }));
 
@@ -207,21 +209,22 @@ test('quota: parallel requests never pass the company limit; counted once each; 
 test('quota: a person\'s hourly limit; a refused person does not use the company budget', async () => {
   fakeProvider(() => ({ ok: true }));
   const start = await usedToday(TENANT);
+  const [first, second] = await userIds(TENANT);
   await withLimits(start + 100, 2, async () => {
-    await askGateway(TENANT, 7);
-    await askGateway(TENANT, 7);
-    await assert.rejects(askGateway(TENANT, 7), (e) => e.code === 'AI_QUOTA_EXCEEDED' && e.details.scope === 'user_hourly' && e.retryAfterSeconds > 0);
-    await askGateway(TENANT, 8);
+    await askGateway(TENANT, first);
+    await askGateway(TENANT, first);
+    await assert.rejects(askGateway(TENANT, first), (e) => e.code === 'AI_QUOTA_EXCEEDED' && e.details.scope === 'user_hourly' && e.retryAfterSeconds > 0);
+    await askGateway(TENANT, second);
     assert.equal(await usedToday(TENANT), start + 3);
   });
 });
 
-test('quota: a failed call counts once; the gateway retry does not count twice; the HTTP answer is 429 with Retry-After', async () => {
+test('quota: each provider request takes one unit, the gateway retry included; the HTTP answer is 429 with Retry-After', async () => {
   const start = await usedToday(TENANT);
   const requests = fakeProvider(() => ({ status: 503 }));
   await assert.rejects(askGateway(TENANT, null), (e) => e.code === 'AI_PROVIDER_FAILED');
   assert.equal(requests.length, 2, 'retried once');
-  assert.equal(await usedToday(TENANT), start + 1, 'one unit for one request, retry included');
+  assert.equal(await usedToday(TENANT), start + 2, 'two provider requests (the call and its retry) = two units');
 
   fakeProvider();
   await withLimits(await usedToday(TENANT), 1000, async () => {
@@ -274,7 +277,7 @@ test('ledger: a failing activity log is a structured log line, not silence, and 
   console.error = capture;
   console.log = capture;
   try {
-    await runAsTenant(TENANT, () => aiGateway.completeJson({ agent: 'FLOW', system: 's', user: 'secret order text', usage: { tenantId: TENANT }, log: () => { throw new Error('disk full'); } }));
+    await runAsTenant(TENANT, () => aiGateway.completeJson({ agent: 'FLOW', system: 's', user: 'secret order text', usage: { tenantId: TENANT }, validate: anyObject, log: () => { throw new Error('disk full'); } }));
   } finally {
     console.error = original;
     console.log = originalLog;
@@ -424,4 +427,157 @@ test('plan gating: Starter still gets 402 and the provider is not called', async
   const starter = await login('st@starter.example', 'starter-company-pass-1');
   assert.equal((await call(starter, 'POST', '/api/agents/flow/parse', { text: 'order' })).status, 402);
   assert.equal(requests.length, 0);
+});
+
+/* ---------------- PR #40 review: manual reading, ledger, validators, retries ---------------- */
+
+const cmrAnswer = () => ({
+  consignor: 'Navoiy Textile', consignee: null, carrier: null, placeOfLoading: 'Tashkent', placeOfDelivery: 'Almaty',
+  date: null, truckPlate: null, grossWeight: 18000, weightUnit: 'kg', packages: null, goods: null, signedByConsignee: null, notes: null
+});
+const pdfBytes = (marker) => Buffer.concat([Buffer.from(`%PDF-1.4\n% ${marker}\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF`), Buffer.alloc(64, 1)]);
+
+test('manual "Read with AI": the asking person\'s hourly budget is taken by the real call, also in parallel', async () => {
+  const nexus = require('../agents/nexus');
+  // Automatic reading off, so only the manual requests reach the model.
+  assert.equal((await call(admin, 'PUT', '/api/settings/automations', { readDocuments: false })).status, 200);
+  try {
+    const created = await call(admin, 'POST', '/api/shipments', { customer: 'Hourly Co', origin: 'Tashkent', destination: 'Almaty', pickup: '2030-05-10', delivery: '2030-05-12', weight: 18000, equipment: 'Reefer' });
+    assert.equal(created.status, 201);
+    const shipmentId = String((await created.json()).shipment?.id || '').replace(/\D/g, '');
+    const docIds = [];
+    for (let i = 0; i < 5; i += 1) {
+      const res = await fetch(`${base}/api/shipments/${shipmentId}/documents?type=cmr&filename=cmr${i}.pdf`, { method: 'POST', headers: { 'content-type': 'application/pdf', cookie: admin }, body: pdfBytes(`hourly-${i}`) });
+      assert.equal(res.status, 201);
+      docIds.push((await res.json()).document.id);
+    }
+    await nexus.idle();
+    const [adminId] = await userIds(TENANT);
+    const hourKey = `user:${adminId}:hour:${new Date().toISOString().slice(0, 13)}`;
+    const hourUsed = () => runAsTenant(TENANT, () => database.aiQuotaUsed(TENANT, hourKey));
+    const startHour = await hourUsed();
+    const requests = fakeProvider(() => cmrAnswer(), { delayMs: 30 });
+    await withLimits((await usedToday(TENANT)) + 100, startHour + 2, async () => {
+      // All five pass the quick check at the door (nothing is taken there); the background readings run in parallel.
+      const answers = await Promise.all(docIds.map((id) => call(admin, 'POST', `/api/shipments/${shipmentId}/documents/${id}/extract`)));
+      assert.ok(answers.every((res) => res.status === 202));
+      await nexus.idle();
+      assert.equal(requests.length, 2, 'only the person\'s 2 hourly units reached the provider');
+      assert.equal(await hourUsed(), startHour + 2);
+      const docs = (await (await call(admin, 'GET', `/api/shipments/${shipmentId}/documents`)).json()).documents.filter((d) => docIds.includes(d.id));
+      const failed = docs.filter((d) => d.extraction?.status === 'failed' || d.extractionStatus === 'failed');
+      assert.equal(failed.length, 3, 'the other three say the hourly limit was reached');
+    });
+    // The ledger names the person who asked.
+    const calls = await runAsTenant(TENANT, () => database.listAiCalls(TENANT, { limit: 2 }));
+    assert.ok(calls.every((row) => row.userId === adminId && row.agent === 'VAULT'));
+  } finally {
+    await call(admin, 'PUT', '/api/settings/automations', { readDocuments: true });
+  }
+});
+
+// A store that wraps the real one and fails on purpose.
+function failingStore(overrides) {
+  const real = require('../database');
+  return { ...real, ...overrides };
+}
+
+test('ledger: if the ai_calls row cannot be written, nothing is sent and the unit is given back', async () => {
+  const requests = fakeProvider();
+  const start = await usedToday(TENANT);
+  aiGateway.setUsageStore(failingStore({ startAiCall: async () => { throw new Error('ledger down'); } }));
+  try {
+    await assert.rejects(askGateway(TENANT, null), (e) => e.statusCode === 503 && e.code === 'AI_USAGE_UNAVAILABLE');
+  } finally {
+    aiGateway.setUsageStore(null);
+  }
+  assert.equal(requests.length, 0, 'the provider was not called');
+  assert.equal(await usedToday(TENANT), start, 'the unit was given back');
+});
+
+test('ledger: completing the row is retried; if it still fails the tokens are in a structured log line', async () => {
+  const real = require('../database');
+  fakeProvider(() => ({ ok: true }));
+  let failures = 1;
+  aiGateway.setUsageStore(failingStore({ finishAiCall: async (...args) => { if (failures > 0) { failures -= 1; throw new Error('busy'); } return real.finishAiCall(...args); } }));
+  try {
+    await askGateway(TENANT, null);
+  } finally {
+    aiGateway.setUsageStore(null);
+  }
+  const [row] = await runAsTenant(TENANT, () => database.listAiCalls(TENANT, { limit: 1 }));
+  assert.equal(row.status, 'succeeded', 'the second try saved the row');
+  assert.equal(row.inputTokens, 100);
+  assert.equal(row.outputTokens, 20);
+
+  const lines = [];
+  const original = [console.error, console.log];
+  console.error = (...a) => lines.push(a.join(' '));
+  console.log = (...a) => lines.push(a.join(' '));
+  aiGateway.setUsageStore(failingStore({ finishAiCall: async () => { throw new Error('ledger gone'); } }));
+  try {
+    await askGateway(TENANT, null);
+  } finally {
+    aiGateway.setUsageStore(null);
+    [console.error, console.log] = original;
+  }
+  const line = lines.map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).find((l) => l?.event === 'ai_ledger_finish_failed');
+  assert.ok(line, 'structured line written');
+  assert.equal(line.inputTokens, 100);
+  assert.equal(line.outputTokens, 20);
+  assert.equal(line.status, 'succeeded');
+});
+
+test('validate is required: a call without it is refused before anything is spent', async () => {
+  const requests = fakeProvider();
+  const start = await usedToday(TENANT);
+  await assert.rejects(runAsTenant(TENANT, () => aiGateway.completeJson({ agent: 'FLOW', system: 's', user: 'u', usage: { tenantId: TENANT } })), /without an answer check/);
+  await assert.rejects(runAsTenant(TENANT, () => aiGateway.completeJson({ agent: 'FLOW', system: 's', user: 'u', usage: { tenantId: TENANT }, validate: 'yes' })), /without an answer check/);
+  assert.equal(requests.length, 0);
+  assert.equal(await usedToday(TENANT), start);
+});
+
+test('validate is used by every agent: FLOW, VAULT CMR/POD and VAULT transport papers reject a wrong shape', async () => {
+  // Every model call in the code passes validate (a source scan, so a new agent cannot forget it).
+  const root = path.join(__dirname, '..');
+  for (const file of ['agents/flow.js', 'agents/vault.js', 'agents/nexus.js', 'server.js']) {
+    const source = fs.readFileSync(path.join(root, file), 'utf8');
+    const calls = source.split('completeJson({').slice(1);
+    for (const body of calls) assert.match(body.slice(0, body.indexOf('});')), /validate:/, `${file}: completeJson without validate`);
+  }
+  const wrong = { hello: 'world' };
+  const doc = { content: pdfBytes('shape'), mime: 'application/pdf', filename: 'x.pdf' };
+  fakeProvider(() => wrong);
+  await assert.rejects(runAsTenant(TENANT, () => flow.parseOrder('order', { weightUnit: 'kg', currency: 'UZS', equipment: [], maxRate: 1, maxWeight: 1 }, { usage: { tenantId: TENANT } })), (e) => e.code === 'AI_INVALID_OUTPUT');
+  await assert.rejects(runAsTenant(TENANT, () => vault.extractFields(doc, { weightUnit: 'kg' }, { usage: { tenantId: TENANT } })), (e) => e.code === 'AI_INVALID_OUTPUT');
+  for (const type of ['bill_of_lading', 'air_waybill', 'rail_waybill']) {
+    await assert.rejects(runAsTenant(TENANT, () => vault.extractTransport(doc, type, { usage: { tenantId: TENANT } })), (e) => e.code === 'AI_INVALID_OUTPUT', type);
+  }
+  // And a right shape passes for VAULT CMR.
+  fakeProvider(() => cmrAnswer());
+  const fields = await runAsTenant(TENANT, () => vault.extractFields(doc, { weightUnit: 'kg' }, { usage: { tenantId: TENANT } }));
+  assert.equal(fields.consignor, 'Navoiy Textile');
+});
+
+test('retry: counters equal the provider requests sent; the ledger has both attempts and all tokens', async () => {
+  const start = await usedToday(TENANT);
+  const requests = fakeProvider((n) => (n === 1 ? { status: 503 } : { ok: true }));
+  await askGateway(TENANT, null);
+  assert.equal(requests.length, 2);
+  assert.equal(await usedToday(TENANT), start + 2, 'two requests = two units');
+  const [row] = await runAsTenant(TENANT, () => database.listAiCalls(TENANT, { limit: 1 }));
+  assert.equal(row.status, 'succeeded');
+  assert.equal(row.attempts, 2);
+  assert.equal(row.inputTokens, 100, 'only the answered request reported tokens');
+
+  // No unit left for the retry: it is not sent.
+  const now = await usedToday(TENANT);
+  const second = fakeProvider(() => ({ status: 503 }));
+  await withLimits(now + 1, 1000, async () => {
+    await assert.rejects(askGateway(TENANT, null), (e) => e.code === 'AI_PROVIDER_FAILED');
+  });
+  assert.equal(second.length, 1, 'no retry without a unit');
+  assert.equal(await usedToday(TENANT), now + 1);
+  const [last] = await runAsTenant(TENANT, () => database.listAiCalls(TENANT, { limit: 1 }));
+  assert.equal(last.attempts, 1);
 });

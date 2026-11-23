@@ -2779,7 +2779,8 @@ app.post('/api/shipments/:id/documents/:docId/extract', authMiddleware, requireP
       return res.status(503).json({ success: false, code: available.code, message: available.reason });
     }
     await updateDocumentExtraction(req.user.tenantId, docId, { status: 'pending' });
-    nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId: docId, manual: true });
+    // The person who asked is passed on, so the background reading also takes from that person's hourly AI budget.
+    nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId: docId, manual: true, requestedByUserId: req.user.id });
     return res.status(202).json({ success: true, status: 'pending' });
   } catch (error) {
     return sendError(res, error, 'Document could not be read.', 'document extract');

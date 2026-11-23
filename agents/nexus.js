@@ -111,7 +111,8 @@ async function idle() {
 // own ledger (ai_calls) and quota counters do not depend on it.
 const logger = (tenantId, shipmentId = null) => (task) => db.recordAgentTask(tenantId, { ...task, shipmentId, actorId: null })
   .catch((error) => logEvent('error', 'ai_audit_log_failed', { tenantId, agent: task.agent, source: 'nexus', error: error.message }));
-const aiContext = (tenantId, shipmentId = null) => ({ log: logger(tenantId, shipmentId), usage: { tenantId } });
+// userId: the person who asked (a manual "Read with AI"); their hourly budget is taken too. Automatic work has none.
+const aiContext = (tenantId, shipmentId = null, userId = null) => ({ log: logger(tenantId, shipmentId), usage: { tenantId, ...(Number.isInteger(userId) && userId > 0 ? { userId } : {}) } });
 
 // Automatic AI work needs the plan, the company's consent and quota left today (one shared budget with the people
 // of the company). The gateway checks consent and quota again and takes the unit; this only avoids queuing work.
@@ -459,7 +460,7 @@ async function draftMessageTask(tenantId, shipment, recipient, purpose, dedupeKe
 
 /* ---------- a document was uploaded ---------- */
 // manual: a person pressed "Read with AI", so the automatic-reading switch does not apply.
-async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = false }) {
+async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = false, requestedByUserId = null }) {
   const document = await db.getDocument(tenantId, shipmentId, documentId);
   if (!document) return;
   if (!vaultAgent.READABLE_TYPES.includes(document.type)) {
@@ -479,9 +480,9 @@ async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = f
   const shipment = await db.getShipment(tenantId, shipmentId);
   if (!file || !shipment) return;
   const mode = vaultAgent.TRANSPORT_DOC_MODES[document.type];
-  if (mode) return readTransportDocument({ tenantId, shipmentId, document, file, shipment, mode });
+  if (mode) return readTransportDocument({ tenantId, shipmentId, document, file, shipment, mode, requestedByUserId });
   try {
-    const fields = await vaultAgent.extractFields({ content: file.content, mime: file.mime, filename: file.filename }, { ...settings.flow, ...(await regionFor(tenantId)) }, aiContext(tenantId, shipmentId));
+    const fields = await vaultAgent.extractFields({ content: file.content, mime: file.mime, filename: file.filename }, { ...settings.flow, ...(await regionFor(tenantId)) }, aiContext(tenantId, shipmentId, requestedByUserId));
     const comparison = vaultAgent.compareWithShipment(fields, shipment, { type: document.type });
     await db.updateDocumentExtraction(tenantId, documentId, { status: 'done', extracted: fields, comparison });
     if (comparison.mismatches > 0) {
@@ -500,11 +501,11 @@ async function onDocumentUploaded({ tenantId, shipmentId, documentId, manual = f
 
 // A B/L, AWB or rail note: compared with the leg it is filed under, else with the load's first leg of that mode.
 // The document is filed under that leg when it had none, so it shows on the leg.
-async function readTransportDocument({ tenantId, shipmentId, document, file, shipment, mode }) {
+async function readTransportDocument({ tenantId, shipmentId, document, file, shipment, mode, requestedByUserId = null }) {
   try {
     const legs = (await db.getShipmentLegs(tenantId, shipmentId))?.legs || [];
     const leg = legs.find((item) => item.id && item.id === document.legId) || legs.find((item) => item.id && item.mode === mode) || null;
-    const fields = await vaultAgent.extractTransport({ content: file.content, mime: file.mime, filename: file.filename }, document.type, aiContext(tenantId, shipmentId));
+    const fields = await vaultAgent.extractTransport({ content: file.content, mime: file.mime, filename: file.filename }, document.type, aiContext(tenantId, shipmentId, requestedByUserId));
     const comparison = leg
       ? vaultAgent.compareWithLeg(fields, leg, shipment)
       : { checks: [{ field: 'leg', label: 'Leg', document: mode, load: null, status: 'unknown', hint: `This load has no ${MODE_NAMES[mode] || mode} leg to compare with.` }], mismatches: 0 };

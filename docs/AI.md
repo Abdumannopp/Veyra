@@ -14,6 +14,9 @@ only on plans with AI agents (Growth and up), like before.
 
 ## 2. Consent: a company decides whether its data may leave
 
+- A manual "Read with AI" on a document takes from the asking person's hourly budget too, also when the reading runs in
+  the background (NEXUS). Automatic work (incoming email and documents) takes only from the company's day.
+- Every model call must pass an answer check (`validate`); a call without one is refused before anything is spent.
 - Setting: Team & settings → **AI data sharing** (`GET/PUT /api/settings/ai-consent`). Administrators change it; people who
   can see the team can see it.
 - **Off by default** for every company, including existing companies after the upgrade (migration 0015). In development
@@ -30,8 +33,10 @@ only on plans with AI agents (Growth and up), like before.
 | Per person per hour | `AI_RATE_LIMIT_PER_HOUR` | 60 | UTC clock hour |
 
 - One unit is taken **before** each provider request, in the database (`ai_quota`), with one atomic conditional update.
+  The gateway retries once on a timeout or provider error; that retry is a second request and takes a **second unit**
+  (no unit left = no retry), so the counters equal the requests sent.
   Parallel requests can never pass the limit; counters survive restarts and hold across several server instances.
-- A request that fails still uses its unit. The gateway's own retry of the same request does not take a second one.
+- A request that fails still uses its unit.
 - Over the limit: `429` with code `AI_QUOTA_EXCEEDED`, `details.scope` (`company_daily` or `user_hourly`), `details.limit`
   and a `Retry-After` header.
 - If the counter cannot be written, nothing is sent (`503`, `AI_USAGE_UNAVAILABLE`).
@@ -39,7 +44,10 @@ only on plans with AI agents (Growth and up), like before.
 
 ## 4. Ledger and logs
 
-- Every call has an `ai_calls` row: company, person (if any), agent, model, status (`succeeded`, `failed`,
+- Every call has an `ai_calls` row, written **before** anything is sent: if it cannot be written, nothing is sent (`503
+  AI_USAGE_UNAVAILABLE`) and the unit is given back. Completing it is tried twice; if both fail, the tokens, model and
+  status go to a structured log line `ai_ledger_finish_failed` (no prompt), so the cost can still be reconciled.
+- The `ai_calls` row has: company, person (if any), agent, model, status (`succeeded`, `failed`,
   `invalid_output`), input and output tokens, latency, attempts, kind of error, time. Tokens are kept even when the
   answer is not valid JSON.
 - The older `agent_tasks` row (Analytics → AI agents) is still written. If writing it fails, a structured JSON log line
@@ -48,10 +56,14 @@ only on plans with AI agents (Growth and up), like before.
 
 ## 5. Data minimisation
 
-Before sending, the gateway removes: passwords (also "parol", "пароль"), API keys, tokens, `Authorization` headers, JWTs,
+**Text only.** Before sending, the gateway removes from the **text** it sends: passwords (also "parol", "пароль"), API keys, tokens, `Authorization` headers, JWTs,
 common key shapes (`sk-…`, `AKIA…`, GitHub, Slack, Twilio) and the values of the server's own secret settings. Ordinary
-data needed for the order (places, phone numbers, prices) is kept. FLOW sends only the order text; VAULT sends only the
-document. This is a filter, not a guarantee: do not send documents that contain secrets.
+data needed for the order (places, phone numbers, prices) is kept. FLOW sends only the order text.
+
+**Files are NOT cleaned.** VAULT sends the uploaded document file itself (PDF or image) to the provider, unchanged:
+nothing written or printed inside a PDF or a photo is removed. Whatever is on the paper (names, addresses, signatures,
+stamps, any number or password on it) reaches the provider. The consent screen says this. Even for text the filter is not
+a guarantee: do not upload or send anything that should not leave the company.
 
 ## 6. The model's answer
 

@@ -42,7 +42,7 @@ open Critical or High finding. Tests written by the people who built the system 
   names to the servers you configure.
 - **AI provider** ([AI.md](AI.md)): data goes to OpenRouter only after the company's administrator switches on "AI data
   sharing" (off by default, every change in the activity log). Every model call goes through one gateway that takes a
-  durable per-company and per-person quota in the database first, removes passwords, keys and tokens from the text, logs
+  durable per-company and per-person quota in the database first, removes passwords, keys and tokens from the **text** (document files — PDF and images — are sent unchanged; see AI.md), logs
   the call (tokens, model, status) without prompts or secrets, and accepts only an answer of the expected shape.
 - **Activity log**: administrators see who changed accounts, passwords, integrations, payments, customer links, backups and
   data removal.

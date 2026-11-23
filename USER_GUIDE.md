@@ -59,7 +59,7 @@ Details: `DEPLOYMENT.md`.
 
 Every AI request is recorded: **Analytics → AI agents** shows how many requests were made and how many tokens were used (your AI provider charges by this). Cost control: each company has a limit of AI requests a day (300 by default, screens and automatic work together) and each person a limit per hour (60). After that the screen says so and emails and documents simply become plain tasks.
 
-**AI data sharing (must be switched on once):** the AI helpers send the order text or document to an outside provider (OpenRouter). Nothing is sent until an administrator allows it in **Team & settings → AI data sharing**. It can be switched off any time; who changed it and when is in the activity log. Passwords and keys found in the text are removed before sending.
+**AI data sharing (must be switched on once):** the AI helpers send the order text or document to an outside provider (OpenRouter). Nothing is sent until an administrator allows it in **Team & settings → AI data sharing**. It can be switched off any time; who changed it and when is in the activity log. Passwords and keys found in typed or emailed **text** are removed before sending. **Document files (PDF, photos) are sent as they are**: anything on the paper reaches the provider.
 
 **When AI leaves a field empty:** a number that can be read two ways (`1,250`: one thousand or one and a quarter?), a weight with no unit, or a date that does not exist is never guessed: the field stays empty with a note "check by hand". A message longer than 4000 characters is not read at all (never half-read): fill the form yourself. Rules: [docs/AI.md](docs/AI.md).
 
