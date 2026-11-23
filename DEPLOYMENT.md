@@ -237,6 +237,10 @@ Migration 0013 adds the customs and dangerous-goods record per load. It can be r
 
 Migration 0014 adds two settings columns to companies (reversible). Nothing is removed until a company administrator sets days in Team & settings → "Keeping old data" and presses "Remove now" or switches on the daily run. Removal cannot be undone: **keep regular backups.**
 
+## Restore drill and load test
+
+Before real customers, and then monthly: follow docs/RECOVERY.md. `npm run restore:drill` proves a backup can be restored (it never touches the live database); `npm run load:test` measures a staging copy under many users.
+
 ## Trips (LTL)
 
 One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migration `0008_trips` adds the trip tables (protected by row level security on PostgreSQL) and `shipments.trip_id`; it cannot be reversed, so take a backup before upgrading.

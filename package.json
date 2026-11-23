@@ -12,7 +12,9 @@
     "db:check": "node scripts/db-check.js",
     "migrate": "node scripts/migrate.js",
     "migrate:postgres": "node scripts/sqlite-to-postgres.js",
-    "documents:move": "node scripts/move-documents-to-storage.js"
+    "documents:move": "node scripts/move-documents-to-storage.js",
+    "restore:drill": "node scripts/restore-drill.js",
+    "load:test": "node scripts/load-check.js"
   },
   "keywords": [
     "logistics",
