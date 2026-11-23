@@ -283,7 +283,7 @@ The public price list is at `/pricing` (no sign-in needed). There are four plans
 
 Yearly billing costs 10 months (shown as "Save 17%").
 
-The AI agents that use a language model (FLOW reading orders, VAULT reading documents, and NEXUS when it reads an email) need **Growth or higher**; on Starter those buttons answer with a message naming the plan. The "Veyra AI" card on the dashboard only proposes a draft from your latest load; it does not use an AI model.
+The AI agents that use a language model (FLOW reading orders, VAULT reading documents, and NEXUS when it reads an email) need **Growth or higher**; on Starter those buttons answer with a message naming the plan. The "Veyra AI" card on the dashboard (it proposes a draft load from your latest one), the "Read with AI" panel in New Shipment, the AI button on documents, the AI row in Integrations and the two AI automations are shown only on Growth and higher. On Starter you do not see them, and the server would refuse them anyway. If you upgrade while VEYRA is open, they appear as soon as the plan change reaches the page (open Billing or reload).
 
 - **New companies** start a 14-day free trial of the plan chosen in **Companies → Add company**.
 - **Paying by card (Paddle):** a company administrator opens **Billing → Pay by card**, picks Monthly or Yearly and a plan, and pays in Paddle's secure window. The plan becomes Active by itself a few seconds later. Later, "Switch to …" changes the plan and "Invoices, card and cancel" opens Paddle's own page. Setup: see "Card payments (Paddle Billing)" in `DEPLOYMENT.md`.

@@ -70,6 +70,9 @@ const AUTOMATIONS = {
   pooling: 'Suggest loads that can share one truck'
 };
 
+// The automations that call an AI model. Plans without the AI capability do not see them in the screens.
+const AI_AUTOMATIONS = ['readOrders', 'readDocuments'];
+
 async function automationOn(tenantId, key) {
   const tenant = await db.getTenant(tenantId);
   return tenant?.automationSettings?.[key] !== false;
@@ -888,4 +891,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, stopSweep, retentionSweep, poolingSweep, startSweeper, stopSweeper };
+module.exports = { AUTOMATIONS, AI_AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, stopSweep, retentionSweep, poolingSweep, startSweeper, stopSweeper };

@@ -72,3 +72,19 @@ Who may use the newer features (`/api/v2` and settings):
 | Mark a leg paid to its carrier | `shipments:finance` | admin, operations |
 | Retention settings, automation switches, integrations | `settings:write` | admin |
 | Download backups, add companies | platform owner only | the first administrator |
+
+## The plan, for the screens
+
+The screens hide what the company's plan does not include. This is only a hint for the screens: **the server still refuses
+every call the plan does not allow** (`402`, see `needsPlan` in `server.js`), whatever a screen shows.
+
+- `GET /api/me` also returns `plan`: `{ key, name, status, locked, capabilities }`, where `capabilities` is a list such as
+  `["ai", "gps", "email", "messaging"]` (empty on Starter). `plan` is `null` only if the plan could not be read; the screens
+  then treat the company as having no AI.
+- `GET /api/billing/plan` returns the same capabilities as `{ ai: { on } , ... }` plus usage.
+- `GET /api/shipments/:id/documents` returns `readsDocuments`: true only when the AI model is set up **and** the plan
+  includes `ai`.
+- `GET /api/ai/command-center` and `GET /api/automation/studio` mark the automations that call an AI model with
+  `needsAi: true` (`readOrders`, `readDocuments`); screens of a plan without `ai` leave them out.
+- Routes closed to plans without `ai`: `POST /api/agents/flow/parse`, `POST /api/inbox/:id/parse`,
+  `POST /api/shipments/:id/documents/:docId/extract`, and NEXUS's automatic reading of emails and documents.

@@ -59,7 +59,7 @@ The dashboard uses hash routes, so links can be bookmarked and shared. What you 
 
 | Page | What it is |
 |---|---|
-| `#/dashboard` | Overview, a "Veyra AI" card that proposes a draft from your latest load (no AI model), operations console |
+| `#/dashboard` | Overview, the "Veyra AI" card that proposes a draft from your latest load (shown on Growth and up; Starter does not see it), operations console |
 | `#/shipments` | All loads: status tabs, search, filters, CSV export, dispatch, multi-leg planner. `#/shipments?status=Pending%20Approval` is the Approvals queue |
 | `#/trips` | LTL trips and loads that could share a truck |
 | `#/tracking` | Global tracking of booked loads |

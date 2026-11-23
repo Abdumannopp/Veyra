@@ -126,6 +126,7 @@ async function restoreSession() {
     const response = await fetch('/api/me', { headers: getAuthHeaders() });
     if (!response.ok) {
       localStorage.removeItem('veyraUser');
+      window.VeyraAi.set(null);
       await loadMessagingStatus(false);
       if (topButton) { topButton.textContent = 'Login'; topButton.disabled = false; }
       if (logoutButton) logoutButton.classList.add('hidden');
@@ -139,6 +140,8 @@ async function restoreSession() {
     const result = await response.json();
     const user = result.user;
     localStorage.setItem('veyraUser', JSON.stringify(user));
+    // Signed in: a missing plan counts as "no AI" (nothing is promised by mistake).
+    window.VeyraAi.set(result.plan || { capabilities: [] });
     // Money and weights in the company's own currency and unit.
     if (result.region) {
       Object.assign(window.VeyraConfig, result.region);
@@ -153,6 +156,7 @@ async function restoreSession() {
     return user;
   } catch (error) {
     localStorage.removeItem('veyraUser');
+    window.VeyraAi.set(null);
     if (topButton) { topButton.textContent = 'Login'; topButton.disabled = false; }
     if (logoutButton) logoutButton.classList.add('hidden');
     document.getElementById('adminPanel')?.classList.add('hidden');
@@ -196,6 +200,7 @@ function applyUserChrome(user) {
   document.querySelectorAll('.prompt-meta').forEach((el) => { el.textContent = user ? initials : 'AC'; });
   document.getElementById('signedOutNote')?.classList.toggle('hidden', Boolean(user));
   if (!user) document.getElementById('navApprovalsBadge')?.classList.add('hidden');
+  window.VeyraAi.apply();
 }
 
 function renderDecorations() {
@@ -414,7 +419,7 @@ function bindShipmentActions() {
       if (text) text.value = extra.emailText;
     }
     modal.classList.remove('hidden');
-    (window.VeyraConfig.ai?.enabled ? document.getElementById('aiOrderText') : form.elements.customer)?.focus();
+    (window.VeyraConfig.ai?.enabled && window.VeyraAi.allowed() ? document.getElementById('aiOrderText') : form.elements.customer)?.focus();
   };
   window.openShipmentModal = openModal;
   bindFlowIntake(form);
@@ -482,7 +487,7 @@ const FLOW_FIELDS = ['customer', 'customerPhone', 'reference', 'origin', 'destin
 const FLOW_LABELS = { customer: 'customer', origin: 'origin', destination: 'destination', pickup: 'pickup date', delivery: 'delivery date', weight: 'weight', equipment: 'equipment' };
 
 function resetFlowIntake(form) {
-  document.getElementById('aiIntake')?.classList.toggle('hidden', !window.VeyraConfig.ai?.enabled);
+  document.getElementById('aiIntake')?.classList.toggle('hidden', !(window.VeyraConfig.ai?.enabled && window.VeyraAi.allowed()));
   const text = document.getElementById('aiOrderText');
   if (text) text.value = '';
   const status = document.getElementById('aiIntakeMessage');
@@ -947,10 +952,11 @@ async function loadIntegrationsPanel() {
     };
     const messagingChannels = status.messaging.channels;
     list.replaceChildren(
-      integrationRow('AI agents (FLOW, VAULT)', status.ai.enabled,
+      // The AI row is only shown where the plan includes the AI agents.
+      ...(window.VeyraAi.allowed() ? [integrationRow('AI agents (FLOW, VAULT)', status.ai.enabled,
         status.ai.enabled
           ? `OpenRouter · model: ${status.ai.model || 'account default'} · automatic AI work stops at ${status.nexus.aiDailyLimit} calls a day. Reading CMR files needs a model that can read images or PDFs.`
-          : 'Add OPENROUTER_API_KEY to the server settings to read orders and documents with AI.'),
+          : 'Add OPENROUTER_API_KEY to the server settings to read orders and documents with AI.')] : []),
       integrationRow('NEXUS (orchestrator)', status.nexus.enabled,
         status.nexus.enabled ? 'Prepares tasks from emails, bookings and quiet trucks. It never sends, books or changes anything on its own.' : 'Off (NEXUS_ENABLED=false).'),
       integrationRow('Order mailbox (IMAP)', status.mailbox.configured,
