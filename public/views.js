@@ -207,6 +207,7 @@
     } else if (view === 'settings') {
       if (search) search.value = '';
       renderSettings();
+      window.VeyraRetention?.show();
     } else {
       if (search) search.value = '';
       // Coming back to the dashboard shows fresh numbers, not the ones from when the page first opened.

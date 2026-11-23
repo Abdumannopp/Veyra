@@ -169,3 +169,15 @@ NEXUS (with "Warn about loads at risk" on) makes one task per failed attempt and
 | `PUT /api/v2/shipments/:id/compliance` | The whole record: `goodsDescription`, `hsCode` (6–10 digits), `originCountry`/`destinationCountry` (ISO 2 letters), `declaredValue` (in the load's currency), `incoterm` (Incoterms 2020), `customsStatus` (Not started, Documents requested, Declared, Held, Cleared; Declared and later need `declarationNo`), `dangerous`, and for dangerous goods `unNumber` (UN + 4 digits), `dgClass`, `packingGroup` (I–III; none for classes 1, 2, 6.2 and 7) and `properShippingName` |
 
 Warnings (never decisions): dangerous goods on air (IATA DGR), ocean (IMDG) or road (ADR) legs, high-consequence classes, and missing HS code / value / Incoterm on a border crossing. NEXUS (with "Warn about loads at risk" on) makes one task per dangerous-goods warning and one while customs hold the goods (closed when the status moves on). These are format checks only, not legal or dangerous-goods advice; no customs system is connected.
+
+## Retention (keeping old data)
+
+Company administrators (`settings:write`) only.
+
+| Call | What |
+|---|---|
+| `GET /api/settings/retention` | `{ settings, lastRun, preview, categories }`; `preview` counts what a run would remove now (null = kept for ever) |
+| `PUT /api/settings/retention` | `{ trackingDays?, messagesDays?, documentsDays?, tasksDays?, auditDays?, auto? }`. Empty = keep for ever. Minimums: 30 days (90 for files, 365 for the activity log). Saving removes nothing. |
+| `POST /api/settings/retention/run` | `{ confirm: true }` removes now what the settings allow, and is written to the activity log |
+
+Removed: positions, messages and files of loads that are Delivered or Cancelled, older than the days; "done" NEXUS tasks (dismissed ones stay so their warning does not come back); activity-log entries. Never removed: loads, money, status history, legs, trips. With `auto` on, the NEXUS sweep runs it once a day. Files in Cloudflare R2 are deleted too.

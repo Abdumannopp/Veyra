@@ -55,8 +55,8 @@ Customs data, dangerous goods, retention rules, external security review, load a
 | Step | What | State |
 |---|---|---|
 | 6.1 | Customs and dangerous goods per load: HS code, countries, declared value, Incoterm, customs status and declaration number; UN number, class, packing group and proper shipping name (format checks, not legal advice); warnings per leg mode; NEXUS tasks for goods held by customs and dangerous goods to check | Done |
-| 6.2 | Retention rules (how long finished loads, files and logs are kept, then removed) | Next |
-| 6.3 | Load and recovery tests (backup restore drill) | Planned |
+| 6.2 | Retention: per company, how long positions, messages and files of finished loads, done tasks and the activity log are kept (off until set, with minimums); a preview, a confirmed "Remove now" and an optional daily run; loads, money and status history are never removed | Done |
+| 6.3 | Load and recovery tests (backup restore drill) | Next |
 | 6.4 | External security review | Needs an outside reviewer |
 
 ## Rules kept throughout

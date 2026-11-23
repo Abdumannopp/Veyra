@@ -181,6 +181,7 @@ const coldChain = require('./lib/cold-chain');
 const warehouseLib = require('./lib/warehouse');
 const lastMileLib = require('./lib/last-mile');
 const complianceLib = require('./lib/compliance');
+const retentionLib = require('./lib/retention');
 const coldChainDb = require('./database');
 const tripsLib = require('./lib/trips');
 const jobQueue = require('./lib/job-queue');
@@ -1643,6 +1644,56 @@ app.get('/api/ai/command-center', authMiddleware, requirePermission('shipments:r
     });
   } catch (error) {
     return sendError(res, error, 'AI Command Center unavailable.', 'command center');
+  }
+});
+
+/* ---------- retention (Phase 6.2): how long old detail is kept ---------- */
+async function sendRetention(res, tenantId, extra = {}) {
+  const { settings, lastRun } = await coldChainDb.getRetention(tenantId);
+  const preview = await coldChainDb.runRetention(tenantId, settings, { apply: false });
+  return res.json({
+    success: true, settings, lastRun, preview,
+    categories: Object.entries(retentionLib.CATEGORIES).map(([key, [label, minDays]]) => ({ key, label, minDays })),
+    ...extra
+  });
+}
+
+app.get('/api/settings/retention', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    return await sendRetention(res, req.user.tenantId);
+  } catch (error) {
+    return sendError(res, error, 'Retention settings unavailable.', 'retention');
+  }
+});
+
+// Saving never removes anything; the preview shows what a run would remove.
+app.put('/api/settings/retention', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    let settings;
+    try {
+      settings = retentionLib.readSettings(req.body || {});
+    } catch (error) {
+      if (error instanceof retentionLib.RetentionError) return res.status(400).json({ success: false, message: error.message });
+      throw error;
+    }
+    await coldChainDb.saveRetention(req.user.tenantId, settings);
+    audit(req, 'retention.changed', Object.keys(retentionLib.CATEGORIES).map((key) => `${key}: ${settings[key] ?? 'keep'}`).join('; ') + `; auto: ${settings.auto ? 'on' : 'off'}`);
+    return await sendRetention(res, req.user.tenantId);
+  } catch (error) {
+    return sendError(res, error, 'Retention settings could not be saved.', 'retention save');
+  }
+});
+
+// Removes now what the saved settings allow. { confirm: true } is required.
+app.post('/api/settings/retention/run', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    if (req.body?.confirm !== true) return res.status(400).json({ success: false, message: 'Send { "confirm": true } to remove the data shown in the preview.' });
+    const { settings } = await coldChainDb.getRetention(req.user.tenantId);
+    const removed = await coldChainDb.runRetention(req.user.tenantId, settings, { apply: true });
+    audit(req, 'retention.run', Object.entries(removed).filter(([, count]) => count).map(([key, count]) => `${key}: ${count}`).join('; ') || 'nothing to remove');
+    return await sendRetention(res, req.user.tenantId, { removed });
+  } catch (error) {
+    return sendError(res, error, 'Old data could not be removed.', 'retention run');
   }
 });
 

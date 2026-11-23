@@ -514,6 +514,19 @@ async function readTransportDocument({ tenantId, shipmentId, document, file, shi
   }
 }
 
+/* ---------- retention: companies that switched automatic removal on, once a day ---------- */
+async function retentionSweep() {
+  return runAsSystem(async () => {
+    let companies = 0;
+    for (const tenant of await db.listRetentionDueTenants()) {
+      const removed = await db.runRetention(tenant.id, tenant.settings, { apply: true });
+      await db.recordAudit(tenant.id, { action: 'retention.auto', detail: Object.entries(removed).filter(([, count]) => count).map(([key, count]) => `${key}: ${count}`).join('; ') || 'nothing to remove' });
+      companies += 1;
+    }
+    return companies;
+  });
+}
+
 /* ---------- customs held, dangerous goods to check ---------- */
 // One task while customs hold the goods (closed when the status moves on), and one per dangerous-goods
 // warning (e.g. dangerous goods on an air leg), raised once.
@@ -862,6 +875,7 @@ function startSweeper(intervalMinutes = 10) {
     .then(() => delaySweep())
     .then(() => warehouseSweep())
     .then(() => stopSweep())
+    .then(() => retentionSweep())
     .then(() => poolingSweep())
     .catch((error) => console.error('[NEXUS] sweep failed:', error.message));
   sweepTimer = setInterval(run, intervalMinutes * 60 * 1000);
@@ -874,4 +888,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, stopSweep, poolingSweep, startSweeper, stopSweeper };
+module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, stopSweep, retentionSweep, poolingSweep, startSweeper, stopSweeper };

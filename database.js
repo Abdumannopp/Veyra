@@ -1,4 +1,5 @@
 const blobStore = require('./lib/blob-store');
+const retentionLib = require('./lib/retention');
 const bcrypt = require('bcryptjs');
 const path = require('path');
 const crypto = require('crypto');
@@ -1085,6 +1086,18 @@ const MIGRATIONS = [
       const kept = await get('SELECT COUNT(*) AS total FROM shipment_compliance');
       if (Number(kept?.total) > 0) throw new Error('0013_shipment_compliance cannot be reversed while compliance records exist. Restore the backup taken before the upgrade.');
       await run('DROP TABLE IF EXISTS shipment_compliance');
+    }
+  },
+  {
+    id: '0014_retention_settings',
+    name: 'Retention: how long each company keeps old detail before it is removed',
+    transactional: false,
+    up: async () => {
+      await ensureColumns('tenants', [['retention_settings', 'TEXT'], ['retention_last_run', 'TEXT']]);
+    },
+    down: async () => {
+      await run('ALTER TABLE tenants DROP COLUMN retention_last_run');
+      await run('ALTER TABLE tenants DROP COLUMN retention_settings');
     }
   }
 ];
@@ -3689,6 +3702,78 @@ async function listOpenMultiLegShipmentsAllTenants() {
   return all("SELECT id, tenant_id AS tenantId FROM shipments WHERE leg_mode = 'multi' AND status NOT IN ('Delivered', 'Cancelled') ORDER BY id");
 }
 
+/* ---------- retention (Phase 6.2) ---------- */
+
+async function getRetention(tenantId) {
+  assertTenant(tenantId);
+  const row = await get('SELECT retention_settings AS settings, retention_last_run AS lastRun FROM tenants WHERE id = ?', [tenantId]);
+  return { settings: retentionLib.parseStored(row?.settings), lastRun: row?.lastRun || null };
+}
+
+async function saveRetention(tenantId, settings) {
+  assertTenant(tenantId);
+  await run('UPDATE tenants SET retention_settings = ? WHERE id = ?', [JSON.stringify(settings), tenantId]);
+  return getRetention(tenantId);
+}
+
+// Counts (apply = false) or removes (apply = true) what is older than each category's days.
+// Only loads that are Delivered or Cancelled lose their positions, messages and files.
+async function runRetention(tenantId, settings, { apply = false } = {}) {
+  assertTenant(tenantId);
+  const finished = "SELECT id FROM shipments WHERE tenant_id = ? AND status IN ('Delivered', 'Cancelled')";
+  const age = (days) => `-${Number(days)} days`;
+  const plans = {
+    trackingDays: (days) => ({
+      where: `shipment_id IN (${finished}) AND created_at < datetime('now', ?)`, params: [tenantId, age(days)], table: 'tracking_updates'
+    }),
+    messagesDays: (days) => ({
+      where: `tenant_id = ? AND shipment_id IN (${finished}) AND created_at < datetime('now', ?)`, params: [tenantId, tenantId, age(days)], table: 'messages'
+    }),
+    documentsDays: (days) => ({
+      where: `tenant_id = ? AND shipment_id IN (${finished}) AND created_at < datetime('now', ?)`, params: [tenantId, tenantId, age(days)], table: 'documents'
+    }),
+    tasksDays: (days) => ({
+      // Only finished ("done") tasks: a dismissed task stays, so its warning does not come back.
+      where: "tenant_id = ? AND status = 'done' AND COALESCE(resolved_at, created_at) < datetime('now', ?)", params: [tenantId, age(days)], table: 'nexus_tasks'
+    }),
+    auditDays: (days) => ({
+      where: "tenant_id = ? AND created_at < datetime('now', ?)", params: [tenantId, age(days)], table: 'audit_log'
+    })
+  };
+  const counts = {};
+  const storedFiles = [];
+  for (const [key, plan] of Object.entries(plans)) {
+    if (!settings[key]) {
+      counts[key] = null;
+      continue;
+    }
+    const { where, params, table } = plan(settings[key]);
+    counts[key] = Number((await get(`SELECT COUNT(*) AS total FROM ${table} WHERE ${where}`, params))?.total) || 0;
+    if (!apply || !counts[key]) continue;
+    await withTransaction(async (tx) => {
+      if (table === 'documents') {
+        storedFiles.push(...(await tx.all(`SELECT storage_key FROM documents WHERE ${where} AND storage_key IS NOT NULL`, params)).map((row) => row.storage_key));
+        await tx.run(`UPDATE last_mile_stops SET pod_document_id = NULL WHERE pod_document_id IN (SELECT id FROM documents WHERE ${where})`, params);
+      }
+      await tx.run(`DELETE FROM ${table} WHERE ${where}`, params);
+    });
+  }
+  if (apply) {
+    const store = blobStore.getStore();
+    if (store) {
+      for (const key of storedFiles) await store.remove(key).catch((error) => console.error('[retention] could not delete stored file:', error.message));
+    }
+    await run("UPDATE tenants SET retention_last_run = datetime('now') WHERE id = ?", [tenantId]);
+  }
+  return counts;
+}
+
+// Companies that switched automatic removal on and did not run it in the last day (system context).
+async function listRetentionDueTenants() {
+  const rows = await all("SELECT id, retention_settings AS settings FROM tenants WHERE retention_settings IS NOT NULL AND (retention_last_run IS NULL OR retention_last_run < datetime('now', '-1 days'))");
+  return rows.map((row) => ({ id: row.id, settings: retentionLib.parseStored(row.settings) })).filter((row) => row.settings.auto);
+}
+
 /* ---------- customs and dangerous goods (Phase 6.1) ---------- */
 
 async function getCompliance(tenantId, shipmentId) {
@@ -4563,6 +4648,10 @@ module.exports = {
   getDocument,
   listDocuments,
   getDocumentFile,
+  getRetention,
+  saveRetention,
+  runRetention,
+  listRetentionDueTenants,
   getCompliance,
   saveCompliance,
   listLegStops,
