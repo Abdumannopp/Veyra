@@ -59,7 +59,7 @@ Details: `DEPLOYMENT.md`.
 
 Every AI request is recorded: **Analytics → AI agents** shows how many requests were made and how many tokens were used (your AI provider charges by this). Cost control: each company has a limit of AI requests a day (300 by default, screens and automatic work together) and each person a limit per hour (60). After that the screen says so and emails and documents simply become plain tasks.
 
-**AI data sharing (must be switched on once):** the AI helpers send the order text or document to an outside provider (OpenRouter). Nothing is sent until an administrator allows it in **Team & settings → AI data sharing**. It can be switched off any time; who changed it and when is in the activity log. Passwords and keys found in typed or emailed **text** are removed before sending. **Document files (PDF, photos) are sent as they are**: anything on the paper reaches the provider.
+**AI data sharing (must be switched on once):** the AI helpers send the order text or document to one outside provider (OpenRouter, OpenAI, Anthropic or Google Gemini — the one your server uses). If the server changes provider, an administrator must allow sharing again. Nothing is sent until an administrator allows it in **Team & settings → AI data sharing**. It can be switched off any time; who changed it and when is in the activity log. Passwords and keys found in typed or emailed **text** are removed before sending. **Document files (PDF, photos) are sent as they are**: anything on the paper reaches the provider.
 
 **When AI leaves a field empty:** a number that can be read two ways (`1,250`: one thousand or one and a quarter?), a weight with no unit, or a date that does not exist is never guessed: the field stays empty with a note "check by hand". A message longer than 4000 characters is not read at all (never half-read): fill the form yourself. Rules: [docs/AI.md](docs/AI.md).
 
@@ -69,8 +69,12 @@ The **Quick Shipment Draft** card on the dashboard just copies your latest load 
 
 I cannot get these keys for you: they are accounts opened in your name. Once you have them, give them to whoever installs the server or put them in the `.env` file.
 
-1. **AI (FLOW, VAULT): OpenRouter**
-   - Sign up at openrouter.ai and add credit (a small amount is enough to start).
+1. **AI (FLOW, VAULT): one provider — OpenRouter, OpenAI, Anthropic or Google Gemini**
+   - Pick ONE. Set `AI_PROVIDER=` to `openrouter`, `openai`, `anthropic` or `google`, its key and its model:
+     OpenAI: `OPENAI_API_KEY=` and `OPENAI_MODEL=` (platform.openai.com); Anthropic: `ANTHROPIC_API_KEY=` and
+     `ANTHROPIC_MODEL=` (console.anthropic.com); Google: `GEMINI_API_KEY=` and `GEMINI_MODEL=` (aistudio.google.com).
+     These three **need** a model name; without it AI stays off. Choose a model that reads images and PDFs.
+   - Or OpenRouter: sign up at openrouter.ai and add credit (a small amount is enough to start).
    - Create a key under "Keys" and set `OPENROUTER_API_KEY=`.
    - For FLOW you do not need to choose a model: if left empty, your account's default model is used.
    - **To read CMRs** you need a model that can read images or PDFs. If the default cannot, the document says "could not be read". Then set `OPENROUTER_MODEL=` to an image-capable model from openrouter.ai/models.

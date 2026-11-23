@@ -13,12 +13,13 @@ const PATTERNS = [
   /\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi,
   // JSON Web Tokens
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
-  // Well-known key shapes: OpenRouter / OpenAI, Stripe, AWS, GitHub, Slack, Twilio
+  // Well-known key shapes: OpenRouter / OpenAI / Anthropic (sk-...), Google (AIza...), Stripe, AWS, GitHub, Slack, Twilio
+  /\bAIza[0-9A-Za-z_-]{30,}\b/g,
   /\b(sk-or-v1-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{20,}|sk_(live|test)_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|SK[0-9a-f]{32})\b/g
 ];
 
 // The server's own secrets, if one were ever pasted into an email or a document.
-const SECRET_SETTINGS = ['OPENROUTER_API_KEY', 'JWT_SECRET', 'SECRETS_KEY', 'TWILIO_AUTH_TOKEN', 'DOCUMENT_ENCRYPTION_KEY', 'R2_SECRET_ACCESS_KEY', 'PADDLE_API_KEY', 'PADDLE_WEBHOOK_SECRET', 'GOOGLE_CLIENT_SECRET', 'MICROSOFT_CLIENT_SECRET', 'TOMTOM_API_KEY'];
+const SECRET_SETTINGS = ['OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'JWT_SECRET', 'SECRETS_KEY', 'TWILIO_AUTH_TOKEN', 'DOCUMENT_ENCRYPTION_KEY', 'R2_SECRET_ACCESS_KEY', 'PADDLE_API_KEY', 'PADDLE_WEBHOOK_SECRET', 'GOOGLE_CLIENT_SECRET', 'MICROSOFT_CLIENT_SECRET', 'TOMTOM_API_KEY'];
 
 function redactSecrets(text) {
   let out = String(text ?? '');

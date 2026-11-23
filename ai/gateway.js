@@ -1,7 +1,8 @@
 // AI Gateway: the only place VEYRA talks to a language model. Every rule that protects money and data is enforced
 // HERE, so a new endpoint or agent cannot skip it:
 //
-// 1. Consent: a company's data goes to the outside provider only after its administrator agreed (tenants.ai_external_consent).
+// 1. Consent: a company's data goes to the outside provider only after its administrator agreed (tenants.ai_external_consent),
+//    and only to the provider it agreed to: a consent given for one provider does not cover another.
 // 2. Quota: one unit per model request, taken BEFORE the provider is called, from durable counters in the database
 //    (a daily budget per company and an hourly budget per person). Atomic, so parallel requests cannot pass the limit,
 //    and kept across restarts and across several server instances. A failed request still counts. The gateway's own
@@ -12,12 +13,12 @@
 //    (ai/redact.js). No prompt, email or document text is ever written to a log.
 // 5. Output: the answer must be a JSON object that passes the caller's strict shape check (ai/schema.js).
 //
-// Provider: OpenRouter. Model: OPENROUTER_MODEL (see modelName and checkModelConfig). No HTTP-Referer header.
+// Provider: one of OpenRouter, OpenAI, Anthropic, Google Gemini (AI_PROVIDER, see ai/providers.js). No HTTP-Referer header.
 const { httpError } = require('../lib/validation');
 const { logEvent } = require('../lib/log');
 const { redactContent } = require('./redact');
+const providers = require('./providers');
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS) || 20000;
 
 let transport = (url, init) => fetch(url, init);
@@ -37,16 +38,27 @@ function setUsageStore(next) {
 }
 
 function isEnabled() {
-  return Boolean(process.env.OPENROUTER_API_KEY);
+  return providers.status().ready;
 }
 
 function modelName() {
-  return process.env.OPENROUTER_MODEL ? process.env.OPENROUTER_MODEL.trim() : '';
+  return providers.status().model || '';
 }
+
+// The active provider (id, name, model, and why it is not ready), never the key.
+const providerStatus = () => providers.status();
 
 // Without OPENROUTER_MODEL, OpenRouter uses the account's default model, which can change without notice.
 // Production should name the model; the server says so at start-up and in Integrations.
 function checkModelConfig({ production = process.env.NODE_ENV !== 'development' } = {}) {
+  const state = providers.status();
+  // An unknown AI_PROVIDER, or a key without the model it needs (OpenAI, Anthropic, Gemini): AI stays off, and this says why.
+  // No key at all is not a warning: AI is simply not set up.
+  const misconfigured = state.problem && (!state.keyEnv || process.env[state.keyEnv]);
+  if (misconfigured) {
+    if (production) logEvent('warn', 'ai_provider_not_ready', { provider: state.id, message: state.problem });
+    return { ok: false, warning: state.problem };
+  }
   if (!isEnabled()) return { ok: true, warning: null };
   if (modelName()) return { ok: true, warning: null };
   const warning = 'OPENROUTER_MODEL is not set: OpenRouter will use the account default model, which can change without notice. Set it to the model you tested.';
@@ -80,8 +92,14 @@ function quotaError(scope, limit, resetSeconds) {
   return error;
 }
 
+// Consent counts only for the provider it was given for.
+async function hasConsent(db, tenantId) {
+  const consent = await db.getAiConsent(tenantId);
+  return consent.consent && consent.provider === providers.activeId();
+}
+
 function consentError() {
-  const error = httpError(403, 'Sending data to the AI provider is switched off for your company. An administrator can switch it on in Team & settings → AI data sharing.');
+  const error = httpError(403, `Sending data to the AI provider (${providers.status().name}) is not allowed for your company yet. An administrator can allow it in Team & settings → AI data sharing.`);
   error.code = 'AI_CONSENT_REQUIRED';
   return error;
 }
@@ -90,7 +108,7 @@ function consentError() {
 async function availability(tenantId, { userId = null, now = new Date() } = {}) {
   if (!isEnabled()) return { ok: false, code: 'AI_OFF', reason: 'AI is off.' };
   const db = usageStore();
-  if (!(await db.getAiConsent(tenantId)).consent) return { ok: false, code: 'AI_CONSENT_REQUIRED', reason: consentError().message };
+  if (!(await hasConsent(db, tenantId))) return { ok: false, code: 'AI_CONSENT_REQUIRED', reason: consentError().message };
   const { companyPerDay, personPerHour } = limits();
   const w = windows(now);
   if ((await db.aiQuotaUsed(tenantId, w.day.key)) >= companyPerDay) return { ok: false, code: 'AI_QUOTA_EXCEEDED', reason: quotaError('company_daily', companyPerDay, w.day.resetSeconds).message, error: quotaError('company_daily', companyPerDay, w.day.resetSeconds) };
@@ -146,15 +164,12 @@ function extractJson(text) {
   }
 }
 
-async function callOnce(body, signal) {
-  const response = await transport(OPENROUTER_URL, {
+// One HTTP request to the active provider. Returns { text, model, inputTokens, outputTokens } whatever the provider.
+async function callOnce(provider, request, signal) {
+  const response = await transport(request.url, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-      'Content-Type': 'application/json',
-      'X-Title': 'VEYRA'
-    },
-    body: JSON.stringify(body),
+    headers: request.headers,
+    body: JSON.stringify(request.body),
     signal
   });
   const text = await response.text();
@@ -193,7 +208,7 @@ async function safeLog(log, task, tenantId) {
  * @param {(task: object) => Promise<void>} [options.log]  Writes the agent_tasks row (analytics).
  */
 async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = TIMEOUT_MS, log, usage, validate }) {
-  if (!isEnabled()) throw httpError(503, 'AI is not configured. Add OPENROUTER_API_KEY to the server settings.');
+  if (!isEnabled()) throw Object.assign(httpError(503, `AI is not configured. ${providers.status().problem || ''}`.trim()), { code: 'AI_OFF' });
   if (!usage || !Number.isInteger(Number(usage.tenantId)) || Number(usage.tenantId) <= 0) {
     // A programming error, never a user error: every model call must name the company that pays for it.
     throw new Error(`AI call for ${agent} without a company: pass usage: { tenantId }.`);
@@ -206,14 +221,14 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
   const userId = usage.userId ? Number(usage.userId) : null;
   const db = usageStore();
 
-  if (!(await db.getAiConsent(tenantId)).consent) throw consentError();
+  if (!(await hasConsent(db, tenantId))) throw consentError();
   await reserve(tenantId, userId);
 
   // The ledger row must exist BEFORE anything is sent: without it the cost could not be recorded. If it cannot be
   // written, the unit is given back and nothing is sent.
   let callId = null;
   try {
-    callId = await db.startAiCall(tenantId, { userId, agent });
+    callId = await db.startAiCall(tenantId, { userId, agent, provider: providers.activeId() });
     if (!callId) throw new Error('no ledger id');
   } catch (error) {
     logEvent('error', 'ai_ledger_start_failed', { tenantId, agent, error: error.message });
@@ -223,25 +238,16 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
     throw unavailable;
   }
 
-  const body = {
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: redactContent(user) }
-    ],
-    temperature: 0,
-    max_tokens: maxTokens
-  };
+  const provider = providers.active();
   const model = modelName();
-  if (model) body.model = model;
+  const request = provider.build({ model, system, user: redactContent(user), maxTokens });
 
   const started = Date.now();
   const totals = { inputTokens: null, outputTokens: null, model: model || null, attempts: 0 };
-  const addUsage = (data) => {
-    if (data?.model) totals.model = data.model;
-    const input = Number(data?.usage?.prompt_tokens);
-    const output = Number(data?.usage?.completion_tokens);
-    if (Number.isFinite(input)) totals.inputTokens = (totals.inputTokens || 0) + input;
-    if (Number.isFinite(output)) totals.outputTokens = (totals.outputTokens || 0) + output;
+  const addUsage = (answer) => {
+    if (answer?.model) totals.model = answer.model;
+    if (Number.isFinite(answer?.inputTokens)) totals.inputTokens = (totals.inputTokens || 0) + answer.inputTokens;
+    if (Number.isFinite(answer?.outputTokens)) totals.outputTokens = (totals.outputTokens || 0) + answer.outputTokens;
   };
   const finish = async (status, errorKind, message) => {
     const latencyMs = Date.now() - started;
@@ -267,7 +273,7 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
     totals.attempts += 1;
     let data;
     try {
-      data = await callOnce(body, controller.signal);
+      data = provider.read(await callOnce(provider, request, controller.signal));
     } catch (error) {
       clearTimeout(timer);
       lastError = error.name === 'AbortError' ? Object.assign(new Error('AI provider timed out.'), { kind: 'timeout' }) : error;
@@ -289,7 +295,7 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
     addUsage(data);
     let parsed;
     try {
-      parsed = extractJson(data?.choices?.[0]?.message?.content);
+      parsed = extractJson(data?.text);
     } catch (error) {
       await finish('invalid_output', 'invalid_json', error.message);
       throw Object.assign(httpError(502, 'The AI answer could not be read. Please fill the form by hand.'), { code: 'AI_INVALID_OUTPUT' });
@@ -306,4 +312,4 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
   throw Object.assign(httpError(502, 'The AI assistant could not answer right now. Please fill the form by hand or try again.'), { code: 'AI_PROVIDER_FAILED' });
 }
 
-module.exports = { completeJson, isEnabled, setTransport, setUsageStore, extractJson, availability, checkModelConfig, modelName, limits };
+module.exports = { completeJson, providerStatus, isEnabled, setTransport, setUsageStore, extractJson, availability, checkModelConfig, modelName, limits };
