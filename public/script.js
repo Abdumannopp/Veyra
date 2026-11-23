@@ -1653,6 +1653,10 @@ function formatSize(bytes) {
   return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+// The files of the load that is open, for other sections (e.g. proof of delivery at a last-mile stop).
+let loadedDocuments = [];
+window.VeyraDocuments = { list: () => loadedDocuments };
+
 async function loadDocuments(shipmentId) {
   const list = document.getElementById('documentList');
   const status = document.getElementById('documentsStatus');
@@ -1664,6 +1668,7 @@ async function loadDocuments(shipmentId) {
     const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/documents`, { headers: getAuthHeaders() });
     const result = response.ok ? await response.json() : { documents: [], readsDocuments: false };
     if (detailsShipmentId !== shipmentId) return;
+    loadedDocuments = result.documents;
     if (status) status.textContent = result.readsDocuments ? 'AI reads CMR and proof of delivery' : 'Reading is off · files are kept';
     const canRead = result.readsDocuments && hasPermission('shipments:document');
     const canDelete = hasPermission('shipments:status');

@@ -9,6 +9,7 @@
 //
 // Every reaction is idempotent (tasks carry a dedupe key), runs after the web request has
 // finished, and failures are logged, never thrown at the person who triggered the event.
+const lastMileLib = require('../lib/last-mile');
 const warehouseLib = require('../lib/warehouse');
 const coldChainLib = require('../lib/cold-chain');
 const legsLib = require('../lib/legs');
@@ -177,6 +178,7 @@ async function handleBuiltIn(event, context) {
     case 'document.uploaded': return onDocumentUploaded(context);
     case 'temperature.reading': return onTemperatureReading(context);
     case 'warehouse.received': return onWarehouseReceived(context);
+    case 'stop.failed': return onStopFailed(context);
     case 'inbox.attached': return onInboxAttached(context);
     case 'message.failed': return onMessageFailed(context);
     default: return undefined;
@@ -510,6 +512,47 @@ async function readTransportDocument({ tenantId, shipmentId, document, file, shi
   }
 }
 
+/* ---------- last mile: a failed stop, or a stop whose window closed ---------- */
+async function onStopFailed({ tenantId, shipmentId, stopId }) {
+  if (!(await automationOn(tenantId, 'riskWatch'))) return;
+  const stop = await db.getStop(tenantId, stopId);
+  if (!stop || stop.status !== 'Failed') return;
+  const leg = await db.getLeg(tenantId, stop.legId);
+  await db.createTask(tenantId, {
+    kind: 'attention',
+    title: `${legLabel(shipmentId, leg)}: stop ${stop.sequence} not delivered — ${stop.failureReason}`,
+    shipmentId,
+    dedupeKey: `stopfail:${stop.id}:${stop.updatedAt}`,
+    payload: { text: `${stop.address}. Call ${stop.contactName || 'the receiver'}${stop.contactPhone ? ` (${stop.contactPhone})` : ''}, agree a new time, then try the stop again.`, severity: 'high' }
+  });
+}
+
+async function stopSweep(now = new Date()) {
+  return runAsSystem(async () => {
+    const active = new Set();
+    let created = 0;
+    for (const stop of await db.listPendingStopsAllTenants()) {
+      if (!lastMileLib.missedWindow(stop, { now })) continue;
+      if (!(await automationOn(stop.tenantId, 'riskWatch'))) continue;
+      const key = `stoplate:${stop.id}`;
+      active.add(`${stop.tenantId}|${key}`);
+      const leg = await db.getLeg(stop.tenantId, stop.legId);
+      const result = await db.createTask(stop.tenantId, {
+        kind: 'attention',
+        title: `${legLabel(stop.shipmentId, leg || { sequence: '?', mode: 'LAST_MILE' })}: stop ${stop.sequence} missed its delivery window`,
+        shipmentId: stop.shipmentId,
+        dedupeKey: key,
+        payload: { text: `${stop.address}. Tell ${stop.contactName || 'the receiver'} the new time, or record the delivery if it happened.`, severity: 'medium' }
+      });
+      if (result.created) created += 1;
+    }
+    for (const task of await db.listOpenTasksByKeyPrefix(null, 'stoplate:')) {
+      if (!active.has(`${task.tenantId}|${task.dedupeKey}`)) await db.resolveTask(task.tenantId, task.id, { status: 'done' });
+    }
+    return created;
+  });
+}
+
 /* ---------- warehouse: short, extra or damaged pieces at receiving ---------- */
 async function onWarehouseReceived({ tenantId, shipmentId, legId }) {
   if (!(await automationOn(tenantId, 'riskWatch'))) return;
@@ -784,6 +827,7 @@ function startSweeper(intervalMinutes = 10) {
     .then(() => sentinelSweep())
     .then(() => delaySweep())
     .then(() => warehouseSweep())
+    .then(() => stopSweep())
     .then(() => poolingSweep())
     .catch((error) => console.error('[NEXUS] sweep failed:', error.message));
   sweepTimer = setInterval(run, intervalMinutes * 60 * 1000);
@@ -796,4 +840,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, poolingSweep, startSweeper, stopSweeper };
+module.exports = { AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, stopSweep, poolingSweep, startSweeper, stopSweeper };

@@ -45,3 +45,13 @@
   font-size: 12px;
   max-width: 140px;
 }
+
+.leg-stop-list {
+  margin: 4px 0 6px;
+  padding-left: 20px;
+  font-size: 13px;
+}
+
+.leg-stop-list li {
+  margin: 4px 0;
+}

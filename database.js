@@ -1007,6 +1007,45 @@ const MIGRATIONS = [
       if (Number(kept?.total) > 0) throw new Error('0011_warehouse_stays cannot be reversed while warehouse records exist. Restore the backup taken before the upgrade.');
       await run('DROP TABLE IF EXISTS warehouse_stays');
     }
+  },
+  {
+    id: '0012_last_mile_stops',
+    name: 'Last mile: the stops of a last-mile leg and the proof of delivery at each stop',
+    transactional: false,
+    up: async (tx) => {
+      await run(`
+        CREATE TABLE IF NOT EXISTS last_mile_stops (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+          shipment_id INTEGER NOT NULL REFERENCES shipments(id),
+          leg_id INTEGER NOT NULL REFERENCES shipment_legs(id),
+          sequence INTEGER NOT NULL,
+          address TEXT NOT NULL,
+          contact_name TEXT,
+          contact_phone TEXT,
+          pieces INTEGER,
+          window_from TEXT,
+          window_to TEXT,
+          note TEXT,
+          status TEXT NOT NULL DEFAULT 'Pending',
+          delivered_at TEXT,
+          received_by TEXT,
+          pod_note TEXT,
+          pod_document_id INTEGER REFERENCES documents(id),
+          failure_reason TEXT,
+          actor_id INTEGER REFERENCES users(id),
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await run('CREATE INDEX IF NOT EXISTS idx_last_mile_stops_leg ON last_mile_stops (leg_id, sequence)');
+      if (isPostgres) await protectTenantTable(tx, 'last_mile_stops');
+    },
+    down: async () => {
+      const kept = await get('SELECT COUNT(*) AS total FROM last_mile_stops');
+      if (Number(kept?.total) > 0) throw new Error('0012_last_mile_stops cannot be reversed while stops exist. Restore the backup taken before the upgrade.');
+      await run('DROP TABLE IF EXISTS last_mile_stops');
+    }
   }
 ];
 
@@ -3610,6 +3649,88 @@ async function listOpenMultiLegShipmentsAllTenants() {
   return all("SELECT id, tenant_id AS tenantId FROM shipments WHERE leg_mode = 'multi' AND status NOT IN ('Delivered', 'Cancelled') ORDER BY id");
 }
 
+/* ---------- last mile (Phase 5.3) ---------- */
+
+const STOP_SELECT = `SELECT st.id, st.shipment_id AS shipmentId, st.leg_id AS legId, st.sequence, st.address, st.contact_name AS contactName,
+  st.contact_phone AS contactPhone, st.pieces, st.window_from AS windowFrom, st.window_to AS windowTo, st.note, st.status,
+  st.delivered_at AS deliveredAt, st.received_by AS receivedBy, st.pod_note AS podNote, st.pod_document_id AS podDocumentId,
+  st.failure_reason AS failureReason, st.updated_at AS updatedAt, users.name AS actor
+  FROM last_mile_stops st LEFT JOIN users ON users.id = st.actor_id`;
+
+async function listLegStops(tenantId, shipmentId) {
+  assertTenant(tenantId);
+  return all(`${STOP_SELECT} WHERE st.shipment_id = ? AND st.tenant_id = ? ORDER BY st.leg_id, st.sequence`, [shipmentId, tenantId]);
+}
+
+async function getStop(tenantId, stopId) {
+  assertTenant(tenantId);
+  return get(`${STOP_SELECT} WHERE st.id = ? AND st.tenant_id = ?`, [stopId, tenantId]);
+}
+
+async function addStop(tenantId, leg, stop, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (tx) => {
+    const last = await tx.get('SELECT MAX(sequence) AS top FROM last_mile_stops WHERE leg_id = ? AND tenant_id = ?', [leg.id, tenantId]);
+    const count = await tx.get('SELECT COUNT(*) AS total FROM last_mile_stops WHERE leg_id = ? AND tenant_id = ?', [leg.id, tenantId]);
+    if (Number(count?.total) >= 100) throw httpError(409, 'A leg can have at most 100 stops.');
+    const result = await tx.run(
+      `INSERT INTO last_mile_stops (tenant_id, shipment_id, leg_id, sequence, address, contact_name, contact_phone, pieces, window_from, window_to, note, actor_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [tenantId, leg.shipmentId, leg.id, (Number(last?.top) || 0) + 1, stop.address, stop.contactName, stop.contactPhone, stop.pieces,
+        stop.windowFrom, stop.windowTo, stop.note, actorId || null]
+    );
+    return result.id;
+  }).then((id) => getStop(tenantId, id));
+}
+
+async function removeStop(tenantId, stopId) {
+  assertTenant(tenantId);
+  const result = await run("DELETE FROM last_mile_stops WHERE id = ? AND tenant_id = ? AND status = 'Pending'", [stopId, tenantId]);
+  return result.changes === 1;
+}
+
+async function deliverStop(tenantId, stop, delivery, actorId) {
+  assertTenant(tenantId);
+  if (delivery.documentId !== null) {
+    const document = await get('SELECT id FROM documents WHERE id = ? AND shipment_id = ? AND tenant_id = ?', [delivery.documentId, stop.shipmentId, tenantId]);
+    if (!document) throw httpError(404, 'That document does not belong to this load.');
+  }
+  const result = await run(
+    `UPDATE last_mile_stops SET status = 'Delivered', delivered_at = ?, received_by = ?, pod_note = ?, pod_document_id = ?, failure_reason = NULL,
+       actor_id = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ? AND status <> 'Delivered'`,
+    [delivery.deliveredAt, delivery.receivedBy, delivery.note, delivery.documentId, actorId || null, stop.id, tenantId]
+  );
+  if (result.changes !== 1) throw httpError(409, 'This stop was already delivered.');
+  return getStop(tenantId, stop.id);
+}
+
+async function failStop(tenantId, stop, reason, actorId) {
+  assertTenant(tenantId);
+  const result = await run(
+    "UPDATE last_mile_stops SET status = 'Failed', failure_reason = ?, actor_id = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ? AND status = 'Pending'",
+    [reason, actorId || null, stop.id, tenantId]
+  );
+  if (result.changes !== 1) throw httpError(409, 'Only a pending stop can fail.');
+  return getStop(tenantId, stop.id);
+}
+
+// A failed stop can be tried again.
+async function retryStop(tenantId, stop, actorId) {
+  assertTenant(tenantId);
+  const result = await run(
+    "UPDATE last_mile_stops SET status = 'Pending', actor_id = ?, updated_at = datetime('now') WHERE id = ? AND tenant_id = ? AND status = 'Failed'",
+    [actorId || null, stop.id, tenantId]
+  );
+  if (result.changes !== 1) throw httpError(409, 'Only a failed stop can be tried again.');
+  return getStop(tenantId, stop.id);
+}
+
+// Pending stops of legs on the way, in every company (system context, for NEXUS).
+async function listPendingStopsAllTenants() {
+  return all(`${STOP_SELECT.replace('SELECT st.id,', 'SELECT st.id, st.tenant_id AS tenantId,')}
+    JOIN shipment_legs l ON l.id = st.leg_id WHERE st.status = 'Pending' AND l.status = 'In Transit' AND st.window_to IS NOT NULL ORDER BY st.id`);
+}
+
 /* ---------- warehouse (Phase 5.2) ---------- */
 
 const STAY_SELECT = `SELECT w.id, w.shipment_id AS shipmentId, w.leg_id AS legId, w.received_at AS receivedAt, w.pieces_expected AS piecesExpected,
@@ -4359,6 +4480,14 @@ module.exports = {
   getDocument,
   listDocuments,
   getDocumentFile,
+  listLegStops,
+  getStop,
+  addStop,
+  removeStop,
+  deliverStop,
+  failStop,
+  retryStop,
+  listPendingStopsAllTenants,
   getWarehouseStay,
   listWarehouseStays,
   recordWarehouseReceipt,

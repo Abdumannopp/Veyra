@@ -163,6 +163,7 @@
       const problem = store.shortPieces || store.overPieces || store.damagedPieces || (!stay.releasedAt && store.overFreeDays);
       lines.push(text('div', problem ? 'leg-meta leg-late' : 'leg-meta', `Warehouse: ${parts.join(' · ')}`));
     }
+    if (leg.stops) lines.push(stopList(leg));
     if (leg.lastLocation) lines.push(text('div', 'leg-meta', `Now: ${leg.lastLocation}${leg.eta ? ` · ETA ${when(leg.eta)}` : ''}${leg.lastTrackedAt ? ` (${formatTimestamp(leg.lastTrackedAt)})` : ''}`));
     const actions = text('div', 'leg-actions');
     const add = (label, handler, cls = 'btn btn-ghost small') => {
@@ -191,6 +192,7 @@
     if (leg.status === 'In Transit' && canMove) add('Report problem', () => move(leg, 'Exception'));
     if (leg.status === 'Exception' && canMove) add('Resume', () => move(leg, 'In Transit'), 'btn btn-primary small');
     if (['Booked', 'In Transit', 'Exception'].includes(leg.status) && canTrack) add('Add position', () => openPosition(leg));
+    if (leg.mode === 'LAST_MILE' && !leg.synthetic && ['Planned', 'Booked', 'In Transit', 'Exception'].includes(leg.status) && canMove) add('Add stop', () => openStop(leg));
     if (['Planned', 'Booked', 'Exception'].includes(leg.status) && canMove) add('Cancel leg', () => move(leg, 'Cancelled'));
     card.append(head, ...lines, actions);
     return card;
@@ -265,6 +267,97 @@
     form.insertBefore(field('Handed over at', input('location', { value: leg.destination, maxLength: 200 })), footer);
     form.insertBefore(field('Received by', input('receivedBy', { maxLength: 120, placeholder: 'Person or company (optional)' })), footer);
     form.insertBefore(field('Note', input('note', { maxLength: 500, placeholder: 'Optional' })), footer);
+    view.form = form;
+    render();
+  }
+
+  // The stops of a last-mile leg, each with what can be done now.
+  function stopList(leg) {
+    const box = text('div', 'leg-stops');
+    const sum = leg.stopSummary || {};
+    box.append(text('div', 'leg-meta', leg.stops.length
+      ? `Stops: ${sum.delivered} of ${sum.total} delivered${sum.failed ? `, ${sum.failed} failed` : ''}`
+      : 'No stops yet. Add the addresses this leg delivers to.'));
+    const list = text('ol', 'leg-stop-list');
+    for (const stop of leg.stops) {
+      const item = text('li', stop.status === 'Failed' || stop.missedWindow ? 'leg-late' : '');
+      const window = stop.windowTo ? ` · by ${formatTimestamp(stop.windowTo)}` : '';
+      const detail = stop.status === 'Delivered'
+        ? `Delivered ${formatTimestamp(stop.deliveredAt)} · received by ${stop.receivedBy}${stop.podDocumentId ? ' · POD file attached' : ''}`
+        : stop.status === 'Failed' ? `Not delivered: ${stop.failureReason}` : `Pending${window}${stop.missedWindow ? ' (window missed)' : ''}`;
+      item.append(text('span', '', `${stop.address}${stop.pieces ? ` · ${stop.pieces} pc` : ''}${stop.contactName ? ` · ${stop.contactName}` : ''}${stop.contactPhone ? ` ${stop.contactPhone}` : ''} — ${detail}`));
+      if (can('shipments:status')) {
+        const act = (label, handler, cls = 'btn btn-ghost small') => {
+          const button = text('button', cls, label);
+          button.type = 'button';
+          button.addEventListener('click', handler);
+          item.append(' ', button);
+        };
+        if (stop.status === 'Pending' && leg.status === 'In Transit') {
+          act('Delivered', () => openStopDelivery(leg, stop), 'btn btn-primary small');
+          act('Not delivered', () => openStopFailure(leg, stop));
+        }
+        if (stop.status === 'Failed') act('Try again', () => stopCall(`/api/v2/stops/${stop.id}/retry`, 'POST', `Stop ${stop.sequence} is pending again.`));
+        if (stop.status === 'Pending') act('Remove', () => stopCall(`/api/v2/stops/${stop.id}`, 'DELETE', `Stop ${stop.sequence} removed.`));
+      }
+      list.append(item);
+    }
+    if (leg.stops.length) box.append(list);
+    return box;
+  }
+
+  async function stopCall(url, method, done) {
+    try {
+      await api(method, url, method === 'POST' ? {} : undefined);
+      notify(done, 'ok');
+      await reload();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  }
+
+  function openStop(leg) {
+    const { form, footer } = formShell(`Leg ${leg.sequence}: add a stop`, async (data) => {
+      await api('POST', `/api/v2/legs/${leg.id}/stops`, {
+        address: data.get('address'), contactName: data.get('contactName') || null, contactPhone: data.get('contactPhone') || null,
+        pieces: data.get('pieces') || null, windowTo: data.get('windowTo') || null
+      });
+      notify('Stop added.', 'ok');
+    }, 'Add stop');
+    form.insertBefore(field('Address', input('address', { required: true, maxLength: 300 })), footer);
+    form.insertBefore(field('Receiver', input('contactName', { maxLength: 120, placeholder: 'Name (optional)' })), footer);
+    form.insertBefore(field('Phone', input('contactPhone', { maxLength: 40, placeholder: 'Optional' })), footer);
+    form.insertBefore(field('Pieces', input('pieces', { type: 'number', min: 1, step: 1 })), footer);
+    form.insertBefore(field('Deliver by (UTC, optional)', input('windowTo', { type: 'datetime-local' })), footer);
+    view.form = form;
+    render();
+  }
+
+  function openStopDelivery(leg, stop) {
+    const { form, footer } = formShell(`Stop ${stop.sequence} delivered: proof of delivery`, async (data) => {
+      const result = await api('POST', `/api/v2/stops/${stop.id}/deliver`, { receivedBy: data.get('receivedBy'), note: data.get('note') || null, documentId: data.get('documentId') || null });
+      notify(result.legDelivered ? `All stops delivered: leg ${leg.sequence} is complete.` : `Stop ${stop.sequence} delivered.`, 'ok');
+    }, 'Save delivery');
+    form.insertBefore(field('Received by', input('receivedBy', { required: true, maxLength: 120, value: stop.contactName || '' })), footer);
+    form.insertBefore(field('Note', input('note', { maxLength: 500, placeholder: 'Optional' })), footer);
+    const documents = window.VeyraDocuments?.list?.() || [];
+    if (documents.length) {
+      const select = document.createElement('select');
+      select.name = 'documentId';
+      select.append(new Option('No file', ''));
+      for (const doc of documents) select.append(new Option(doc.filename, doc.id));
+      form.insertBefore(field('Proof of delivery file', select), footer);
+    }
+    view.form = form;
+    render();
+  }
+
+  function openStopFailure(leg, stop) {
+    const { form, footer } = formShell(`Stop ${stop.sequence} not delivered`, async (data) => {
+      await api('POST', `/api/v2/stops/${stop.id}/fail`, { reason: data.get('reason') });
+      notify(`Stop ${stop.sequence} marked not delivered.`, 'ok');
+    }, 'Save');
+    form.insertBefore(field('Reason', input('reason', { required: true, maxLength: 300, placeholder: 'Nobody home, refused, wrong address…' })), footer);
     view.form = form;
     render();
   }

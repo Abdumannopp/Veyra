@@ -179,6 +179,7 @@ const timeLib = require('./lib/time');
 const legsLib = require('./lib/legs');
 const coldChain = require('./lib/cold-chain');
 const warehouseLib = require('./lib/warehouse');
+const lastMileLib = require('./lib/last-mile');
 const coldChainDb = require('./database');
 const tripsLib = require('./lib/trips');
 const jobQueue = require('./lib/job-queue');
@@ -3373,6 +3374,15 @@ async function sendShipmentLegs(res, tenantId, shipmentId, status = 200, extra =
       return stay ? { ...leg, warehouse: { ...stay, storage: warehouseLib.storage(stay) } } : leg;
     });
   }
+  // Last-mile legs carry their stops and proof of delivery (Phase 5.3).
+  if (data.multi && data.legs.some((leg) => leg.mode === 'LAST_MILE')) {
+    const stops = await coldChainDb.listLegStops(tenantId, shipmentId);
+    rest.legs = (rest.legs || data.legs).map((leg) => {
+      if (leg.mode !== 'LAST_MILE') return leg;
+      const own = stops.filter((stop) => stop.legId === leg.id).map((stop) => ({ ...stop, missedWindow: lastMileLib.missedWindow(stop) }));
+      return { ...leg, stops: own, stopSummary: lastMileLib.summary(own) };
+    });
+  }
   return res.status(status).json({ success: true, shipment: { id: `SHP-${id}`, status: data.status, currency: data.currency, multi: data.multi }, ...rest, ...extra });
 }
 
@@ -3564,6 +3574,92 @@ app.post('/api/v2/legs/:id/status', authMiddleware, async (req, res) => {
     return await sendShipmentLegs(res, req.user.tenantId, result.shipmentId, 200, { handoverTo: result.handoverTo });
   } catch (error) {
     return sendError(res, error, 'The leg status could not be changed.', 'v2 leg status');
+  }
+});
+
+/* ---------- last-mile stops and proof of delivery (Phase 5.3) ---------- */
+function lastMileInput(res, read) {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof lastMileLib.LastMileError) {
+      res.status(400).json({ success: false, message: error.message });
+      return null;
+    }
+    throw error;
+  }
+}
+
+app.post('/api/v2/legs/:id/stops', authMiddleware, requirePermission('shipments:status'), async (req, res) => {
+  try {
+    const legId = positiveId(req.params.id);
+    const leg = legId ? await getLeg(req.user.tenantId, legId) : null;
+    if (!leg) return res.status(404).json({ success: false, message: 'Leg not found.' });
+    if (leg.mode !== 'LAST_MILE') return res.status(409).json({ success: false, message: 'Stops belong to a last-mile leg.' });
+    if (!legsLib.OPEN_LEG_STATUSES.includes(leg.status)) return res.status(409).json({ success: false, message: `A ${leg.status} leg takes no new stops.` });
+    const stop = lastMileInput(res, () => lastMileLib.readStop(req.body || {}));
+    if (!stop) return undefined;
+    const saved = await coldChainDb.addStop(req.user.tenantId, leg, stop, req.user.id);
+    return await sendShipmentLegs(res, req.user.tenantId, leg.shipmentId, 201, { stop: saved });
+  } catch (error) {
+    return sendError(res, error, 'The stop could not be added.', 'last-mile stop');
+  }
+});
+
+async function stopAction(req, res, action) {
+  try {
+    const stopId = positiveId(req.params.id);
+    const stop = stopId ? await coldChainDb.getStop(req.user.tenantId, stopId) : null;
+    if (!stop) return res.status(404).json({ success: false, message: 'Stop not found.' });
+    const leg = await getLeg(req.user.tenantId, stop.legId);
+    let saved;
+    if (action === 'deliver') {
+      if (leg.status !== 'In Transit') return res.status(409).json({ success: false, message: 'Start the last-mile leg before delivering its stops.' });
+      const delivery = lastMileInput(res, () => lastMileLib.readDelivery(req.body || {}));
+      if (!delivery) return undefined;
+      saved = await coldChainDb.deliverStop(req.user.tenantId, stop, delivery, req.user.id);
+    } else if (action === 'fail') {
+      if (leg.status !== 'In Transit') return res.status(409).json({ success: false, message: 'Only stops of a leg on the way can fail.' });
+      const failure = lastMileInput(res, () => lastMileLib.readFailure(req.body || {}));
+      if (!failure) return undefined;
+      saved = await coldChainDb.failStop(req.user.tenantId, stop, failure.reason, req.user.id);
+      nexus.emit('stop.failed', { tenantId: req.user.tenantId, shipmentId: stop.shipmentId, stopId: stop.id });
+    } else {
+      if (!legsLib.OPEN_LEG_STATUSES.includes(leg.status)) return res.status(409).json({ success: false, message: `The leg is ${leg.status}.` });
+      saved = await coldChainDb.retryStop(req.user.tenantId, stop, req.user.id);
+    }
+    audit(req, `stop.${action}`, `stop ${stop.id} of leg ${leg.id}`);
+    // The last stop delivered completes the leg (and hands over to the next one, if any).
+    let extra = { stop: saved };
+    if (action === 'deliver') {
+      const summary = lastMileLib.summary(await coldChainDb.listLegStops(req.user.tenantId, stop.shipmentId).then((all) => all.filter((item) => item.legId === leg.id)));
+      if (summary.complete) {
+        const result = await setLegStatus(req.user.tenantId, leg.id, 'Delivered', { note: `All ${summary.total} stop(s) delivered` }, req.user.id);
+        nexus.emit('leg.status', { tenantId: req.user.tenantId, shipmentId: result.shipmentId, legId: leg.id, status: 'Delivered', handoverTo: result.handoverTo });
+        if (result.shipmentStatus !== result.shipmentStatusBefore) {
+          nexus.emit('shipment.status', { tenantId: req.user.tenantId, shipmentId: result.shipmentId, status: result.shipmentStatus });
+        }
+        extra = { ...extra, legDelivered: true };
+      }
+    }
+    return await sendShipmentLegs(res, req.user.tenantId, stop.shipmentId, 200, extra);
+  } catch (error) {
+    return sendError(res, error, 'The stop could not be changed.', `stop ${action}`);
+  }
+}
+app.post('/api/v2/stops/:id/deliver', authMiddleware, requirePermission('shipments:status'), (req, res) => stopAction(req, res, 'deliver'));
+app.post('/api/v2/stops/:id/fail', authMiddleware, requirePermission('shipments:status'), (req, res) => stopAction(req, res, 'fail'));
+app.post('/api/v2/stops/:id/retry', authMiddleware, requirePermission('shipments:status'), (req, res) => stopAction(req, res, 'retry'));
+
+app.delete('/api/v2/stops/:id', authMiddleware, requirePermission('shipments:status'), async (req, res) => {
+  try {
+    const stopId = positiveId(req.params.id);
+    const stop = stopId ? await coldChainDb.getStop(req.user.tenantId, stopId) : null;
+    if (!stop) return res.status(404).json({ success: false, message: 'Stop not found.' });
+    if (!(await coldChainDb.removeStop(req.user.tenantId, stopId))) return res.status(409).json({ success: false, message: 'Only a pending stop can be removed.' });
+    return await sendShipmentLegs(res, req.user.tenantId, stop.shipmentId);
+  } catch (error) {
+    return sendError(res, error, 'The stop could not be removed.', 'stop delete');
   }
 });
 
