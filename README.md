@@ -6,11 +6,19 @@ Built with Express (Node 22); it stores data in a single SQLite file or, for pro
 AI helpers prepare work (read an email, rank carriers, draft a message, compare a document); **people press every button
 that sends, books or changes something.**
 
-> **Honest status.** Everything is entered by people. Veyra has **no live connection** to carriers, ports, airlines,
-> railways, couriers, customs, warehouse systems or temperature sensors. The outside services it can use (AI, SMS /
-> WhatsApp, mail, maps, card payments, Cloudflare R2) have so far been checked **only against fake responses**; see
-> [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). An **independent security review has not been done**; see
-> [docs/SECURITY.md](docs/SECURITY.md).
+> **Honest status.** Veyra has **no live connection** to carriers, ports, airlines, railways, couriers, customs, warehouse
+> systems or temperature sensors, so the transport data in the table below is typed by people. Some data *can* arrive
+> automatically through optional services (order emails, GPS positions, message receipts, payments), but those services
+> have so far been checked **only against fake responses**; see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). An
+> **independent security review has not been done**; see [docs/SECURITY.md](docs/SECURITY.md).
+
+## Where the data comes from
+
+| How it gets in | What | Notes |
+|---|---|---|
+| **Typed by people** | Customers, prices, carrier choices, leg schedules and ETAs, container / AWB / wagon numbers, temperature readings, warehouse receipts, last-mile stops and proof of delivery, customs and dangerous-goods records, border waits, market prices, positions when no GPS is connected | The checks (check digits, ranges, required fields) apply to what is typed; nothing is looked up outside. |
+| **Can arrive automatically** (optional service set up, plan allows it) | Order emails (inbox address, IMAP, Gmail / Outlook): FLOW turns them into a draft, a person presses Create load. Email attachments: filed on the load, VAULT reads them. GPS positions from a provider, matched by truck plate. SMS / WhatsApp delivery reports from Twilio. Plan and payment status from Paddle. Road distance and traffic from map services. | All of these are in **Test mode** (fakes only) until tried with a real account: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). Nothing is ever sent, booked or created without a person. |
+| **Worked out by Veyra** (rules, no outside service) | Margins, the truck cost split on a trip, chargeable weight, late legs and handover risk, temperature excursions, storage days and charges, carrier ranking, lane times, price checks, risk alerts, NEXUS tasks | Covered by the automated tests. |
 
 ## What it does
 
@@ -51,7 +59,7 @@ The dashboard uses hash routes, so links can be bookmarked and shared. What you 
 
 | Page | What it is |
 |---|---|
-| `#/dashboard` | Overview, AI assistant, operations console |
+| `#/dashboard` | Overview, a "Veyra AI" card that proposes a draft from your latest load (no AI model), operations console |
 | `#/shipments` | All loads: status tabs, search, filters, CSV export, dispatch, multi-leg planner. `#/shipments?status=Pending%20Approval` is the Approvals queue |
 | `#/trips` | LTL trips and loads that could share a truck |
 | `#/tracking` | Global tracking of booked loads |

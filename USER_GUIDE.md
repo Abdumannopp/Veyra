@@ -2,7 +2,7 @@
 
 This guide needs no technical knowledge. It explains how to take one load in VEYRA from order to delivery, and how to use the newer features (legs, trips, temperature, warehouse, last mile, customs).
 
-**Good to know first:** you type the prices, numbers and positions yourself. VEYRA is not connected to shipping lines, airlines, railways, couriers, customs or temperature sensors. Which outside services (AI, SMS, email, maps, card payments) are connected, and how far they have been tested, is in `docs/INTEGRATIONS.md`. The list of all documents is in `docs/INDEX.md`.
+**Good to know first:** you type the prices, numbers and transport details yourself; positions too, unless a GPS provider is connected (Growth plan and up). Order emails and their attachments can arrive by themselves if an email service is connected, but a person always presses Create load. VEYRA is not connected to shipping lines, airlines, railways, couriers, customs or temperature sensors. Which outside services (AI, SMS, email, maps, card payments) are connected, and how far they have been tested, is in `docs/INTEGRATIONS.md`. The list of all documents is in `docs/INDEX.md`.
 
 ## Roles
 
@@ -276,12 +276,14 @@ The public price list is at `/pricing` (no sign-in needed). There are four plans
 
 | Plan | Price | Users | Shipments / month | Adds |
 |---|---|---|---|---|
-| Starter | $99 / month | 3 | 100 | Shipments, carriers, tracking, quotes, basic analytics |
+| Starter | $99 / month | 3 | 100 | Shipments, multi-leg orders, trips, carriers, tracking with positions you enter, quotes, analytics, and the rule-based helpers (SCOUT, ROUTE, PULSE, SENTINEL: no AI model) |
 | Growth | $249 / month | 10 | 500 | AI agents (FLOW, VAULT), GPS, email automation, WhatsApp / SMS |
 | Scale | $599 / month | 25 | 2,000 | Automation Studio workflows |
-| Enterprise | from $1,499 / month | 50+ | 5,000+ | Custom limits set per company |
+| Enterprise | from $1,499 / month | 50+ | 5,000+ | Everything in Scale; user and shipment limits set per company |
 
 Yearly billing costs 10 months (shown as "Save 17%").
+
+The AI agents that use a language model (FLOW reading orders, VAULT reading documents, and NEXUS when it reads an email) need **Growth or higher**; on Starter those buttons answer with a message naming the plan. The "Veyra AI" card on the dashboard only proposes a draft from your latest load; it does not use an AI model.
 
 - **New companies** start a 14-day free trial of the plan chosen in **Companies → Add company**.
 - **Paying by card (Paddle):** a company administrator opens **Billing → Pay by card**, picks Monthly or Yearly and a plan, and pays in Paddle's secure window. The plan becomes Active by itself a few seconds later. Later, "Switch to …" changes the plan and "Invoices, card and cancel" opens Paddle's own page. Setup: see "Card payments (Paddle Billing)" in `DEPLOYMENT.md`.

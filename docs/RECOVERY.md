@@ -62,6 +62,20 @@ It reports requests per second, the error rate (it exits with 1 above 1%), and r
 the 95th and 99th percentile. As a rule of thumb for a dispatcher screen: 95% under 500 ms is good, over
 1500 ms people will notice. Increase `LOAD_TEST_USERS` step by step (20, 50, 100) to find where it slows down.
 
+## Drill log (roadmap item O-3)
+
+One row per restore drill. Only a row with "Yes" under "Real hosted copy?" and "Passed" closes O-3.
+
+| Date | Backup used | Database | Real hosted copy? | Result | Time to restore | Notes |
+|---|---|---|---|---|---|---|
+| 2026-11-23 | A backup made by the test suite | SQLite, in the development environment | No | Passed | seconds | `test/recovery.test.js`. This proves the drill script works; it is **not** a drill on the real hosted database, so O-3 stays open. |
+
+## Load-test log (roadmap item O-4)
+
+| Date | Target | Real hosted copy? | Users × seconds | Requests / s | Errors | Median / 95% / 99% (ms) | Notes |
+|---|---|---|---|---|---|---|---|
+| 2026-11-23 | Local test server (development environment) | No | 4 × 1 | n/a | 0% | n/a | `test/recovery.test.js` checks the script only; it is **not** a load test of a hosted copy, so O-4 stays open. |
+
 ## 3. Not covered here
 
 - **An external security review** (penetration test) by an independent specialist: see [SECURITY.md](SECURITY.md), section 3. Veyra's own tests check the
