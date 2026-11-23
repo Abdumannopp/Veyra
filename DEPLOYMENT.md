@@ -233,6 +233,10 @@ Migration 0012 adds the table of last-mile stops. It can be reversed only while 
 
 Migration 0013 adds the customs and dangerous-goods record per load. It can be reversed only while it is empty; after that, recovery is the backup taken before the upgrade. **Take a backup before deploying.** The checks are format checks only, not legal or dangerous-goods advice.
 
+## Keeping old data (retention)
+
+Migration 0014 adds two settings columns to companies (reversible). Nothing is removed until a company administrator sets days in Team & settings → "Keeping old data" and presses "Remove now" or switches on the daily run. Removal cannot be undone: **keep regular backups.**
+
 ## Trips (LTL)
 
 One truck run can carry several shipments (see `docs/API_V2.md`, "Trips"). Migration `0008_trips` adds the trip tables (protected by row level security on PostgreSQL) and `shipments.trip_id`; it cannot be reversed, so take a backup before upgrading.

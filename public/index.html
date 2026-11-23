@@ -433,6 +433,15 @@
                 <div class="head-sub">People, integrations, backups and the activity log.</div>
               </div>
             </div>
+          <div class="card admin-panel hidden" id="retentionPanel">
+            <div class="admin-panel-header">
+              <div>
+                <h3 class="head-label small">Keeping old data</h3>
+                <div class="head-sub">How long details of finished loads are kept. Loads, money and status history are never removed. Empty = keep for ever.</div>
+              </div>
+            </div>
+            <div data-retention-body></div>
+          </div>
           <div class="card admin-panel hidden" id="adminPanel">
             <div class="admin-panel-header">
               <div>
@@ -1001,6 +1010,7 @@
     <script src="legs.js"></script>
     <script src="coldchain.js"></script>
     <script src="compliance.js"></script>
+    <script src="retention.js"></script>
     <script src="trips.js"></script>
   </body>
 </html>
