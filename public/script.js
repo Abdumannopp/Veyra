@@ -955,8 +955,8 @@ async function loadIntegrationsPanel() {
       // The AI row is only shown where the plan includes the AI agents.
       ...(window.VeyraAi.allowed() ? [integrationRow('AI agents (FLOW, VAULT)', status.ai.enabled,
         status.ai.enabled
-          ? `OpenRouter · model: ${status.ai.model || 'account default'} · automatic AI work stops at ${status.nexus.aiDailyLimit} calls a day. Reading CMR files needs a model that can read images or PDFs.`
-          : 'Add OPENROUTER_API_KEY to the server settings to read orders and documents with AI.')] : []),
+          ? `${status.ai.provider} · model: ${status.ai.model || 'account default'} · company data sharing: ${status.ai.consent ? 'allowed' : 'not allowed yet'} · automatic AI work stops at ${status.nexus.aiDailyLimit} calls a day. Reading CMR files needs a model that can read images or PDFs.`
+          : (status.ai.problem || 'Add an AI provider key (OpenRouter, OpenAI, Anthropic or Gemini) to the server settings to read orders and documents with AI.'))] : []),
       integrationRow('NEXUS (orchestrator)', status.nexus.enabled,
         status.nexus.enabled ? 'Prepares tasks from emails, bookings and quiet trucks. It never sends, books or changes anything on its own.' : 'Off (NEXUS_ENABLED=false).'),
       integrationRow('Order mailbox (IMAP)', status.mailbox.configured,

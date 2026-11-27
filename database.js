@@ -1152,6 +1152,22 @@ const MIGRATIONS = [
       await run('ALTER TABLE tenants DROP COLUMN ai_consent_changed_by');
       await run('ALTER TABLE tenants DROP COLUMN ai_external_consent');
     }
+  },
+  {
+    id: '0016_ai_provider',
+    name: 'AI: which provider a company agreed to, and which provider answered each call',
+    transactional: false,
+    up: async () => {
+      // A consent is for one provider. Before this migration OpenRouter was the only one, so existing consents are for it.
+      await ensureColumns('tenants', [['ai_consent_provider', 'TEXT']]);
+      await ensureColumns('ai_calls', [['provider', 'TEXT']]);
+      await run("UPDATE tenants SET ai_consent_provider = 'openrouter' WHERE ai_external_consent = 1 AND ai_consent_provider IS NULL");
+      await run("UPDATE ai_calls SET provider = 'openrouter' WHERE provider IS NULL");
+    },
+    down: async () => {
+      await run('ALTER TABLE ai_calls DROP COLUMN provider');
+      await run('ALTER TABLE tenants DROP COLUMN ai_consent_provider');
+    }
   }
 ];
 
@@ -1219,7 +1235,7 @@ async function seedAndVerify(isProduction) {
 
     // Development only: the demo company agrees to the AI provider so the demo works. Production companies start
     // with it off and an administrator must switch it on (Team & settings).
-    await run('UPDATE tenants SET ai_external_consent = 1 WHERE id = ? AND ai_consent_changed_at IS NULL', [DEFAULT_TENANT_ID]);
+    await run('UPDATE tenants SET ai_external_consent = 1, ai_consent_provider = ? WHERE id = ? AND ai_consent_changed_at IS NULL', [require('./ai/providers').activeId(), DEFAULT_TENANT_ID]);
 
     const carrierCount = await get('SELECT COUNT(*) AS total FROM carriers');
     if (!carrierCount || Number(carrierCount.total) === 0) {
@@ -3791,9 +3807,9 @@ async function pruneAiQuota(days = 3) {
   return result.changes || 0;
 }
 
-async function startAiCall(tenantId, { userId = null, agent }) {
+async function startAiCall(tenantId, { userId = null, agent, provider = null }) {
   assertTenant(tenantId);
-  const result = await run('INSERT INTO ai_calls (tenant_id, user_id, agent, status) VALUES (?, ?, ?, ?)', [tenantId, userId || null, agent, 'started']);
+  const result = await run('INSERT INTO ai_calls (tenant_id, user_id, agent, status, provider) VALUES (?, ?, ?, ?, ?)', [tenantId, userId || null, agent, 'started', provider]);
   return result.id;
 }
 
@@ -3809,7 +3825,7 @@ async function finishAiCall(tenantId, id, { status, model, inputTokens, outputTo
 async function listAiCalls(tenantId, { limit = 50 } = {}) {
   assertTenant(tenantId);
   return all(
-    `SELECT id, user_id AS userId, agent, status, model, input_tokens AS inputTokens, output_tokens AS outputTokens, latency_ms AS latencyMs,
+    `SELECT id, user_id AS userId, agent, status, provider, model, input_tokens AS inputTokens, output_tokens AS outputTokens, latency_ms AS latencyMs,
        attempts, error_kind AS errorKind, created_at AS createdAt, finished_at AS finishedAt
      FROM ai_calls WHERE tenant_id = ? ORDER BY id DESC LIMIT ?`,
     [tenantId, limit]
@@ -3819,16 +3835,17 @@ async function listAiCalls(tenantId, { limit = 50 } = {}) {
 async function getAiConsent(tenantId) {
   assertTenant(tenantId);
   const row = await get(
-    `SELECT t.ai_external_consent AS consent, t.ai_consent_changed_at AS changedAt, users.name AS changedBy
+    `SELECT t.ai_external_consent AS consent, t.ai_consent_provider AS provider, t.ai_consent_changed_at AS changedAt, users.name AS changedBy
      FROM tenants t LEFT JOIN users ON users.id = t.ai_consent_changed_by WHERE t.id = ?`,
     [tenantId]
   );
-  return { consent: Boolean(Number(row?.consent)), changedAt: row?.changedAt || null, changedBy: row?.changedBy || null };
+  return { consent: Boolean(Number(row?.consent)), provider: row?.provider || null, changedAt: row?.changedAt || null, changedBy: row?.changedBy || null };
 }
 
-async function setAiConsent(tenantId, consent, actorId) {
+// provider: the provider the administrator agreed to (the active one when they pressed the button).
+async function setAiConsent(tenantId, consent, actorId, provider = null) {
   assertTenant(tenantId);
-  await run("UPDATE tenants SET ai_external_consent = ?, ai_consent_changed_by = ?, ai_consent_changed_at = datetime('now') WHERE id = ?", [consent ? 1 : 0, actorId || null, tenantId]);
+  await run("UPDATE tenants SET ai_external_consent = ?, ai_consent_provider = ?, ai_consent_changed_by = ?, ai_consent_changed_at = datetime('now') WHERE id = ?", [consent ? 1 : 0, consent ? provider : null, actorId || null, tenantId]);
   return getAiConsent(tenantId);
 }
 

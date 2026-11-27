@@ -4,6 +4,28 @@ This page is the **source of truth** for how the AI agents (FLOW, VAULT) use the
 integration is (it is still **Test mode**: not yet tried with a real provider account and real documents) is kept in
 [INTEGRATIONS.md](INTEGRATIONS.md). Security controls are summarised in [SECURITY.md](SECURITY.md).
 
+## 0. Which provider
+
+VEYRA can use **one** of four providers at a time, for the whole server. Choose it with `AI_PROVIDER`; if that is empty,
+the first provider that has a key is used (OpenRouter first). Keys go only in the server settings (for example Railway
+Variables), never in code or chat.
+
+| Provider | `AI_PROVIDER` | Key | Model setting | Model required? |
+|---|---|---|---|---|
+| OpenRouter (default) | `openrouter` | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` | No (account default; the server warns) |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` | **Yes** |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | **Yes** |
+| Google Gemini | `google` | `GEMINI_API_KEY` | `GEMINI_MODEL` | **Yes** |
+
+- OpenAI, Anthropic and Gemini have no default model: without the model setting AI stays **off** and Integrations says why.
+- Reading CMR / POD / B/L files needs a model that reads PDFs and images. How each provider receives a file: OpenAI as a
+  `file` / `image_url` part, Anthropic as a `document` / `image` block, Gemini as `inlineData`, all base64.
+- The Gemini key is sent in the `x-goog-api-key` header, never in the URL.
+- Every rule below (consent, quota, ledger, redaction, answer check, retries) is the same for all four. The `ai_calls`
+  ledger records which provider answered each call.
+- **Consent is for one provider.** If the server switches to another provider, every company's sharing becomes "not
+  allowed" for the new one until its administrator agrees again (Team & settings shows the old and the new provider).
+
 ## 1. One gateway for every model call
 
 All model calls go through `ai/gateway.js`: the FLOW and VAULT screens, the automatic NEXUS work on incoming email and
@@ -67,8 +89,8 @@ a guarantee: do not upload or send anything that should not leave the company.
 
 ## 6. The model's answer
 
-- `OPENROUTER_MODEL` should name the model you tested. Without it OpenRouter uses the account default, which can change;
-  the server prints a warning at start-up and Integrations shows it.
+- Name the model you tested (`OPENROUTER_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` or `GEMINI_MODEL`). OpenRouter
+  without a model uses the account default, which can change: the server warns at start-up and Integrations shows it.
 - The answer must be one JSON object with every expected key and the right types (`ai/schema.js`). Invalid JSON, an empty
   answer, missing keys or wrong types: `502` with code `AI_INVALID_OUTPUT`; nothing is filled in. Text around a valid
   object is ignored.
@@ -88,6 +110,6 @@ a guarantee: do not upload or send anything that should not leave the company.
 
 ## 8. What is not proven yet
 
-All of the above is tested with a fake provider. The real OpenRouter account, real models and real messy documents have
+All of the above is tested with a fake provider. No real account of any of the four providers, no real model and no real messy document has
 not been tried (see [INTEGRATIONS.md](INTEGRATIONS.md)). The independent security review is still open
 ([SECURITY.md](SECURITY.md)).
