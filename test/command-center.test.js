@@ -6,7 +6,7 @@ const path = require('node:path');
 const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-cc-'));
-Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'c.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', CURRENCY: 'USD', OPENROUTER_API_KEY: 'sk-or-test' });
+Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'c.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', CURRENCY: 'USD', GEMINI_API_KEY: 'AIza-test-gemini-key' });
 const { app, initialize } = require('../server');
 const { db } = require('../database');
 const aiGateway = require('../ai/gateway');
@@ -38,7 +38,7 @@ before(async () => {
   operator = await login('demo@veyra.ai', 'demo123');
   await call(admin, 'POST', '/api/platform/tenants', { companyName: 'CC Other', adminName: 'Odil', adminEmail: 'odil@cc.example', adminPassword: 'cc-other-pass-123' });
   other = await login('odil@cc.example', 'cc-other-pass-123');
-  aiGateway.setTransport(async () => { aiCalls += 1; return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ customer: 'X', origin: 'A', destination: 'B', questions: [], confidence: 0.8 }) } }] }), { status: 200 }); });
+  aiGateway.setTransport(async () => { aiCalls += 1; return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ customer: 'X', origin: 'A', destination: 'B', questions: [], confidence: 0.8 }) }] } }] }), { status: 200 }); });
 });
 after(async () => {
   await nexus.idle();

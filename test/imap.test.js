@@ -10,7 +10,7 @@ const { after, before, test } = require('node:test');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-imap-'));
 Object.assign(process.env, {
   NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'i.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000',
-  CURRENCY: 'USD', OPENROUTER_API_KEY: 'sk-or-test', DOC_MAX_MB: '1', INBOX_MAX_MB: '2'
+  CURRENCY: 'USD', GEMINI_API_KEY: 'AIza-test-gemini-key', DOC_MAX_MB: '1', INBOX_MAX_MB: '2'
 });
 const { app, initialize } = require('../server');
 const { db } = require('../database');
@@ -98,7 +98,7 @@ before(async () => {
   fake = await startFakeImap();
   process.env.IMAP_ALLOW_PRIVATE = 'true';
   imap.setConnector(async () => net.connect(fake.port, '127.0.0.1'));
-  aiGateway.setTransport(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ customer: 'Navoiy', customerPhone: null, reference: null, origin: 'Tashkent, UZ', destination: 'Almaty, KZ', pickup: '2030-05-10', delivery: '2030-05-12', weight: 18, weightUnit: 't', equipment: 'Reefer', customerRate: null, customerRateCurrency: null, questions: [], confidence: 0.9 }) } }] }), { status: 200 }));
+  aiGateway.setTransport(async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ customer: 'Navoiy', customerPhone: null, reference: null, origin: 'Tashkent, UZ', destination: 'Almaty, KZ', pickup: '2030-05-10', delivery: '2030-05-12', weight: 18, weightUnit: 't', equipment: 'Reefer', customerRate: null, customerRateCurrency: null, questions: [], confidence: 0.9 }) }] } }] }), { status: 200 }));
 });
 after(async () => {
   await nexus.idle();

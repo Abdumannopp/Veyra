@@ -1657,10 +1657,11 @@ app.get('/api/ai/command-center', authMiddleware, requirePermission('shipments:r
 /* ---------- AI data sharing: a company's consent to send data to the AI provider ---------- */
 // Off until an administrator switches it on. Every change is written to the activity log (who and when), and the
 // latest change is shown with the setting. The gateway refuses every model call while it is off.
-// A consent counts only for the provider it was given for: after the server switches provider (AI_PROVIDER), every
-// company must agree again. `consent` here is whether data may go to the ACTIVE provider now.
+// A consent counts only for the provider it was given for: a consent given for OpenRouter (before Gemini became the
+// only provider) does not count for Gemini, so every company agrees again. `consent` here is whether data may go to the ACTIVE provider now.
 function consentView(saved) {
   const active = aiGateway.providerStatus();
+  // Names of providers a company may have agreed to in the past (before Gemini became the only one).
   const names = { openrouter: 'OpenRouter', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Gemini' };
   return {
     consent: Boolean(saved.consent && saved.provider === active.id),
@@ -4355,7 +4356,7 @@ function startServer() {
   return initialize()
     .then(() => new Promise((resolve) => {
       const server = app.listen(PORT, HOST, () => {
-        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'}, documents: ${storage.storage}${storage.encrypted ? ' encrypted' : ''})`);
+        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? `Gemini ${aiGateway.modelName()}` : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'}, documents: ${storage.storage}${storage.encrypted ? ' encrypted' : ''})`);
         runAsSystem(() => {
           jobQueue.start();
           nexus.startSweeper();

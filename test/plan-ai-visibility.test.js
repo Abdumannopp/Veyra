@@ -10,7 +10,7 @@ const vm = require('node:vm');
 const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-planai-'));
-Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'p.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', NEXUS_ENABLED: 'false', OPENROUTER_API_KEY: 'sk-or-test' });
+Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'p.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', NEXUS_ENABLED: 'false', GEMINI_API_KEY: 'AIza-test-gemini-key' });
 const { app, initialize } = require('../server');
 const { db } = require('../database');
 const { PLANS } = require('../lib/plans');

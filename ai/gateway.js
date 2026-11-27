@@ -13,7 +13,7 @@
 //    (ai/redact.js). No prompt, email or document text is ever written to a log.
 // 5. Output: the answer must be a JSON object that passes the caller's strict shape check (ai/schema.js).
 //
-// Provider: one of OpenRouter, OpenAI, Anthropic, Google Gemini (AI_PROVIDER, see ai/providers.js). No HTTP-Referer header.
+// Provider: Google Gemini only (see ai/providers.js), model gemini-2.5-flash-lite by default.
 const { httpError } = require('../lib/validation');
 const { logEvent } = require('../lib/log');
 const { redactContent } = require('./redact');
@@ -45,24 +45,17 @@ function modelName() {
   return providers.status().model || '';
 }
 
-// The active provider (id, name, model, and why it is not ready), never the key.
+// The provider (Google Gemini), its model and why it is not ready, never the key.
 const providerStatus = () => providers.status();
 
-// Without OPENROUTER_MODEL, OpenRouter uses the account's default model, which can change without notice.
-// Production should name the model; the server says so at start-up and in Integrations.
+// The model is pinned: gemini-2.5-flash-lite unless GEMINI_MODEL names another one. A different model is allowed but
+// announced (start-up log and Integrations), so a change of model, and of its cost and quality, is never silent.
 function checkModelConfig({ production = process.env.NODE_ENV !== 'development' } = {}) {
   const state = providers.status();
-  // An unknown AI_PROVIDER, or a key without the model it needs (OpenAI, Anthropic, Gemini): AI stays off, and this says why.
-  // No key at all is not a warning: AI is simply not set up.
-  const misconfigured = state.problem && (!state.keyEnv || process.env[state.keyEnv]);
-  if (misconfigured) {
-    if (production) logEvent('warn', 'ai_provider_not_ready', { provider: state.id, message: state.problem });
-    return { ok: false, warning: state.problem };
-  }
-  if (!isEnabled()) return { ok: true, warning: null };
-  if (modelName()) return { ok: true, warning: null };
-  const warning = 'OPENROUTER_MODEL is not set: OpenRouter will use the account default model, which can change without notice. Set it to the model you tested.';
-  if (production) logEvent('warn', 'ai_model_not_set', { message: warning });
+  if (!state.ready) return { ok: true, warning: null };
+  if (state.model === providers.DEFAULT_MODEL) return { ok: true, warning: null };
+  const warning = `GEMINI_MODEL is set to ${state.model}, not the project's model ${providers.DEFAULT_MODEL}. Check its price and test it before use.`;
+  if (production) logEvent('warn', 'ai_model_changed', { model: state.model });
   return { ok: false, warning };
 }
 

@@ -9,9 +9,9 @@ const { after, before, test } = require('node:test');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-vault-modes-'));
 Object.assign(process.env, {
   NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'v.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000',
-  WEIGHT_UNIT: 'kg', OPENROUTER_API_KEY: 'sk-or-test', DOCUMENT_STORAGE: 'database'
+  WEIGHT_UNIT: 'kg', GEMINI_API_KEY: 'AIza-test-gemini-key', DOCUMENT_STORAGE: 'database'
 });
-delete process.env.OPENROUTER_MODEL;
+delete process.env.GEMINI_MODEL;
 
 const { app, initialize } = require('../server');
 const { db } = require('../database');
@@ -24,7 +24,7 @@ const call = (method, url, body) => fetch(`${base}${url}`, { method, headers: { 
 const json = async (...args) => { const res = await call(...args); return { status: res.status, body: await res.json() }; };
 const pdf = (marker) => Buffer.concat([Buffer.from(`%PDF-1.4\n% ${marker}\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF`), Buffer.alloc(64, 1)]);
 const upload = (type, marker) => fetch(`${base}/api/shipments/${load.id}/documents?type=${type}&filename=${type}-${marker}.pdf`, { method: 'POST', headers: { 'content-type': 'application/pdf', cookie: admin }, body: pdf(marker) });
-const fakeModel = (reply) => aiGateway.setTransport(async () => new Response(JSON.stringify({ model: 'test/vision', choices: [{ message: { content: JSON.stringify(reply) } }], usage: { prompt_tokens: 900, completion_tokens: 120 } }), { status: 200, headers: { 'content-type': 'application/json' } }));
+const fakeModel = (reply) => aiGateway.setTransport(async () => new Response(JSON.stringify({ modelVersion: 'test/vision', candidates: [{ content: { parts: [{ text: JSON.stringify(reply) }] } }], usageMetadata: { promptTokenCount: 900, candidatesTokenCount: 120 } }), { status: 200, headers: { 'content-type': 'application/json' } }));
 
 const bl = {
   documentNumber: 'MSCUBL7788', shipper: 'Silk Road Foods', consignee: 'Hamburg Imports', carrier: 'MSC', vessel: 'MSC Aurora', voyage: 'AU123', flightNumber: null, trainNo: null,

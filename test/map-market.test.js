@@ -8,7 +8,7 @@ const { after, before, test } = require('node:test');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-map-'));
 Object.assign(process.env, {
   NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'm.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000',
-  CURRENCY: 'USD', GEO_PROVIDER: 'osm', OFF_ROUTE_KM: '50', OPENROUTER_API_KEY: 'sk-or-test'
+  CURRENCY: 'USD', GEO_PROVIDER: 'osm', OFF_ROUTE_KM: '50', GEMINI_API_KEY: 'AIza-test-gemini-key'
 });
 const { app, initialize } = require('../server');
 const { db } = require('../database');
@@ -49,7 +49,7 @@ before(async () => {
     const coordinates = Array.from({ length: 11 }, (_, i) => [69.24 + (7.65 * i) / 10, 41.3 + (1.94 * i) / 10]);
     return new Response(JSON.stringify({ routes: [{ distance: 810000, duration: 36000, geometry: { coordinates } }] }), { status: 200 });
   });
-  aiGateway.setTransport(async () => new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] }), { status: 200 }));
+  aiGateway.setTransport(async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{}' }] } }] }), { status: 200 }));
 });
 after(async () => {
   await nexus.idle();

@@ -40,7 +40,7 @@ open Critical or High finding. Tests written by the people who built the system 
   GPS posts need the company's bearer token.
 - **Outbound requests**: the mailbox reader refuses private-network servers unless you allow them; the map only sends place
   names to the servers you configure.
-- **AI provider** ([AI.md](AI.md)): data goes to the one AI provider the server uses (OpenRouter, OpenAI, Anthropic or Google Gemini) only after the company's administrator switches on "AI data
+- **AI provider** ([AI.md](AI.md)): data goes to the AI provider, Google (Gemini API), only after the company's administrator switches on "AI data
   sharing" (off by default, every change in the activity log). Every model call goes through one gateway that takes a
   durable per-company and per-person quota in the database first, removes passwords, keys and tokens from the **text** (document files — PDF and images — are sent unchanged; see AI.md), logs
   the call (tokens, model, status) without prompts or secrets, and accepts only an answer of the expected shape.
