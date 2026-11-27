@@ -133,6 +133,7 @@ const {
   recordAgentTask,
   getAiConsent,
   setAiConsent,
+  setAiProvider,
   getAgentUsage,
   listCarriersWithStats,
   getScoutData,
@@ -1657,16 +1658,22 @@ app.get('/api/ai/command-center', authMiddleware, requirePermission('shipments:r
 /* ---------- AI data sharing: a company's consent to send data to the AI provider ---------- */
 // Off until an administrator switches it on. Every change is written to the activity log (who and when), and the
 // latest change is shown with the setting. The gateway refuses every model call while it is off.
-// A consent counts only for the provider it was given for: after the server switches provider (AI_PROVIDER), every
-// company must agree again. `consent` here is whether data may go to the ACTIVE provider now.
-function consentView(saved) {
-  const active = aiGateway.providerStatus();
-  const names = { openrouter: 'OpenRouter', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Gemini' };
+// A consent counts only for the provider it was given for: after the company's provider changes (its own choice, or the
+// server default it follows), it must agree again. `consent` is whether data may go to the company's provider NOW.
+const AI_PROVIDER_NAMES = { openrouter: 'OpenRouter', openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google Gemini' };
+async function consentView(tenantId, saved) {
+  const active = await aiGateway.providerFor(tenantId);
+  const providers = require('./ai/providers');
   return {
     consent: Boolean(saved.consent && saved.provider === active.id),
     provider: active.name,
     providerId: active.id,
-    consentedProvider: saved.consent && saved.provider ? (names[saved.provider] || saved.provider) : null,
+    providerReady: active.ready,
+    providerProblem: active.problem,
+    // The company's own choice (null = it follows the server default) and what it may choose from. No keys.
+    providerChoice: active.chosen ? active.id : null,
+    providerOptions: providers.options().map(({ id, name, ready, model, isDefault }) => ({ id, name, ready, model, isDefault })),
+    consentedProvider: saved.consent && saved.provider ? (AI_PROVIDER_NAMES[saved.provider] || saved.provider) : null,
     changedAt: saved.changedAt,
     changedBy: saved.changedBy
   };
@@ -1674,7 +1681,7 @@ function consentView(saved) {
 
 app.get('/api/settings/ai-consent', authMiddleware, requirePermission('users:read'), async (req, res) => {
   try {
-    return res.json({ success: true, ...consentView(await getAiConsent(req.user.tenantId)), canChange: hasPermission(req.user, 'settings:write') });
+    return res.json({ success: true, ...(await consentView(req.user.tenantId, await getAiConsent(req.user.tenantId))), canChange: hasPermission(req.user, 'settings:write') });
   } catch (error) {
     return sendError(res, error, 'AI data sharing setting unavailable.', 'ai consent');
   }
@@ -1683,12 +1690,31 @@ app.get('/api/settings/ai-consent', authMiddleware, requirePermission('users:rea
 app.put('/api/settings/ai-consent', authMiddleware, requirePermission('settings:write'), async (req, res) => {
   try {
     if (typeof req.body?.consent !== 'boolean') return res.status(400).json({ success: false, message: 'Send { "consent": true } or { "consent": false }.' });
-    const active = aiGateway.providerStatus();
+    const active = await aiGateway.providerFor(req.user.tenantId);
+    if (req.body.consent && !active.ready) return res.status(409).json({ success: false, code: 'AI_OFF', message: `${active.name} is not ready on this server: ${active.problem}` });
     const saved = await setAiConsent(req.user.tenantId, req.body.consent, req.user.id, active.id);
     audit(req, 'ai.consent', `Sending data to the AI provider (${active.name}): ${req.body.consent ? 'ON' : 'OFF'}`);
-    return res.json({ success: true, ...consentView(saved), canChange: true });
+    return res.json({ success: true, ...(await consentView(req.user.tenantId, saved)), canChange: true });
   } catch (error) {
     return sendError(res, error, 'AI data sharing setting could not be saved.', 'ai consent save');
+  }
+});
+
+// The company's AI provider: one the server has ready (its key and model are in the server settings), or null to
+// follow the server default. Changing it does NOT carry the consent over: an administrator agrees again for the new one.
+app.put('/api/settings/ai-provider', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const providers = require('./ai/providers');
+    const wanted = req.body?.provider;
+    if (wanted !== null && !providers.IDS.includes(wanted)) return res.status(400).json({ success: false, message: `Send { "provider": ${providers.IDS.map((id) => `"${id}"`).join(' | ')} | null }.` });
+    if (wanted !== null && !providers.statusOf(wanted).ready) return res.status(409).json({ success: false, code: 'AI_PROVIDER_NOT_READY', message: `${providers.statusOf(wanted).name} is not ready on this server: ${providers.statusOf(wanted).problem}` });
+    const before = await aiGateway.providerFor(req.user.tenantId);
+    await setAiProvider(req.user.tenantId, wanted);
+    const after = await aiGateway.providerFor(req.user.tenantId);
+    audit(req, 'ai.provider', `AI provider: ${before.name} → ${after.name}${wanted === null ? ' (server default)' : ''}`);
+    return res.json({ success: true, ...(await consentView(req.user.tenantId, await getAiConsent(req.user.tenantId))), canChange: true });
+  } catch (error) {
+    return sendError(res, error, 'AI provider could not be saved.', 'ai provider save');
   }
 });
 
@@ -3272,7 +3298,7 @@ app.get('/api/integrations/status', authMiddleware, requirePermission('users:rea
     const tenant = await getTenant(req.user.tenantId);
     res.json({
       success: true,
-      ai: { ...(() => { const p = aiGateway.providerStatus(); return { enabled: aiGateway.isEnabled(), provider: p.name, providerId: p.id, model: p.model, problem: p.problem, modelWarning: aiGateway.checkModelConfig({ production: false }).warning }; })(), consent: consentView(await getAiConsent(req.user.tenantId)).consent },
+      ai: await (async () => { const p = await aiGateway.providerFor(req.user.tenantId); return { enabled: aiGateway.isEnabled() && p.ready, provider: p.name, providerId: p.id, model: p.model, problem: p.problem, modelWarning: aiGateway.checkModelConfig({ production: false }).warning, consent: (await consentView(req.user.tenantId, await getAiConsent(req.user.tenantId))).consent }; })(),
       messaging: { ...messaging.publicStatus(tenant, DEFAULT_TENANT_ID), deliveryReports: Boolean(PUBLIC_URL) },
       gps: { configured: Boolean(tenant?.gpsTokenHash), webhookPath: GPS_WEBHOOK_PATH, minIntervalMinutes: GPS_MIN_INTERVAL_MINUTES },
       inbox: { configured: Boolean(tenant?.inboxTokenHash), pathPrefix: INBOX_WEBHOOK_PREFIX, allowedSenders: tenant?.allowedSenders || [], dailyLimit: INBOX_DAILY_LIMIT,

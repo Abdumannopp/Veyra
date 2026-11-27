@@ -6,9 +6,14 @@ integration is (it is still **Test mode**: not yet tried with a real provider ac
 
 ## 0. Which provider
 
-VEYRA can use **one** of four providers at a time, for the whole server. Choose it with `AI_PROVIDER`; if that is empty,
-the first provider that has a key is used (OpenRouter first). Keys go only in the server settings (for example Railway
-Variables), never in code or chat.
+The server can have up to four providers ready. Their keys go only in the server settings (for example Railway
+Variables), never in code, chat or the screens. `AI_PROVIDER` is the **server default**; if it is empty, the first
+provider that has a key is the default (OpenRouter first).
+
+**Each company chooses its own provider** in Team & settings → AI data sharing, among the providers the server has
+ready (key and, where needed, model), or keeps "Server default" (`PUT /api/settings/ai-provider`, administrators only,
+every change in the activity log). A company that chose a provider which later stops being ready (its key or model is
+removed) gets "AI is off" — it is **never** switched to another provider silently, because it agreed to that one only.
 
 | Provider | `AI_PROVIDER` | Key | Model setting | Model required? |
 |---|---|---|---|---|
@@ -23,8 +28,9 @@ Variables), never in code or chat.
 - The Gemini key is sent in the `x-goog-api-key` header, never in the URL.
 - Every rule below (consent, quota, ledger, redaction, answer check, retries) is the same for all four. The `ai_calls`
   ledger records which provider answered each call.
-- **Consent is for one provider.** If the server switches to another provider, every company's sharing becomes "not
-  allowed" for the new one until its administrator agrees again (Team & settings shows the old and the new provider).
+- **Consent is for one provider.** When a company's provider changes (its own choice, or the server default it follows),
+  its sharing becomes "not allowed" for the new one until its administrator agrees again (Team & settings shows the old
+  and the new provider). One company's choice never changes another's.
 
 ## 1. One gateway for every model call
 

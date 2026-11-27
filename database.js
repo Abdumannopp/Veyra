@@ -1168,6 +1168,18 @@ const MIGRATIONS = [
       await run('ALTER TABLE ai_calls DROP COLUMN provider');
       await run('ALTER TABLE tenants DROP COLUMN ai_consent_provider');
     }
+  },
+  {
+    id: '0017_ai_provider_per_company',
+    name: 'AI: each company may choose its own provider among those the server has ready',
+    transactional: false,
+    up: async () => {
+      // Empty = the server default (AI_PROVIDER). Nothing changes for existing companies.
+      await ensureColumns('tenants', [['ai_provider', 'TEXT']]);
+    },
+    down: async () => {
+      await run('ALTER TABLE tenants DROP COLUMN ai_provider');
+    }
   }
 ];
 
@@ -3843,6 +3855,19 @@ async function getAiConsent(tenantId) {
 }
 
 // provider: the provider the administrator agreed to (the active one when they pressed the button).
+async function getAiProvider(tenantId) {
+  assertTenant(tenantId);
+  const row = await get('SELECT ai_provider AS provider FROM tenants WHERE id = ?', [tenantId]);
+  return row?.provider || null;
+}
+
+// provider: an id from ai/providers.js, or null for the server default.
+async function setAiProvider(tenantId, provider) {
+  assertTenant(tenantId);
+  await run('UPDATE tenants SET ai_provider = ? WHERE id = ?', [provider || null, tenantId]);
+  return getAiProvider(tenantId);
+}
+
 async function setAiConsent(tenantId, consent, actorId, provider = null) {
   assertTenant(tenantId);
   await run("UPDATE tenants SET ai_external_consent = ?, ai_consent_provider = ?, ai_consent_changed_by = ?, ai_consent_changed_at = datetime('now') WHERE id = ?", [consent ? 1 : 0, consent ? provider : null, actorId || null, tenantId]);
@@ -4803,6 +4828,8 @@ module.exports = {
   finishAiCall,
   listAiCalls,
   getAiConsent,
+  getAiProvider,
+  setAiProvider,
   setAiConsent,
   getRetention,
   saveRetention,

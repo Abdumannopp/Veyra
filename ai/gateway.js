@@ -13,7 +13,8 @@
 //    (ai/redact.js). No prompt, email or document text is ever written to a log.
 // 5. Output: the answer must be a JSON object that passes the caller's strict shape check (ai/schema.js).
 //
-// Provider: one of OpenRouter, OpenAI, Anthropic, Google Gemini (AI_PROVIDER, see ai/providers.js). No HTTP-Referer header.
+// Provider: one of OpenRouter, OpenAI, Anthropic, Google Gemini. The company's own choice (Team & settings), else the
+// server default (AI_PROVIDER); see ai/providers.js. No HTTP-Referer header.
 const { httpError } = require('../lib/validation');
 const { logEvent } = require('../lib/log');
 const { redactContent } = require('./redact');
@@ -38,15 +39,24 @@ function setUsageStore(next) {
 }
 
 function isEnabled() {
-  return providers.status().ready;
+  // The server can do AI at all: at least one provider has its key (and model). Each company's own provider is
+  // checked per call (providerFor).
+  return providers.options().some((option) => option.ready);
 }
 
 function modelName() {
   return providers.status().model || '';
 }
 
-// The active provider (id, name, model, and why it is not ready), never the key.
+// The server's default provider (id, name, model, and why it is not ready), never the key.
 const providerStatus = () => providers.status();
+
+// The provider this company uses (its choice, else the server default), never the key.
+async function providerFor(tenantId) {
+  const db = usageStore();
+  const choice = typeof db.getAiProvider === 'function' ? await db.getAiProvider(tenantId) : null;
+  return providers.resolve(choice);
+}
 
 // Without OPENROUTER_MODEL, OpenRouter uses the account's default model, which can change without notice.
 // Production should name the model; the server says so at start-up and in Integrations.
@@ -93,13 +103,13 @@ function quotaError(scope, limit, resetSeconds) {
 }
 
 // Consent counts only for the provider it was given for.
-async function hasConsent(db, tenantId) {
+async function hasConsent(db, tenantId, providerId) {
   const consent = await db.getAiConsent(tenantId);
-  return consent.consent && consent.provider === providers.activeId();
+  return consent.consent && consent.provider === providerId;
 }
 
-function consentError() {
-  const error = httpError(403, `Sending data to the AI provider (${providers.status().name}) is not allowed for your company yet. An administrator can allow it in Team & settings → AI data sharing.`);
+function consentError(name = providers.status().name) {
+  const error = httpError(403, `Sending data to the AI provider (${name}) is not allowed for your company yet. An administrator can allow it in Team & settings → AI data sharing.`);
   error.code = 'AI_CONSENT_REQUIRED';
   return error;
 }
@@ -108,7 +118,9 @@ function consentError() {
 async function availability(tenantId, { userId = null, now = new Date() } = {}) {
   if (!isEnabled()) return { ok: false, code: 'AI_OFF', reason: 'AI is off.' };
   const db = usageStore();
-  if (!(await hasConsent(db, tenantId))) return { ok: false, code: 'AI_CONSENT_REQUIRED', reason: consentError().message };
+  const provider = await providerFor(tenantId);
+  if (!provider.ready) return { ok: false, code: 'AI_OFF', reason: `AI is off for your company: ${provider.problem}` };
+  if (!(await hasConsent(db, tenantId, provider.id))) return { ok: false, code: 'AI_CONSENT_REQUIRED', reason: consentError(provider.name).message };
   const { companyPerDay, personPerHour } = limits();
   const w = windows(now);
   if ((await db.aiQuotaUsed(tenantId, w.day.key)) >= companyPerDay) return { ok: false, code: 'AI_QUOTA_EXCEEDED', reason: quotaError('company_daily', companyPerDay, w.day.resetSeconds).message, error: quotaError('company_daily', companyPerDay, w.day.resetSeconds) };
@@ -221,14 +233,16 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
   const userId = usage.userId ? Number(usage.userId) : null;
   const db = usageStore();
 
-  if (!(await hasConsent(db, tenantId))) throw consentError();
+  const chosen = await providerFor(tenantId);
+  if (!chosen.ready) throw Object.assign(httpError(503, `AI is off for your company: ${chosen.problem}`), { code: 'AI_OFF' });
+  if (!(await hasConsent(db, tenantId, chosen.id))) throw consentError(chosen.name);
   await reserve(tenantId, userId);
 
   // The ledger row must exist BEFORE anything is sent: without it the cost could not be recorded. If it cannot be
   // written, the unit is given back and nothing is sent.
   let callId = null;
   try {
-    callId = await db.startAiCall(tenantId, { userId, agent, provider: providers.activeId() });
+    callId = await db.startAiCall(tenantId, { userId, agent, provider: chosen.id });
     if (!callId) throw new Error('no ledger id');
   } catch (error) {
     logEvent('error', 'ai_ledger_start_failed', { tenantId, agent, error: error.message });
@@ -238,8 +252,8 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
     throw unavailable;
   }
 
-  const provider = providers.active();
-  const model = modelName();
+  const provider = providers.PROVIDERS[chosen.id];
+  const model = chosen.model || '';
   const request = provider.build({ model, system, user: redactContent(user), maxTokens });
 
   const started = Date.now();
@@ -312,4 +326,4 @@ async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = 
   throw Object.assign(httpError(502, 'The AI assistant could not answer right now. Please fill the form by hand or try again.'), { code: 'AI_PROVIDER_FAILED' });
 }
 
-module.exports = { completeJson, providerStatus, isEnabled, setTransport, setUsageStore, extractJson, availability, checkModelConfig, modelName, limits };
+module.exports = { completeJson, providerStatus, providerFor, isEnabled, setTransport, setUsageStore, extractJson, availability, checkModelConfig, modelName, limits };

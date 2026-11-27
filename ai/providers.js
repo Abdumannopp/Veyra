@@ -1,4 +1,5 @@
-// The AI providers VEYRA can use. Exactly ONE is active for the whole server (AI_PROVIDER); every model call goes
+// The AI providers VEYRA can use. The server holds the keys (environment only). AI_PROVIDER is the server's DEFAULT
+// provider; each company may choose another one of the providers the server has ready (key + model). Every model call goes
 // through ai/gateway.js, which keeps the same rules (consent, quota, ledger, redaction, answer check) for all of them.
 //
 // Each adapter turns one request into the provider's own HTTP format and reads the answer back into the same shape:
@@ -142,9 +143,8 @@ function activeId() {
   return IDS.find((id) => process.env[PROVIDERS[id].keyEnv]) || 'openrouter';
 }
 
-// Everything the screens and the gateway need to know, without the key itself.
-function status() {
-  const id = activeId();
+// Everything the screens and the gateway need to know about one provider, without the key itself.
+function statusOf(id) {
   const provider = PROVIDERS[id];
   if (!provider) return { id, name: id, ready: false, problem: `AI_PROVIDER="${id}" is not known. Use one of: ${IDS.join(', ')}.`, model: null, keyEnv: null, modelEnv: null };
   const hasKey = Boolean(process.env[provider.keyEnv]);
@@ -155,6 +155,21 @@ function status() {
   return { id, name: provider.name, ready: !problem, problem, model: model || null, keyEnv: provider.keyEnv, modelEnv: provider.modelEnv, modelRequired: provider.modelRequired };
 }
 
+// The server's default provider.
+const status = () => statusOf(activeId());
 const active = () => PROVIDERS[activeId()] || null;
 
-module.exports = { PROVIDERS, IDS, activeId, active, status, plainParts };
+// Every provider and whether the server has it ready (for a company's choice).
+const options = () => IDS.map((id) => {
+  const state = statusOf(id);
+  return { id, name: state.name, ready: state.ready, model: state.model, problem: state.problem, isDefault: id === activeId() };
+});
+
+// The provider a company uses: its own choice, else the server default. A choice that is no longer ready is NOT
+// replaced by another provider (the company agreed to send data to that one only): AI stays off and `problem` says why.
+function resolve(choice) {
+  if (!choice) return { ...status(), chosen: false };
+  return { ...statusOf(choice), chosen: true };
+}
+
+module.exports = { PROVIDERS, IDS, activeId, active, status, statusOf, options, resolve, plainParts };
