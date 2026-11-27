@@ -61,7 +61,7 @@ Every AI request is recorded: **Analytics → AI agents** shows how many request
 
 **AI data sharing (must be switched on once):** the AI helpers send the order text or document to the outside provider Google (Gemini). If the server changes provider, an administrator must allow sharing again. Nothing is sent until an administrator allows it in **Team & settings → AI data sharing**. It can be switched off any time; who changed it and when is in the activity log. Passwords and keys found in typed or emailed **text** are removed before sending. **Document files (PDF, photos) are sent as they are**: anything on the paper reaches the provider.
 
-**When AI leaves a field empty:** a number that can be read two ways (`1,250`: one thousand or one and a quarter?), a weight with no unit, or a date that does not exist is never guessed: the field stays empty with a note "check by hand". A message longer than 4000 characters is not read at all (never half-read): fill the form yourself. Rules: [docs/AI.md](docs/AI.md).
+**When AI leaves a field empty:** a number that can be read two ways (`1,250`: one thousand or one and a quarter?), a weight with no unit, or a date that does not exist is never guessed: the field stays empty with a note "check by hand". A long **email** (up to 20 000 characters) is read in parts and merged into one draft; if two parts say different things (for example two delivery cities), the field stays empty and the Inbox shows both so you choose. If one part cannot be read, no draft is made and the email waits for you. Text you paste into New Shipment is read up to 4000 characters. Rules: [docs/AI.md](docs/AI.md).
 
 The **Quick Shipment Draft** card on the dashboard just copies your latest load into a new draft; it does not use AI.
 

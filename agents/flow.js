@@ -4,8 +4,8 @@
 //
 // Safety rules (each covered by tests):
 // - "Today" is the company's own calendar day (its time zone), not the server's UTC day.
-// - A message longer than MAX_INPUT_CHARS is NOT cut and read in part: FLOW refuses it, so nothing at the end of an
-//   email can be lost silently. A person reads it instead.
+// - parseOrder refuses text longer than MAX_INPUT_CHARS. A longer EMAIL goes through parseEmail: it is split into parts
+//   that together are the whole email, each part is read, and the answers are merged (see below). Nothing is cut away.
 // - Numbers are read with lib/numbers.js: "18,5" is 18.5; an ambiguous "1,250" is left empty for a person.
 // - The model's answer must pass a strict shape check (ai/schema.js) before any field is used.
 // - Dates that are not real calendar days are left empty for a person.
@@ -168,4 +168,198 @@ async function parseOrder(text, settings, { log, usage } = {}) {
   return validateDraft(raw, { ...settings, today });
 }
 
-module.exports = { parseOrder, validateDraft, assertReadable, MAX_INPUT_CHARS };
+/* ---------------- long emails: read in parts, then merged ---------------- */
+// An email longer than MAX_INPUT_CHARS is split into parts of PART_MIN..PART_MAX characters, cut at a paragraph or
+// sentence end where possible. Joined again, the parts are exactly the email: nothing is dropped or cut away. Each part
+// is one normal gateway call (consent, quota unit, ledger row, redaction, answer check). The answers are merged:
+// a field stated in one part fills the gap left by another; the same value in several parts counts once; two parts that
+// disagree are NOT decided by the machine: the field is left empty and the disagreement is shown to a person.
+const PART_MIN = 3500;
+const PART_MAX = 3800;
+// Bounds on size and cost: longer emails are left for a person (no AI call at all).
+const MAX_EMAIL_CHARS = 20000;
+const MAX_PARTS = 6;
+
+// Where to cut inside [from, to): the last paragraph break, else line or sentence end, else space; -1 if none.
+function cutPoint(text, from, to) {
+  const window = text.slice(from, to);
+  for (const pattern of [/\n\s*\n/g, /\n/g, /[.!?;](?=\s)/g, /\s/g]) {
+    let last = -1;
+    for (const match of window.matchAll(pattern)) last = match.index + match[0].length;
+    if (last > 0) return from + last;
+  }
+  return -1;
+}
+
+// The email body in parts. firstRoom: characters the first part may use (the subject line takes the rest).
+function splitEmail(body, { firstRoom = PART_MAX } = {}) {
+  const text = String(body ?? '');
+  const parts = [];
+  let position = 0;
+  while (position < text.length) {
+    const room = parts.length === 0 ? firstRoom : PART_MAX;
+    if (text.length - position <= room) {
+      parts.push(text.slice(position));
+      break;
+    }
+    const min = Math.max(1, room - (PART_MAX - PART_MIN));
+    // Prefer a cut between PART_MIN and PART_MAX; else any natural break in the part; else a hard cut at the limit.
+    let end = cutPoint(text, position + min, position + room);
+    if (end === -1) end = cutPoint(text, position + Math.floor(room / 2), position + room);
+    if (end === -1) end = position + room;
+    parts.push(text.slice(position, end));
+    position = end;
+  }
+  return parts;
+}
+
+const crypto = require('node:crypto');
+// The same email (subject and body) always gives the same fingerprint: a re-read reuses the parts already paid for.
+const emailFingerprint = (subject, body) => crypto.createHash('sha256').update(`${subject || ''}\u0000${body || ''}`).digest('hex');
+
+function tooLong(length) {
+  const error = httpError(413, `This email has ${length} characters; FLOW reads emails of at most ${MAX_EMAIL_CHARS} characters (${MAX_PARTS} parts) so that cost stays bounded. Please read it and fill the form by hand.`);
+  error.code = 'AI_INPUT_TOO_LONG';
+  error.details = { length, max: MAX_EMAIL_CHARS, maxParts: MAX_PARTS };
+  return error;
+}
+
+// Values compared after normalising how they are written, never after guessing what they mean.
+const KG_FACTOR = { kg: 1, kgs: 1, t: 1000, ton: 1000, tons: 1000, tonne: 1000, tonnes: 1000, lb: KG_PER_LB, lbs: KG_PER_LB };
+function sameKey(field, raw) {
+  if (field === 'weight') {
+    const amount = parsePositiveAmount(raw.weight ?? '', { max: 1e12 });
+    const factor = KG_FACTOR[String(raw.weightUnit || '').trim().toLowerCase()];
+    if (amount.ok && factor) return `kg:${Math.round(amount.value * factor * 1000) / 1000}`;
+    return `raw:${String(raw.weight).trim().toLowerCase()}|${String(raw.weightUnit || '').trim().toLowerCase()}`;
+  }
+  if (field === 'customerRate') {
+    const amount = parsePositiveAmount(raw.customerRate ?? '', { max: 1e15 });
+    const currency = String(raw.customerRateCurrency || '').trim().toUpperCase();
+    return amount.ok ? `${amount.value}|${currency}` : `raw:${String(raw.customerRate).trim()}|${currency}`;
+  }
+  const value = raw[field];
+  if (field === 'customerPhone') return String(value).replace(/[^\d+]/g, '');
+  return String(value).toLowerCase().replace(/\s+/g, ' ').replace(/[.,;:]+$/, '').trim();
+}
+const shown = (field, raw) => (field === 'weight' ? `${raw.weight}${raw.weightUnit ? ` ${raw.weightUnit}` : ''}`
+  : field === 'customerRate' ? `${raw.customerRate}${raw.customerRateCurrency ? ` ${raw.customerRateCurrency}` : ''}` : String(raw[field]));
+const MERGED_FIELDS = ['customer', 'customerPhone', 'reference', 'origin', 'destination', 'pickup', 'delivery', 'weight', 'equipment', 'customerRate'];
+const PAIRED = { weight: 'weightUnit', customerRate: 'customerRateCurrency' };
+const FIELD_LABELS = { customer: 'customer', customerPhone: 'customer phone', reference: 'order reference', origin: 'origin', destination: 'destination', pickup: 'pickup date', delivery: 'delivery date', weight: 'weight', equipment: 'equipment', customerRate: 'customer price' };
+const present = (value) => value !== null && value !== undefined && value !== '';
+
+// The parts' answers (each already passed FLOW_SCHEMA) as ONE answer, plus the disagreements.
+function mergeAnswers(answers) {
+  const merged = { questions: [], confidence: null };
+  const conflicts = [];
+  for (const field of MERGED_FIELDS) {
+    const seen = new Map(); // key -> { raw, parts }
+    answers.forEach((raw, index) => {
+      if (!present(raw[field])) return;
+      const key = sameKey(field, raw);
+      if (!seen.has(key)) seen.set(key, { raw, parts: [] });
+      seen.get(key).parts.push(index + 1);
+    });
+    const pair = PAIRED[field];
+    if (seen.size === 1) {
+      const [{ raw }] = seen.values();
+      merged[field] = raw[field];
+      if (pair) merged[pair] = raw[pair] ?? null;
+    } else {
+      merged[field] = null;
+      if (pair) merged[pair] = null;
+      if (seen.size > 1) {
+        conflicts.push({ field, values: [...seen.values()].map(({ raw, parts }) => ({ value: shown(field, raw), parts })) });
+      }
+    }
+  }
+  const questions = new Map();
+  for (const raw of answers) {
+    for (const question of raw.questions || []) {
+      const key = String(question).toLowerCase().replace(/\s+/g, ' ').trim();
+      if (key && !questions.has(key)) questions.set(key, question);
+    }
+  }
+  merged.questions = [...questions.values()];
+  // The least sure part decides how sure the whole draft is.
+  const confidences = answers.map((raw) => Number(raw.confidence)).filter(Number.isFinite);
+  merged.confidence = confidences.length ? Math.min(...confidences) : 0;
+  return { merged, conflicts };
+}
+
+/**
+ * Reads one email: subject and body. Up to MAX_INPUT_CHARS as before (one call); longer emails in parts.
+ * @param {{subject?: string, body: string}} email
+ * @param {object} settings  as for parseOrder
+ * @param {{log?: Function, usage: object, availability?: Function, onPart?: Function}} ctx  availability(n): checks the budget
+ *   for n calls before any is made; onPart({ done, parts, answers, fingerprint }): called after each part.
+ * @param {{previous?: object}} options  previous: a stored incomplete reading of the SAME email; its parts are reused.
+ * The result is parseOrder's, plus parts, conflicts and fingerprint. A failed part throws AI_PART_FAILED with
+ * error.partial = { incomplete: true, fingerprint, parts, answers: [answer | null], failedPart } to store and resume.
+ */
+async function parseEmail({ subject = '', body = '' }, settings, ctx = {}, { previous = null } = {}) {
+  const head = `Subject: ${subject || ''}\n\n`;
+  const fingerprint = emailFingerprint(subject, body);
+  if ((head + body).length <= MAX_INPUT_CHARS) {
+    return { ...(await parseOrder(head + body, settings, ctx)), parts: 1, conflicts: [], fingerprint };
+  }
+  if (String(body).length > MAX_EMAIL_CHARS) throw tooLong(String(body).length);
+  const chunks = splitEmail(body, { firstRoom: Math.max(1000, PART_MAX - head.length) });
+  if (chunks.length > MAX_PARTS) throw tooLong(String(body).length);
+
+  // Parts already read for this exact email (an earlier attempt that stopped half-way) are not paid for again.
+  const reuse = previous?.incomplete && previous.fingerprint === fingerprint && Array.isArray(previous.answers) && previous.answers.length === chunks.length;
+  const answers = reuse ? previous.answers.slice() : chunks.map(() => null);
+  const missing = answers.filter((answer) => !answer).length;
+  if (missing && typeof ctx.availability === 'function') {
+    const available = await ctx.availability(missing);
+    if (!available.ok) {
+      const error = available.error || Object.assign(httpError(available.code === 'AI_CONSENT_REQUIRED' ? 403 : 503, available.reason), { code: available.code });
+      throw error;
+    }
+  }
+
+  const timeZone = timeLib.timeZoneOr(settings.timeZone);
+  const today = timeLib.localDate(timeZone, settings.now || new Date());
+  for (let index = 0; index < chunks.length; index += 1) {
+    if (answers[index]) continue;
+    const text = (index === 0 ? head : '') + chunks[index];
+    try {
+      answers[index] = await completeJson({
+        agent: 'FLOW',
+        system: `${buildSystemPrompt({ ...settings, today, timeZone })}\nThis message is PART ${index + 1} OF ${chunks.length} of one long email; other parts are read separately. Extract only what THIS part states; use null for everything else.`,
+        user: `<order part="${index + 1}/${chunks.length}">\n${text.replace(/<\/?order[^>]*>/gi, '')}\n</order>`,
+        log: ctx.log,
+        usage: ctx.usage,
+        validate: (answer) => validateShape(answer, FLOW_SCHEMA)
+      });
+    } catch (cause) {
+      // The gateway has already retried once. The whole email is not accepted on part of its answers.
+      const error = httpError(cause.statusCode === 429 || cause.statusCode === 403 ? cause.statusCode : 502,
+        `FLOW could not read part ${index + 1} of ${chunks.length} of this email (${cause.message}) Nothing was filled in; please read it by hand or try again.`);
+      error.code = cause.code === 'AI_QUOTA_EXCEEDED' || cause.code === 'AI_CONSENT_REQUIRED' ? cause.code : 'AI_PART_FAILED';
+      error.details = { part: index + 1, parts: chunks.length, cause: cause.code || null };
+      if (cause.retryAfterSeconds) error.retryAfterSeconds = cause.retryAfterSeconds;
+      error.partial = { incomplete: true, fingerprint, parts: chunks.length, answers, failedPart: index + 1 };
+      throw error;
+    }
+    // Progress for the Inbox screen ("part 2 of 4 read"); a failure to show progress never stops the reading.
+    if (typeof ctx.onPart === 'function') await Promise.resolve(ctx.onPart({ done: answers.filter(Boolean).length, parts: chunks.length, answers, fingerprint })).catch(() => {});
+  }
+
+  const { merged, conflicts } = mergeAnswers(answers);
+  const result = validateDraft(merged, { ...settings, today });
+  const disagreements = conflicts.map(({ field, values }) => `The parts of the email disagree on the ${FIELD_LABELS[field]}: ${values.map((item) => `"${item.value.slice(0, 60)}" (part ${item.parts.join(', ')})`).join(' vs ')}. Please check it.`);
+  return {
+    ...result,
+    notes: [...result.notes, ...disagreements],
+    review: [...result.review, ...disagreements],
+    needsReview: result.needsReview || conflicts.length > 0,
+    conflicts,
+    parts: chunks.length,
+    fingerprint
+  };
+}
+
+module.exports = { parseOrder, parseEmail, splitEmail, mergeAnswers, emailFingerprint, validateDraft, assertReadable, MAX_INPUT_CHARS, MAX_EMAIL_CHARS, MAX_PARTS, PART_MIN, PART_MAX };

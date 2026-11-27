@@ -203,23 +203,26 @@ async function onInboxReceived({ tenantId, inboxId }) {
   let parsed = item.parsed;
   let note = null;
   const files = (item.attachments || []).map((file) => ({ id: file.id, filename: file.filename, size: file.size }));
-  if (item.status === 'new' && !item.body.trim()) {
+  // 'reading': a reading that stopped half-way (a restart); the job runs again and reuses the parts already read.
+  const fresh = item.status === 'new' || item.status === 'reading';
+  if (fresh && !item.body.trim()) {
     note = 'This email has only files, no text. Attach them to a load, or create a new load.';
-  } else if (item.status === 'new' && !(await automationOn(tenantId, 'readOrders'))) {
+  } else if (fresh && !(await automationOn(tenantId, 'readOrders'))) {
     note = 'Reading order emails is switched off in the AI Command Center.';
-  } else if (item.status === 'new') {
+  } else if (fresh) {
     const ai = await aiAvailable(tenantId);
     if (!ai.ok) {
       note = ai.reason;
     } else {
       try {
-        parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, { ...settings.flow, ...(await regionFor(tenantId)) }, aiContext(tenantId));
-        await db.updateInboxItem(tenantId, inboxId, { status: 'parsed', parsed });
+        parsed = await readEmail(tenantId, item, aiContext(tenantId));
         if (parsed.needsReview) note = `Check by hand before creating the load: ${parsed.review.join(' ')}`;
       } catch (error) {
-        // Too long, no consent, no quota left, or an answer that failed the checks: a person reads the email.
+        // Too long, no consent, no quota left, a part that could not be read: a person reads the email. Nothing half
+        // read is offered as a draft; the parts already read are kept so a new attempt does not pay for them again.
         note = error.code ? error.message : 'FLOW could not read this email automatically.';
-        await db.updateInboxItem(tenantId, inboxId, { status: 'failed', error: error.message });
+        parsed = null;
+        await db.updateInboxItem(tenantId, inboxId, { status: 'failed', error: error.message, parsed: error.partial || null });
       }
     }
   }
@@ -234,6 +237,22 @@ async function onInboxReceived({ tenantId, inboxId }) {
     dedupeKey: `inbox:${inboxId}`,
     payload: { from: item.from, subject: item.subject, preview: item.body.slice(0, 300), parsed, note, files }
   });
+}
+
+// Reads an inbox email with FLOW (in parts when it is long) and saves the result. Shared with the Inbox "Read with AI"
+// button (server.js), so both paths behave the same: progress while reading, the same reuse of parts already read.
+async function readEmail(tenantId, item, ctx) {
+  const previous = item.parsed?.incomplete ? item.parsed : null;
+  const result = await flowAgent.parseEmail({ subject: item.subject || '', body: item.body }, { ...settings.flow, ...(await regionFor(tenantId)) }, {
+    ...ctx,
+    availability: (units) => aiGateway.availability(tenantId, { userId: ctx.usage?.userId || null, units }),
+    // Progress (and the parts read so far) are saved after each part: the screen shows it, and a restart resumes.
+    onPart: ({ done, parts, answers, fingerprint }) => db.updateInboxItem(tenantId, item.id, {
+      status: 'reading', parsed: { reading: true, incomplete: true, done, parts, answers, fingerprint }
+    })
+  }, { previous });
+  await db.updateInboxItem(tenantId, item.id, { status: 'parsed', parsed: result, error: null });
+  return result;
 }
 
 /* ---------- an email's files were put on a load ---------- */
@@ -901,4 +920,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { AUTOMATIONS, AI_AUTOMATIONS, configure, emit, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, stopSweep, retentionSweep, poolingSweep, startSweeper, stopSweeper };
+module.exports = { AUTOMATIONS, AI_AUTOMATIONS, configure, emit, readEmail, idle, sweep, sentinelSweep, delaySweep, warehouseSweep, stopSweep, retentionSweep, poolingSweep, startSweeper, stopSweeper };

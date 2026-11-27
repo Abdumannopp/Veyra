@@ -414,6 +414,7 @@ function bindShipmentActions() {
       if (name === 'pickup' || name === 'delivery') field.value = '';
       field.classList.add('needs-input');
     });
+    window.VeyraPendingInboxText = extra.emailText || null;
     if (extra.emailText) {
       const text = document.getElementById('aiOrderText');
       if (text) text.value = extra.emailText;
@@ -512,7 +513,13 @@ function bindFlowIntake(form) {
     findings.replaceChildren();
     form.querySelectorAll('.needs-input').forEach((node) => node.classList.remove('needs-input'));
     try {
-      const response = await fetch('/api/agents/flow/parse', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ text: text.value }) });
+      // The text is the inbox email itself (not edited): read it through the inbox, so a long email is read in parts
+      // and a reading already made is reused. Any other text goes to FLOW as typed.
+      const fromInbox = Number.isInteger(window.VeyraPendingInbox) && text.value === window.VeyraPendingInboxText;
+      if (fromInbox && text.value.length > 4000) status.textContent = 'FLOW is reading this long email in parts…';
+      const response = fromInbox
+        ? await fetch(`/api/inbox/${window.VeyraPendingInbox}/parse`, { method: 'POST', headers: getAuthHeaders(), body: '{}' })
+        : await fetch('/api/agents/flow/parse', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ text: text.value }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'FLOW could not read the message');
       FLOW_FIELDS.forEach((name) => {
@@ -532,6 +539,7 @@ function bindFlowIntake(form) {
         ...result.questions.map((question) => createTextElement('li', 'question', `Ask the customer: ${question}`))
       ];
       findings.replaceChildren(...items);
+      if (result.parts > 1) findings.prepend(createTextElement('li', 'note', `Long email: all ${result.parts} parts were read and merged.`));
       status.textContent = result.missing.length
         ? `Filled what was in the message. ${result.missing.length} field(s) still needed — marked in yellow.`
         : 'All fields filled. Check them, then press Create load.';

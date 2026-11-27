@@ -979,11 +979,19 @@
           ['Weight', draft.weight ? `${draft.weight} ${window.VeyraConfig?.weightUnit || 'kg'}` : null], ['Equipment', draft.equipment],
           ['Price', draft.customerRate ? money(draft.customerRate) : null]
         ].map(([label, value]) => el('li', { class: value ? '' : 'missing' }, [el('span', { text: label }), el('strong', { text: value || 'missing' })]))));
+        // A long email was read in parts and merged: say so, and show first what a person must decide.
+        if (payload.parsed.parts > 1) body.append(el('p', { class: 'muted', text: `Long email: all ${payload.parsed.parts} parts were read and merged into one draft.` }));
+        (payload.parsed.conflicts || []).forEach((conflict) => body.append(el('p', { class: 'warn-line', text: `Check: the email gives different ${conflict.field === 'customerRate' ? 'prices' : conflict.field === 'customerPhone' ? 'phone numbers' : `${conflict.field} values`}: ${conflict.values.map((item) => `${item.value} (part ${item.parts.join(', ')})`).join(' / ')}. Left empty for you to choose.` })));
+        const review = new Set(payload.parsed.review || []);
         (payload.parsed.questions || []).forEach((question) => body.append(el('p', { class: 'task-question', text: `Ask the customer: ${question}` })));
-        (payload.parsed.notes || []).forEach((note) => body.append(el('p', { class: 'muted', text: note })));
+        (payload.parsed.notes || []).filter((note) => !(payload.parsed.conflicts?.length && /parts of the email disagree/.test(note)))
+          .forEach((note) => body.append(el('p', { class: review.has(note) ? 'warn-line' : 'muted', text: note })));
       } else {
         body.append(el('p', { text: payload.preview || '' }));
         body.append(el('p', { class: 'warn-line', text: payload.note || 'Not read yet.' }));
+        const item = (state.inbox?.items || []).find((entry) => entry.id === task.inboxId);
+        const progress = item ? readingLine(item) : null;
+        if (progress && progress.textContent !== payload.note) body.append(progress);
       }
       const files = (state.inbox?.items || []).find((entry) => entry.id === task.inboxId)?.attachments || [];
       if (files.length) body.append(fileList(task.inboxId, files));
@@ -1153,11 +1161,21 @@
     container.replaceChildren(...sections);
   }
 
+  // Where FLOW is with a long email: reading (part x of n), or which part could not be read.
+  function readingLine(item) {
+    const parsed = item.parsed || {};
+    if (item.status === 'reading' && parsed.parts) return el('p', { class: 'muted', text: `FLOW is reading this long email: ${parsed.done || 0} of ${parsed.parts} parts read…` });
+    if (item.status === 'failed' && parsed.incomplete) return el('p', { class: 'warn-line', text: `FLOW read ${(parsed.answers || []).filter(Boolean).length} of ${parsed.parts} parts; part ${parsed.failedPart} could not be read, so no draft was made. "Read with AI" tries again (parts already read are not paid for twice), or fill the form by hand.` });
+    if (item.status === 'failed' && item.error) return el('p', { class: 'warn-line', text: item.error });
+    return null;
+  }
+
   function emailCard(item, blocked = false) {
     return el('article', { class: 'card task-card' }, [
       el('header', {}, [el('strong', { text: item.subject || '(no subject)' }), el('small', { class: 'muted', text: item.from || '' })]),
       el('div', { class: 'task-body' }, [
         el('p', { text: item.body.slice(0, 400) }),
+        blocked ? null : readingLine(item),
         !blocked && item.attachments?.length ? fileList(item.id, item.attachments) : null
       ]),
       el('div', { class: 'task-actions' }, [

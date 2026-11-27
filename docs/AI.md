@@ -98,8 +98,25 @@ a guarantee: do not upload or send anything that should not leave the company.
   written" (`weightUnitAssumed: true`) and the weight check is "Check by hand", never "ok".
 - **Dates**: "today" for FLOW is the company's own day in its time zone (Team & settings → region). If no valid zone is set,
   **UTC** is used. A date that is not a real calendar day is left empty for a person.
-- **Length**: FLOW reads at most 4000 characters (for email: subject and body together). Longer text is **not cut**: the
-  screen answers `413` (`AI_INPUT_TOO_LONG`) and NEXUS leaves the email for a person.
+- **Length**: one FLOW call reads at most 4000 characters (text pasted into New Shipment: longer gets `413`
+  `AI_INPUT_TOO_LONG`, never cut). An **email** (subject and body together) longer than that is read **in parts**:
+  - The body is split into parts of 3 500–3 800 characters, cut at a paragraph, line or sentence end where possible.
+    Joined again, the parts are exactly the email: nothing is dropped. The subject goes with the first part only.
+  - Limits: at most **20 000 characters** and **6 parts** per email. A longer email gets no AI call at all (no cost) and
+    is left for a person. Before the first part, the gateway checks that the company's (and person's) budget has room
+    for **all** parts; otherwise nothing is started.
+  - Each part is one normal gateway call: consent, one quota unit, one `ai_calls` row with its tokens, redaction, the
+    answer check, one retry. The model is told it reads part *i* of *n* and must not follow instructions in the text.
+  - Merging: a field stated in one part fills the gap of another; the same value in several parts counts once (spelling
+    and units are normalised: "18 t" = "18000 kg"); questions are merged without repeats; the confidence is the lowest of
+    the parts. **Parts that disagree are not decided by the machine**: the field stays empty and the Inbox shows each
+    value with its part, for the operator to choose. Nothing is guessed.
+  - A part that still fails after the retry: **no draft** is made from the rest. The email stays in the Inbox (status
+    `failed`, with the part that failed). The parts already read are kept, so "Read with AI" later pays only for the
+    parts still missing. An email already read is not read again (same subject and body = the stored draft, no cost).
+  - Progress ("2 of 4 parts read") is shown in the Inbox while the email is read. No load is ever created without the
+    operator pressing Create load.
+  - Emails are stored up to 100 000 characters (before: cut silently at 8 000). A longer one ends with a visible note.
 - **Receiver signature**: checked only on a proof of delivery (POD). Signed = ok; clearly not signed = a problem to fix;
   not readable = a person checks. A CMR does not get a signature warning.
 

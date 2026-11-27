@@ -98,14 +98,17 @@ function consentError() {
 }
 
 // Is AI allowed for this company right now? Used by screens and by NEXUS before queuing work; it takes nothing.
-async function availability(tenantId, { userId = null, now = new Date() } = {}) {
+// units: how many model requests the work needs (a long email read in parts needs one per part). Work that cannot
+// finish within the budget is not started, so no money is spent on a result that would be thrown away.
+async function availability(tenantId, { userId = null, now = new Date(), units = 1 } = {}) {
+  const need = Math.max(1, Number(units) || 1);
   if (!isEnabled()) return { ok: false, code: 'AI_OFF', reason: 'AI is off.' };
   const db = usageStore();
   if (!(await hasConsent(db, tenantId))) return { ok: false, code: 'AI_CONSENT_REQUIRED', reason: consentError().message };
   const { companyPerDay, personPerHour } = limits();
   const w = windows(now);
-  if ((await db.aiQuotaUsed(tenantId, w.day.key)) >= companyPerDay) return { ok: false, code: 'AI_QUOTA_EXCEEDED', reason: quotaError('company_daily', companyPerDay, w.day.resetSeconds).message, error: quotaError('company_daily', companyPerDay, w.day.resetSeconds) };
-  if (userId && (await db.aiQuotaUsed(tenantId, w.hour(userId).key)) >= personPerHour) return { ok: false, code: 'AI_QUOTA_EXCEEDED', reason: quotaError('user_hourly', personPerHour, w.hour(userId).resetSeconds).message, error: quotaError('user_hourly', personPerHour, w.hour(userId).resetSeconds) };
+  if ((await db.aiQuotaUsed(tenantId, w.day.key)) + need > companyPerDay) return { ok: false, code: 'AI_QUOTA_EXCEEDED', reason: quotaError('company_daily', companyPerDay, w.day.resetSeconds).message, error: quotaError('company_daily', companyPerDay, w.day.resetSeconds) };
+  if (userId && (await db.aiQuotaUsed(tenantId, w.hour(userId).key)) + need > personPerHour) return { ok: false, code: 'AI_QUOTA_EXCEEDED', reason: quotaError('user_hourly', personPerHour, w.hour(userId).resetSeconds).message, error: quotaError('user_hourly', personPerHour, w.hour(userId).resetSeconds) };
   return { ok: true };
 }
 

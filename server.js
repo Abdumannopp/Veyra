@@ -2317,10 +2317,15 @@ app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:cr
     const item = await getInboxItem(req.user.tenantId, itemId);
     if (!item) return res.status(404).json({ success: false, message: 'Message not found.' });
     if (['converted', 'dismissed'].includes(item.status)) return res.status(409).json({ success: false, message: 'This message was already handled.' });
-    const parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, flowSettings(req.user.region), aiContext(req));
-    await updateInboxItem(req.user.tenantId, itemId, { status: 'parsed', parsed, error: null });
+    // Already read, and the email has not changed: the stored draft is returned, no new AI cost.
+    if (item.status === 'parsed' && item.parsed?.draft && item.parsed.fingerprint === flowAgent.emailFingerprint(item.subject || '', item.body)) {
+      return res.json({ success: true, ...item.parsed, reused: true });
+    }
+    // Same path as NEXUS: a long email is read in parts; parts read in an earlier attempt are reused.
+    const parsed = await nexus.readEmail(req.user.tenantId, item, aiContext(req));
     return res.json({ success: true, ...parsed });
   } catch (error) {
+    if (error.partial) await updateInboxItem(req.user.tenantId, itemId, { status: 'failed', error: error.message, parsed: error.partial }).catch(() => {});
     return sendError(res, error, 'The AI assistant is unavailable.', 'inbox parse');
   }
 });

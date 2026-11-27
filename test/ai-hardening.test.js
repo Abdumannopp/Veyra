@@ -173,20 +173,25 @@ test('FLOW: under, exactly at and over the limit; never cut', async () => {
   assert.equal(requests.length, 2, 'nothing was sent for the long message');
 });
 
-test('NEXUS: an email whose subject plus body is too long goes to a person, with no AI call', async () => {
+test('NEXUS: an email whose subject plus body is over the limit is read in parts (subject in the first), never cut', async () => {
   const requests = fakeProvider();
   const token = (await (await call(admin, 'POST', '/api/settings/inbox/token')).json()).token;
   const subject = 'S'.repeat(100);
-  const body = 'B'.repeat(flow.MAX_INPUT_CHARS - 50); // short alone, too long with the subject
+  const body = `${'B'.repeat(flow.MAX_INPUT_CHARS - 51)}Z`; // short alone, too long with the subject
   const res = await fetch(`${base}/api/integrations/inbox/${token}`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ From: 'long@x.example', Subject: subject, TextBody: body, MessageID: 'long-1' })
   });
   assert.ok(res.status < 300, `inbound accepted (${res.status})`);
   await require('../agents/nexus').idle();
-  assert.equal(requests.length, 0);
+  assert.equal(requests.length, 2, 'two parts, two model calls');
+  const texts = requests.map((r) => r.body.contents[0].parts[0].text);
+  assert.ok(texts[0].includes(`Subject: ${subject}`));
+  assert.ok(!texts[1].includes('Subject:'), 'the subject only in the first part');
+  assert.ok(texts[1].includes('Z\n</order>'), 'the last character of the email is read');
   const task = (await (await call(admin, 'GET', '/api/tasks')).json()).tasks.find((t) => t.payload?.from === 'long@x.example');
-  assert.match(task.payload.note, /reads at most/);
+  assert.equal(task.payload.parsed.parts, 2);
+  assert.ok(task.payload.parsed.draft);
 });
 
 /* ---------------- quota ---------------- */

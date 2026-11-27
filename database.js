@@ -2555,7 +2555,10 @@ async function getAlerts(tenantId, { staleHours = 12 } = {}) {
 
 /* ---------------- inbox (incoming email) ---------------- */
 
-const INBOX_BODY_MAX = 8000;
+// Long enough for every email FLOW can read (flow.MAX_EMAIL_CHARS) and more. A longer body is kept up to this size and
+// ends with a visible note, so nobody mistakes it for the whole email (it was cut silently at 8000 before).
+const INBOX_BODY_MAX = 100000;
+const INBOX_CUT_NOTE = '\n\n[VEYRA: this email was longer than 100000 characters; the rest is not stored. Read the original in your mailbox.]';
 
 function mapInboxItem(row) {
   let parsed = null;
@@ -2581,7 +2584,8 @@ function mapInboxItem(row) {
 // Returns { item, duplicate }. The same message (same external id) is stored once.
 async function createInboxItem(tenantId, { externalId, from, subject, body, status = 'new', source = 'email' }) {
   assertTenant(tenantId);
-  const text = String(body || '').slice(0, INBOX_BODY_MAX);
+  const full = String(body || '');
+  const text = full.length > INBOX_BODY_MAX ? full.slice(0, INBOX_BODY_MAX - INBOX_CUT_NOTE.length) + INBOX_CUT_NOTE : full;
   const result = await run(
     `INSERT OR IGNORE INTO inbox_items (tenant_id, source, external_id, from_address, subject, body, status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [tenantId, source, externalId || null, from ? String(from).slice(0, 254) : null, subject ? String(subject).slice(0, 300) : null, text, status]
