@@ -8,7 +8,7 @@ const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-legs-ops-'));
 Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'o.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', CURRENCY: 'USD' });
-delete process.env.OPENROUTER_API_KEY;
+delete process.env.GEMINI_API_KEY;
 
 const database = require('../database');
 const { runAsSystem, runAsTenant } = require('../lib/tenant-context');

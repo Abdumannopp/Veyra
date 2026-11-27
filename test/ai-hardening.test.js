@@ -15,9 +15,9 @@ process.env.BCRYPT_COST = '10';
 process.env.API_RATE_LIMIT_MAX = '5000';
 process.env.WEIGHT_UNIT = 'kg';
 process.env.CURRENCY = 'UZS';
-process.env.OPENROUTER_API_KEY = 'sk-or-hardening-test-key-123456';
+process.env.GEMINI_API_KEY = 'AIzaHardeningTestKey0123456789abcdefghij';
 process.env.JWT_SECRET = 'jwt-secret-for-hardening-tests-0123456789';
-process.env.OPENROUTER_MODEL = 'test/model';
+process.env.GEMINI_MODEL = 'test/model';
 
 const { app, initialize } = require('../server');
 const database = require('../database');
@@ -60,8 +60,8 @@ function fakeProvider(reply = () => flowAnswer(), { delayMs = 0 } = {}) {
     const next = reply(requests.length);
     if (next && next.status) return new Response(JSON.stringify({ error: { message: 'upstream' } }), { status: next.status });
     return new Response(JSON.stringify({
-      model: 'test/model', choices: [{ message: { content: typeof next === 'string' ? next : JSON.stringify(next) } }],
-      usage: { prompt_tokens: 100, completion_tokens: 20 }
+      modelVersion: 'test/model', candidates: [{ content: { parts: [{ text: typeof next === 'string' ? next : JSON.stringify(next) }] } }],
+      usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 20 }
     }), { status: 200, headers: { 'content-type': 'application/json' } });
   });
   return requests;
@@ -152,11 +152,11 @@ test('FLOW: "today" is the company\'s day around the UTC boundary; no zone = UTC
   await ask('America/New_York');
   await ask(null);
   await ask('Not/AZone');
-  const todays = requests.map((r) => /Today is (\d{4}-\d{2}-\d{2}) in the company's time zone \(([^)]+)\)/.exec(r.body.messages[0].content).slice(1));
+  const todays = requests.map((r) => /Today is (\d{4}-\d{2}-\d{2}) in the company's time zone \(([^)]+)\)/.exec(r.body.systemInstruction.parts[0].text).slice(1));
   assert.deepEqual(todays, [['2026-11-24', 'Asia/Tashkent'], ['2026-11-23', 'America/New_York'], ['2026-11-23', 'UTC'], ['2026-11-23', 'UTC']]);
   // Just after midnight UTC: New York is still on the day before.
   await runAsTenant(TENANT, () => flow.parseOrder('order', { weightUnit: 'kg', currency: 'UZS', equipment: [], maxRate: 1, maxWeight: 1, timeZone: 'America/New_York', now: new Date('2026-11-24T00:30:00Z') }, { usage: { tenantId: TENANT } }));
-  assert.match(requests.at(-1).body.messages[0].content, /Today is 2026-11-23/);
+  assert.match(requests.at(-1).body.systemInstruction.parts[0].text, /Today is 2026-11-23/);
 });
 
 /* ---------------- long messages ---------------- */
@@ -168,7 +168,7 @@ test('FLOW: under, exactly at and over the limit; never cut', async () => {
   await runAsTenant(TENANT, () => flow.parseOrder('x'.repeat(max - 1), settings, { usage: { tenantId: TENANT } }));
   await runAsTenant(TENANT, () => flow.parseOrder(`${'y'.repeat(max - 1)}Z`, settings, { usage: { tenantId: TENANT } }));
   assert.equal(requests.length, 2);
-  assert.ok(requests[1].body.messages[1].content.includes('Z\n</order>'), 'the last character of the message is sent');
+  assert.ok(requests[1].body.contents[0].parts[0].text.includes('Z\n</order>'), 'the last character of the message is sent');
   await assert.rejects(runAsTenant(TENANT, () => flow.parseOrder('x'.repeat(max + 1), settings, { usage: { tenantId: TENANT } })), (error) => error.statusCode === 413 && error.code === 'AI_INPUT_TOO_LONG');
   assert.equal(requests.length, 2, 'nothing was sent for the long message');
 });
@@ -328,11 +328,11 @@ test('redaction: passwords, keys and server secrets never reach the provider; or
   const text = [
     'Truck Tashkent-Almaty, 20 t, call +998 90 111 22 33, price 15 000 000 UZS.',
     'Portal password: Hunter2!x', 'api_key=abcd1234efgh5678', 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig',
-    `leaked ${process.env.OPENROUTER_API_KEY} and ${process.env.JWT_SECRET}`, 'пароль: qwerty123'
+    `leaked ${process.env.GEMINI_API_KEY} and ${process.env.JWT_SECRET}`, 'пароль: qwerty123'
   ].join('\n');
   await runAsTenant(TENANT, () => flow.parseOrder(text, { weightUnit: 'kg', currency: 'UZS', equipment: [], maxRate: 1, maxWeight: 1 }, { usage: { tenantId: TENANT } }));
-  const sent = requests[0].body.messages.map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))).join('\n');
-  for (const secret of ['Hunter2!x', 'abcd1234efgh5678', 'eyJhbGciOiJIUzI1NiJ9', process.env.OPENROUTER_API_KEY, process.env.JWT_SECRET, 'qwerty123']) {
+  const sent = requests[0].raw;
+  for (const secret of ['Hunter2!x', 'abcd1234efgh5678', 'eyJhbGciOiJIUzI1NiJ9', process.env.GEMINI_API_KEY, process.env.JWT_SECRET, 'qwerty123']) {
     assert.ok(!sent.includes(secret), `not sent: ${secret.slice(0, 6)}…`);
   }
   assert.ok(sent.includes('+998 90 111 22 33'));
@@ -370,16 +370,16 @@ test('schema: invalid JSON, empty answer, extra text, wrong types and missing fi
 
 /* ---------------- model configuration ---------------- */
 
-test('model: a warning in production when OPENROUTER_MODEL is not set', () => {
-  const saved = process.env.OPENROUTER_MODEL;
-  delete process.env.OPENROUTER_MODEL;
+test('model: gemini-2.5-flash-lite by default; another GEMINI_MODEL is announced with a warning', () => {
+  const saved = process.env.GEMINI_MODEL;
+  delete process.env.GEMINI_MODEL;
   try {
-    const result = aiGateway.checkModelConfig({ production: true });
-    assert.match(result.warning, /OPENROUTER_MODEL is not set/);
+    assert.equal(aiGateway.modelName(), 'gemini-2.5-flash-lite');
+    assert.equal(aiGateway.checkModelConfig({ production: true }).warning, null);
   } finally {
-    process.env.OPENROUTER_MODEL = saved;
+    process.env.GEMINI_MODEL = saved;
   }
-  assert.equal(aiGateway.checkModelConfig({ production: true }).warning, null);
+  assert.match(aiGateway.checkModelConfig({ production: true }).warning, /not the project's model gemini-2\.5-flash-lite/);
 });
 
 /* ---------------- VAULT ---------------- */

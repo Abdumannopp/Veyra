@@ -14,7 +14,7 @@ process.env.BCRYPT_COST = '10';
 process.env.API_RATE_LIMIT_MAX = '5000';
 process.env.WEIGHT_UNIT = 'kg';
 process.env.CURRENCY = 'USD';
-process.env.OPENROUTER_API_KEY = 'sk-or-test';
+process.env.GEMINI_API_KEY = 'AIza-test-gemini-key';
 process.env.MESSAGING_PROVIDER = 'twilio';
 process.env.TWILIO_ACCOUNT_SID = 'AC00000000000000000000000000000000';
 process.env.TWILIO_AUTH_TOKEN = 'platform-token-for-signature-tests';
@@ -119,7 +119,7 @@ before(async () => {
   aiGateway.setTransport(async () => {
     aiCalls += 1;
     const content = JSON.stringify({ consignor: 'Navoiy Textile', consignee: null, carrier: null, placeOfLoading: 'Tashkent', placeOfDelivery: 'Almaty', date: null, truckPlate: '01A123BC', grossWeight: 18000, weightUnit: 'kg', packages: null, goods: null, signedByConsignee: null, notes: null });
-    return new Response(JSON.stringify({ model: 'test/model', choices: [{ message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 10 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response(JSON.stringify({ modelVersion: 'test/model', candidates: [{ content: { parts: [{ text: content }] } }], usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 10 } }), { status: 200, headers: { 'content-type': 'application/json' } });
   });
   inboxToken = (await (await call(admin, 'POST', '/api/settings/inbox/token')).json()).token;
   const created = await call(admin, 'POST', '/api/platform/tenants', { companyName: 'Other Logistics', adminName: 'Olim', adminEmail: 'olim@other.example', adminPassword: 'other-company-pass-1' });

@@ -13,7 +13,7 @@ const PATTERNS = [
   /\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{12,}/gi,
   // JSON Web Tokens
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g,
-  // Well-known key shapes: OpenRouter / OpenAI / Anthropic (sk-...), Google (AIza...), Stripe, AWS, GitHub, Slack, Twilio
+  // Well-known key shapes: Google (AIza...), sk-... keys (OpenAI-style), Stripe, AWS, GitHub, Slack, Twilio
   /\bAIza[0-9A-Za-z_-]{30,}\b/g,
   /\b(sk-or-v1-[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{20,}|sk_(live|test)_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|SK[0-9a-f]{32})\b/g
 ];

@@ -8,7 +8,7 @@ const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-trips-nexus-'));
 Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'n.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000', CURRENCY: 'USD' });
-delete process.env.OPENROUTER_API_KEY;
+delete process.env.GEMINI_API_KEY;
 
 const tripsLib = require('../lib/trips');
 const database = require('../database');

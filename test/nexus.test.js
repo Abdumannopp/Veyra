@@ -13,8 +13,8 @@ process.env.API_RATE_LIMIT_MAX = '5000';
 process.env.WEIGHT_UNIT = 'kg';
 process.env.CURRENCY = 'UZS';
 process.env.MAX_RATE = '100000000';
-process.env.OPENROUTER_API_KEY = 'sk-or-test';
-delete process.env.OPENROUTER_MODEL;
+process.env.GEMINI_API_KEY = 'AIza-test-gemini-key';
+delete process.env.GEMINI_MODEL;
 process.env.MESSAGING_PROVIDER = 'twilio';
 process.env.TWILIO_ACCOUNT_SID = 'AC00000000000000000000000000000000';
 process.env.TWILIO_AUTH_TOKEN = 'platformtokenplatformtoken00';
@@ -52,7 +52,7 @@ function fakeModel(replies) {
   aiGateway.setTransport(async (url, init) => {
     requests.push(JSON.parse(init.body));
     const next = replies.shift();
-    const payload = { model: 'test/model', choices: [{ message: { content: JSON.stringify(next) } }], usage: { prompt_tokens: 100, completion_tokens: 30 } };
+    const payload = { modelVersion: 'test/model', candidates: [{ content: { parts: [{ text: JSON.stringify(next) }] } }], usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 30 } };
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
   });
   return requests;
@@ -131,7 +131,7 @@ test('an order email is read by FLOW and becomes a task, never a load', async ()
   assert.match(task.title, /Navoiy Textile · Tashkent, UZ → Almaty, KZ/);
   assert.equal(task.payload.parsed.draft.customerRate, 15000000);
   assert.equal((await (await call(admin, 'GET', '/api/shipments/search')).json()).allCount, loadsBefore, 'no load was created');
-  assert.match(requests[0].messages[1].content, /Subject: Truck needed/);
+  assert.match(requests[0].contents[0].parts[0].text, /Subject: Truck needed/);
 
   // The same email delivered twice (providers retry) is stored once.
   const again = await (await inbound(postmark({ MessageID: 'order-1' }))).json();
@@ -182,8 +182,8 @@ test('only allowed senders are read, the rest is stored as blocked and costs no 
 });
 
 test('without AI the email still becomes a task, and the daily AI cap is respected', async () => {
-  const saved = process.env.OPENROUTER_API_KEY;
-  delete process.env.OPENROUTER_API_KEY;
+  const saved = process.env.GEMINI_API_KEY;
+  delete process.env.GEMINI_API_KEY;
   try {
     await inbound(postmark({ MessageID: 'noai-1', From: 'noai@x.example' }));
     await nexus.idle();
@@ -194,7 +194,7 @@ test('without AI the email still becomes a task, and the daily AI cap is respect
     assert.equal(item.status, 'new');
     assert.equal((await call(admin, 'POST', `/api/inbox/${item.id}/parse`)).status, 503);
   } finally {
-    process.env.OPENROUTER_API_KEY = saved;
+    process.env.GEMINI_API_KEY = saved;
   }
 
   // The company's daily AI budget (one shared, durable counter in the database) is used up.

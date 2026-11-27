@@ -13,8 +13,8 @@ process.env.API_RATE_LIMIT_MAX = '5000';
 process.env.WEIGHT_UNIT = 'kg';
 process.env.CURRENCY = 'UZS';
 process.env.MAX_RATE = '100000000';
-process.env.OPENROUTER_API_KEY = 'sk-or-test';
-delete process.env.OPENROUTER_MODEL;
+process.env.GEMINI_API_KEY = 'AIza-test-gemini-key';
+delete process.env.GEMINI_MODEL;
 process.env.MESSAGING_PROVIDER = 'twilio';
 process.env.TWILIO_ACCOUNT_SID = 'AC_TEST';
 process.env.TWILIO_AUTH_TOKEN = 'secret-token';
@@ -50,9 +50,9 @@ function fakeModel(replies) {
     if (next instanceof Error) throw next;
     const status = next?.status || 200;
     const payload = next?.status ? { error: { message: 'upstream error' } } : {
-      model: 'test/model',
-      choices: [{ message: { content: typeof next === 'string' ? next : JSON.stringify(next) } }],
-      usage: { prompt_tokens: 120, completion_tokens: 40 }
+      modelVersion: 'test/model',
+      candidates: [{ content: { parts: [{ text: typeof next === 'string' ? next : JSON.stringify(next) }] } }],
+      usageMetadata: { promptTokenCount: 120, candidatesTokenCount: 40 }
     };
     return new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } });
   });
@@ -112,13 +112,12 @@ test('FLOW turns an order message into a validated draft and never saves it', as
   assert.equal((await (await call(admin, 'GET', '/api/shipments/search')).json()).allCount, before, 'nothing was created');
 
   const sent = requests[0];
-  assert.equal(sent.url, 'https://openrouter.ai/api/v1/chat/completions');
-  assert.equal(sent.init.headers.Authorization, 'Bearer sk-or-test');
-  assert.equal(sent.init.headers['X-Title'], 'VEYRA');
+  assert.equal(sent.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent', 'Gemini, the project model');
+  assert.equal(sent.init.headers['x-goog-api-key'], 'AIza-test-gemini-key');
   assert.equal(sent.init.headers['HTTP-Referer'], undefined, 'server address is not revealed');
-  assert.equal('model' in sent.body, false, 'no hard-coded model: the account default is used');
-  assert.match(sent.body.messages[0].content, /untrusted data/);
-  assert.match(sent.body.messages[1].content, /^<order>\n/);
+  assert.equal(sent.init.headers.Referer, undefined);
+  assert.match(sent.body.systemInstruction.parts[0].text, /untrusted data/);
+  assert.match(sent.body.contents[0].parts[0].text, /^<order>\n/);
 });
 
 test('FLOW drops anything invalid or guessed and asks instead', async () => {
@@ -183,12 +182,12 @@ test('FLOW input is bounded, permissioned, and off when no key is set', async ()
   assert.equal((await tooLong.json()).code, 'AI_INPUT_TOO_LONG');
   assert.equal((await call(null, 'POST', '/api/agents/flow/parse', { text: 'hi' })).status, 401);
 
-  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.GEMINI_API_KEY;
   try {
     assert.equal((await (await call(null, 'GET', '/api/config')).json()).ai.enabled, false);
     assert.equal((await call(admin, 'POST', '/api/agents/flow/parse', { text: 'order' })).status, 503);
   } finally {
-    process.env.OPENROUTER_API_KEY = 'sk-or-test';
+    process.env.GEMINI_API_KEY = 'AIza-test-gemini-key';
   }
 });
 

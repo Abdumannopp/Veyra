@@ -8,7 +8,7 @@ const { after, before, test } = require('node:test');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-compliance-'));
 Object.assign(process.env, { NODE_ENV: 'development', DATABASE_PATH: path.join(dir, 'c.db'), PORT: '0', BCRYPT_COST: '10', API_RATE_LIMIT_MAX: '5000' });
-delete process.env.OPENROUTER_API_KEY;
+delete process.env.GEMINI_API_KEY;
 
 const rules = require('../lib/compliance');
 const { app, initialize } = require('../server');

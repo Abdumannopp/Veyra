@@ -1,8 +1,8 @@
 /* =========================================================
    VEYRA — AI data sharing in Team & settings (see docs/AI.md)
-   Whether this company's order texts and documents may be sent to the outside AI provider (the one the server uses:
-   OpenRouter, OpenAI, Anthropic or Google Gemini). A consent is for one provider: if the server changes provider, the
-   administrator must agree again.
+   Whether this company's order texts and documents may be sent to the outside AI provider, Google Gemini.
+   A consent is for one provider: a consent given earlier for another provider (OpenRouter) does not count for Gemini,
+   so the administrator agrees again.
    Off until an administrator switches it on; every change is written to the activity log (who and when).
    Relies on helpers from script.js: getAuthHeaders, hasPermission, formatTimestamp, notify.
    ========================================================= */

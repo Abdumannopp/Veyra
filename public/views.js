@@ -896,7 +896,7 @@
         row.inputTokens.toLocaleString('en-US'),
         row.outputTokens.toLocaleString('en-US'),
         row.avgLatencyMs === null ? '—' : `${(row.avgLatencyMs / 1000).toFixed(1)} s`
-      ]), window.VeyraConfig?.ai?.enabled ? 'No AI calls in this period.' : 'AI is off. Add an AI provider key (OpenRouter, OpenAI, Anthropic or Gemini) to turn on FLOW.')
+      ]), window.VeyraConfig?.ai?.enabled ? 'No AI calls in this period.' : 'AI is off. Add GEMINI_API_KEY (Google Gemini) to turn on FLOW.')
     ]);
 
     // Money that is still open: delivered loads the customer has not paid, carriers not yet paid.

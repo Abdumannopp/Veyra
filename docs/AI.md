@@ -4,27 +4,22 @@ This page is the **source of truth** for how the AI agents (FLOW, VAULT) use the
 integration is (it is still **Test mode**: not yet tried with a real provider account and real documents) is kept in
 [INTEGRATIONS.md](INTEGRATIONS.md). Security controls are summarised in [SECURITY.md](SECURITY.md).
 
-## 0. Which provider
+## 0. The provider: Google Gemini only
 
-VEYRA can use **one** of four providers at a time, for the whole server. Choose it with `AI_PROVIDER`; if that is empty,
-the first provider that has a key is used (OpenRouter first). Keys go only in the server settings (for example Railway
-Variables), never in code or chat.
+VEYRA uses **one** AI provider: **Google Gemini** (Gemini API), model **`gemini-2.5-flash-lite`**. Other providers
+(OpenRouter, OpenAI, Anthropic) are not supported; their settings are ignored.
 
-| Provider | `AI_PROVIDER` | Key | Model setting | Model required? |
-|---|---|---|---|---|
-| OpenRouter (default) | `openrouter` | `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` | No (account default; the server warns) |
-| OpenAI | `openai` | `OPENAI_API_KEY` | `OPENAI_MODEL` | **Yes** |
-| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | **Yes** |
-| Google Gemini | `google` | `GEMINI_API_KEY` | `GEMINI_MODEL` | **Yes** |
+| Setting | What it is | Default |
+|---|---|---|
+| `GEMINI_API_KEY` | The key from Google AI Studio (aistudio.google.com). Without it AI is off and nothing leaves the server. | none |
+| `GEMINI_MODEL` | Only if you want another Gemini model. The server warns that it is not the project's model. | `gemini-2.5-flash-lite` |
 
-- OpenAI, Anthropic and Gemini have no default model: without the model setting AI stays **off** and Integrations says why.
-- Reading CMR / POD / B/L files needs a model that reads PDFs and images. How each provider receives a file: OpenAI as a
-  `file` / `image_url` part, Anthropic as a `document` / `image` block, Gemini as `inlineData`, all base64.
-- The Gemini key is sent in the `x-goog-api-key` header, never in the URL.
-- Every rule below (consent, quota, ledger, redaction, answer check, retries) is the same for all four. The `ai_calls`
-  ledger records which provider answered each call.
-- **Consent is for one provider.** If the server switches to another provider, every company's sharing becomes "not
-  allowed" for the new one until its administrator agrees again (Team & settings shows the old and the new provider).
+- Keys go only in the server settings (for example Railway Variables), never in code or chat.
+- The key is sent in the `x-goog-api-key` header, never in the URL (URLs end up in logs).
+- Documents (PDF, photos) are sent as `inlineData` (base64). The answer is requested as JSON (`responseMimeType`).
+- **Consent after the switch to Gemini:** a consent a company gave earlier for OpenRouter does **not** count for Google.
+  After the upgrade every company's AI data sharing shows "not allowed" for Google Gemini until its administrator agrees
+  again (Team & settings shows the old and the new provider). The `ai_calls` ledger records the provider of each call.
 
 ## 1. One gateway for every model call
 
@@ -89,8 +84,8 @@ a guarantee: do not upload or send anything that should not leave the company.
 
 ## 6. The model's answer
 
-- Name the model you tested (`OPENROUTER_MODEL`, `OPENAI_MODEL`, `ANTHROPIC_MODEL` or `GEMINI_MODEL`). OpenRouter
-  without a model uses the account default, which can change: the server warns at start-up and Integrations shows it.
+- The model is pinned to `gemini-2.5-flash-lite`. Setting `GEMINI_MODEL` to another model works but is announced at
+  start-up and in Integrations, so a change of model (and of cost and quality) is never silent.
 - The answer must be one JSON object with every expected key and the right types (`ai/schema.js`). Invalid JSON, an empty
   answer, missing keys or wrong types: `502` with code `AI_INVALID_OUTPUT`; nothing is filled in. Text around a valid
   object is ignored.
@@ -110,6 +105,6 @@ a guarantee: do not upload or send anything that should not leave the company.
 
 ## 8. What is not proven yet
 
-All of the above is tested with a fake provider. No real account of any of the four providers, no real model and no real messy document has
+All of the above is tested with a fake provider. No real Google Gemini account, no real model call and no real messy document has
 not been tried (see [INTEGRATIONS.md](INTEGRATIONS.md)). The independent security review is still open
 ([SECURITY.md](SECURITY.md)).
